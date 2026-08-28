@@ -13,6 +13,7 @@ export interface Story {
   userPrompt?: string;
   cefrLevel: CefrLevel;
   genres?: string[]; // ジャンルタグ (Adventure, Daily Life, Mystery, Thriller, Sci-Fi, etc.)
+  targetWordCount?: number; // 目標単語数 (デフォルト: 700)
   createdAt: string;
 }
 

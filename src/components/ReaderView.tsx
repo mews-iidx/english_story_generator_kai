@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { CefrLevel } from '../types/settings';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw, FileJson, Tag } from 'lucide-react';
+import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw, FileJson, Tag, Minus, Plus } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 
@@ -12,7 +12,7 @@ interface ReaderViewProps {
   currentLevel: CefrLevel;
   onLevelChange: (level: CefrLevel) => void;
   isGenerating: boolean;
-  onGenerate: (userPrompt?: string) => Promise<void>;
+  onGenerate: (userPrompt?: string, wordCount?: number) => Promise<void>;
   onWordOrPhraseTap: (text: string, contextSentence: string) => void;
   selectedPhrase: string;
   onClearSelection: () => void;
@@ -45,6 +45,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onLapseVocab,
 }) => {
   const [promptInput, setPromptInput] = useState('');
+  const [wordCount, setWordCount] = useState<number>(700);
   const [showTranslation, setShowTranslation] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [tappedWordsDuringStory, setTappedWordsDuringStory] = useState<Set<string>>(new Set());
@@ -249,48 +250,78 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     });
   };
 
+  const changeWordCount = (delta: number) => {
+    setWordCount(prev => Math.max(100, Math.min(2500, (prev || 700) + delta)));
+  };
+
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-      {/* 1. Generator & Import Control Bar */}
-      <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20 space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center space-x-1.5">
-            <span className="text-xs font-semibold text-slate-400">レベル:</span>
-            {(['A1', 'A2', 'B1', 'B2', 'C1'] as const).map((lvl) => {
-              const desc = {
-                A1: '超初級(中学1-2年)',
-                A2: '初級(中学3年-日常)',
-                B1: '中級(日常会話)',
-                B2: '中上級(自然な表現)',
-                C1: '上級(高度な英語)',
-              }[lvl];
-              return (
-                <button
-                  key={lvl}
-                  onClick={() => onLevelChange(lvl)}
-                  title={desc}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                    currentLevel === lvl
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                  }`}
-                >
-                  {lvl}
-                </button>
-              );
-            })}
+    <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-5">
+      {/* 1. Generator & Word Count Control Bar */}
+      <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-3.5 sm:p-5 shadow-xl shadow-black/20 space-y-3.5">
+        {/* Level & Word Count Controls */}
+        <div className="flex items-center justify-between flex-wrap gap-2.5">
+          {/* Level Pills */}
+          <div className="flex items-center space-x-1">
+            {(['A1', 'A2', 'B1', 'B2', 'C1'] as const).map((lvl) => (
+              <button
+                key={lvl}
+                onClick={() => onLevelChange(lvl)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  currentLevel === lvl
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                {lvl}
+              </button>
+            ))}
           </div>
 
-          <button
-            onClick={onOpenImportModal}
-            className="flex items-center space-x-1.5 px-3 py-1 bg-slate-950 hover:bg-slate-800 text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg text-xs font-semibold transition-colors"
-            title="外部GeminiやChatGPTで生成したJSONをインポート"
-          >
-            <FileJson className="w-3.5 h-3.5" />
-            <span>外部AIプロンプト / JSONインポート</span>
-          </button>
+          {/* Word Count Spinner & Import */}
+          <div className="flex items-center space-x-2">
+            {/* Word Count Selector */}
+            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5">
+              <span className="text-[11px] text-slate-400 font-medium px-2 hidden sm:inline">語数:</span>
+              <button
+                type="button"
+                onClick={() => changeWordCount(-100)}
+                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                title="100語減らす"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+              <input
+                type="number"
+                step="100"
+                min="100"
+                max="2500"
+                value={wordCount}
+                onChange={(e) => setWordCount(Number(e.target.value) || 700)}
+                className="w-14 bg-transparent text-center text-xs font-bold text-blue-400 outline-none"
+              />
+              <span className="text-[10px] text-slate-500 pr-1">語</span>
+              <button
+                type="button"
+                onClick={() => changeWordCount(100)}
+                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                title="100語増やす"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <button
+              onClick={onOpenImportModal}
+              className="flex items-center space-x-1 px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-semibold transition-colors"
+              title="外部GeminiやChatGPTで生成したJSONをインポート"
+            >
+              <FileJson className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">JSONインポート</span>
+            </button>
+          </div>
         </div>
 
+        {/* Prompt Input & Generate Button */}
         <div className="flex flex-col sm:flex-row gap-2.5">
           <div className="relative flex-1">
             <input
@@ -299,7 +330,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               onChange={(e) => setPromptInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !isGenerating) {
-                  onGenerate(promptInput);
+                  onGenerate(promptInput, wordCount);
                 }
               }}
               placeholder="テーマ・ジャンル（例: 冒険, SF, カフェでの再会, 未指定でおまかせ）"
@@ -307,9 +338,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             />
           </div>
           <button
-            onClick={() => onGenerate(promptInput)}
+            onClick={() => onGenerate(promptInput, wordCount)}
             disabled={isGenerating}
-            className="flex items-center justify-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-blue-600/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="flex items-center justify-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-blue-600/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
           >
             {isGenerating ? (
               <>
@@ -328,17 +359,22 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
       {/* 2. Story Content Area */}
       {currentStory ? (
-        <article className="bg-slate-900/60 border border-slate-800/80 rounded-3xl p-6 sm:p-9 shadow-2xl backdrop-blur-sm space-y-6">
+        <article className="bg-slate-900/60 border border-slate-800/80 rounded-3xl p-5 sm:p-9 shadow-2xl backdrop-blur-sm space-y-6">
           <div className="border-b border-slate-800/80 pb-5 space-y-2.5">
             <div className="flex items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex items-center space-x-2 flex-wrap">
-                  <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+                  <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">
                     {currentStory.title}
                   </h1>
                   <span className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">
                     {currentStory.cefrLevel || 'A2'}
                   </span>
+                  {currentStory.targetWordCount && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 font-medium">
+                      約{currentStory.targetWordCount}語
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm sm:text-base text-blue-400/90 font-medium">
                   {currentStory.titleJa}

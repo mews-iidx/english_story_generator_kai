@@ -1,9 +1,5 @@
 import { StoryGenerationResponse } from '../types/story';
 
-/**
- * 堅牢なJSONパーサー
- * Geminiが出力したダブルクォート・シングルクォート・制御文字・Markdownバッククォートを自動修復して安全にパース
- */
 export function parseRobustStoryJson(rawText: string): StoryGenerationResponse {
   if (!rawText || typeof rawText !== 'string') {
     throw new Error('JSONテキストが空です。');
@@ -11,21 +7,18 @@ export function parseRobustStoryJson(rawText: string): StoryGenerationResponse {
 
   let clean = rawText.trim();
 
-  // Markdownコードブロック除去
   if (clean.startsWith('```json')) {
     clean = clean.replace(/^```json\s*/, '').replace(/```\s*$/, '');
   } else if (clean.startsWith('```')) {
     clean = clean.replace(/^```\s*/, '').replace(/```\s*$/, '');
   }
 
-  // 最初の '{' と 最後の '}' を抽出
   const firstBrace = clean.indexOf('{');
   const lastBrace = clean.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
     clean = clean.substring(firstBrace, lastBrace + 1);
   }
 
-  // 1. 標準JSON.parseを試行
   try {
     const parsed = JSON.parse(clean);
     return normalizeStoryResponse(parsed);
@@ -33,9 +26,7 @@ export function parseRobustStoryJson(rawText: string): StoryGenerationResponse {
     console.warn('Initial JSON.parse failed, attempting repair...', initialErr);
   }
 
-  // 2. 文字列内の未エスケープ改行・制御文字の修復
   try {
-    // 制御文字の削除
     let repaired = clean.replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) => {
       if (c === '\n') return '\\n';
       if (c === '\r') return '\\r';
@@ -46,9 +37,7 @@ export function parseRobustStoryJson(rawText: string): StoryGenerationResponse {
     const parsed = JSON.parse(repaired);
     return normalizeStoryResponse(parsed);
   } catch (e) {
-    // 3. セリフ等の内部ダブルクォート問題の補正
     try {
-      // 簡易的なキー抽出フォールバック
       const parsed = extractFieldsByRegex(clean);
       if (parsed.story && parsed.title) {
         return normalizeStoryResponse(parsed);
@@ -91,13 +80,11 @@ function extractFieldsByRegex(text: string): Partial<StoryGenerationResponse> {
   return result;
 }
 
-/**
- * 外部GeminiやChatGPTでストーリーを生成させるためのプロンプトテキストを生成
- */
-export function buildExternalPromptTemplate(cefrLevel: string, targetVocabs: string[], genre = 'おまかせ'): string {
+export function buildExternalPromptTemplate(cefrLevel: string, targetVocabs: string[], genre = 'おまかせ', wordCount = 700): string {
   let prompt = `以下の要件に従って、英語学習者向けのショートストーリーを【JSON形式のみ】で作成してください。\n\n`;
   prompt += `【英語難易度レベル】: ${cefrLevel} (CEFR)\n`;
-  prompt += `【希望ジャンル】: ${genre} (例: Adventure, Daily Life, Mystery, Sci-Fi, Comedy, Romance 等)\n\n`;
+  prompt += `【希望ジャンル】: ${genre} (例: Adventure, Daily Life, Mystery, Sci-Fi, Comedy, Romance 等)\n`;
+  prompt += `【★本文の目標単語数】: 約 ${wordCount} 語（words）\n\n`;
 
   if (targetVocabs.length > 0) {
     prompt += `【復習対象の重要表現・構文（物語の中に自然に応用して登場させてください）】:\n`;
@@ -108,19 +95,19 @@ export function buildExternalPromptTemplate(cefrLevel: string, targetVocabs: str
   }
 
   prompt += `【要件】:
-1. 英語本文（story）は読みやすく適切な段落（改行）を入れてください。セリフ等でダブルクォートを使う場合は必ず JSON エスケープ (\\") するか、シングルクォート (‘ ’) を使用してください。
+1. 英語本文（story）は約 ${wordCount} 語で読みやすく適切な段落（改行）を入れてください。セリフ等でダブルクォートを使う場合は必ず JSON エスケープ (\\") するか、シングルクォート (‘ ’) を使用してください。
 2. 日本語のあらすじ（summary）は、結末やオチのネタバレを絶対に書かず、導入・設定の紹介（1〜2文）のみを記述してください。
 3. 日本語対訳（japanese_translation）を付与してください。
-4. genres には該当するジャンル名（例: ["Adventure", "Mystery"]）を含めてください。
+4. genres には該当するジャンル名（例: ["Adventure", "Daily Life"]）を含めてください。
 
 必ず以下のJSONスキーマの通りに出力してください（前後の説明文は不要です）。
 \`\`\`json
 {
   "title": "英語のタイトル",
   "title_ja": "日本語のタイトル",
-  "genres": ["Adventure", "Daily Life"],
+  "genres": ["${genre !== 'おまかせ' ? genre : 'Adventure'}", "Daily Life"],
   "summary": "日本語での1-2文のあらすじ・シチュエーション概要（ネタバレ厳禁）",
-  "story": "英語の物語本文",
+  "story": "英語の物語本文 (約${wordCount}語)",
   "japanese_translation": "物語全体の自然な日本語訳",
   "target_vocab_used": ["実際に物語で使ったターゲット表現"]
 }

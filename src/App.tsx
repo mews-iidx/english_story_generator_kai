@@ -108,7 +108,7 @@ export const App: React.FC = () => {
   };
 
   // ストーリー生成ハンドラー
-  const handleGenerateStory = async (userPrompt?: string) => {
+  const handleGenerateStory = async (userPrompt?: string, wordCount = 700) => {
     if (!settings.geminiApiKey) {
       alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
       setActiveTab('settings');
@@ -126,6 +126,7 @@ export const App: React.FC = () => {
         userPrompt,
         targetVocabs: dueVocabs,
         recentSummaries,
+        targetWordCount: wordCount,
       });
 
       const newStory = res.story;
@@ -357,7 +358,7 @@ export const App: React.FC = () => {
         onSyncClick={handleGoogleManualSync}
       />
 
-      <main className="flex-1 pb-28">
+      <main className="flex-1 pb-24 md:pb-12">
         {/* 1. Reader Tab */}
         {activeTab === 'reader' && (
           <ReaderView

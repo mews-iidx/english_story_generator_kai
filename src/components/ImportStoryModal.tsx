@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
 import { Story } from '../types/story';
-import { Copy, Check, FileJson, X, Sparkles, Download } from 'lucide-react';
+import { Copy, Check, FileJson, X, Sparkles, Download, Minus, Plus } from 'lucide-react';
 import { buildExternalPromptTemplate, parseRobustStoryJson } from '../utils/jsonParser';
 
 interface ImportStoryModalProps {
@@ -21,13 +21,14 @@ export const ImportStoryModal: React.FC<ImportStoryModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'prompt' | 'import'>('prompt');
   const [selectedGenre, setSelectedGenre] = useState('Adventure');
+  const [wordCount, setWordCount] = useState<number>(700);
   const [jsonInput, setJsonInput] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const promptText = buildExternalPromptTemplate(cefrLevel, dueVocabs, selectedGenre);
+  const promptText = buildExternalPromptTemplate(cefrLevel, dueVocabs, selectedGenre, wordCount);
 
   const handleCopyPrompt = () => {
     navigator.clipboard.writeText(promptText);
@@ -54,6 +55,7 @@ export const ImportStoryModal: React.FC<ImportStoryModalProps> = ({
         targetVocabList: parsed.target_vocab_used || dueVocabs,
         genres: parsed.genres && parsed.genres.length > 0 ? parsed.genres : [selectedGenre],
         cefrLevel,
+        targetWordCount: wordCount,
         createdAt: new Date().toISOString(),
       };
 
@@ -124,30 +126,63 @@ export const ImportStoryModal: React.FC<ImportStoryModalProps> = ({
 
         {activeTab === 'prompt' && (
           <div className="space-y-3.5 flex-1 overflow-y-auto pr-1">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">希望ジャンル:</label>
-              <div className="flex flex-wrap gap-1.5">
-                {genres.map(g => (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300">希望ジャンル:</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {genres.map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setSelectedGenre(g)}
+                      className={`px-2 py-0.5 rounded-lg text-xs font-medium transition-all ${
+                        selectedGenre === g
+                          ? 'bg-blue-600 text-white border border-blue-400/30'
+                          : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                      }`}
+                    >
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Word Count Spinner */}
+              <div className="space-y-1 flex-shrink-0">
+                <label className="text-xs font-semibold text-slate-300 block">目標単語数:</label>
+                <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5">
                   <button
-                    key={g}
                     type="button"
-                    onClick={() => setSelectedGenre(g)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                      selectedGenre === g
-                        ? 'bg-blue-600 text-white border border-blue-400/30'
-                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
+                    onClick={() => setWordCount(w => Math.max(100, (w || 700) - 100))}
+                    className="p-1 text-slate-400 hover:text-white rounded"
                   >
-                    {g}
+                    <Minus className="w-3.5 h-3.5" />
                   </button>
-                ))}
+                  <input
+                    type="number"
+                    step="100"
+                    min="100"
+                    max="2500"
+                    value={wordCount}
+                    onChange={(e) => setWordCount(Number(e.target.value) || 700)}
+                    className="w-14 bg-transparent text-center text-xs font-bold text-blue-400 outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500 pr-1">語</span>
+                  <button
+                    type="button"
+                    onClick={() => setWordCount(w => Math.min(2500, (w || 700) + 100))}
+                    className="p-1 text-slate-400 hover:text-white rounded"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-slate-300">
-                  生成用プロンプト (レベル: <span className="text-blue-400 font-bold">{cefrLevel}</span>, 復習語彙: <span className="text-amber-400 font-bold">{dueVocabs.length}個</span> 注入):
+                  生成用プロンプト (レベル: <span className="text-blue-400 font-bold">{cefrLevel}</span>, 語数: <span className="text-blue-400 font-bold">約{wordCount}語</span>, 復習語彙: <span className="text-amber-400 font-bold">{dueVocabs.length}個</span>):
                 </label>
                 {isCopied && (
                   <span className="text-xs text-blue-400 font-bold flex items-center gap-1 animate-fadeIn">
@@ -158,7 +193,7 @@ export const ImportStoryModal: React.FC<ImportStoryModalProps> = ({
               <textarea
                 readOnly
                 value={promptText}
-                rows={8}
+                rows={7}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 font-mono leading-relaxed outline-none select-all"
               />
             </div>
