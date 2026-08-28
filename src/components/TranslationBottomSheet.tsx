@@ -4,7 +4,7 @@ import { speakText } from '../utils/speech';
 
 interface TranslationBottomSheetProps {
   isOpen: boolean;
-  onClose: () => void;
+  onClose?: () => void;
   originalText: string;
   translatedText: string;
   contextSentence?: string;
@@ -55,12 +55,12 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
         {/* Header: English Text & Speech */}
         <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3">
           <div className="flex items-center space-x-2.5 flex-wrap">
-            <h3 className="text-xl sm:text-2xl font-bold text-emerald-400 tracking-tight">
+            <h3 className="text-xl sm:text-2xl font-bold text-sky-400 tracking-tight">
               {originalText}
             </h3>
             <button
               onClick={() => speakText(originalText)}
-              className="p-1.5 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/70 rounded-lg transition-colors border border-emerald-500/30"
+              className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-lg transition-colors border border-sky-500/30"
               title="発音を再生"
             >
               <Volume2 className="w-4 h-4" />
@@ -75,7 +75,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
         <div className="py-3 space-y-2.5">
           {isLoading ? (
             <div className="flex items-center space-x-2 text-slate-400 text-sm py-1">
-              <div className="w-4 h-4 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
               <span>翻訳中...</span>
             </div>
           ) : (
@@ -86,7 +86,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
 
           {nuanceNote && (
             <div className="text-xs text-slate-300 bg-slate-950/60 p-3 rounded-xl border border-slate-800 space-y-1 animate-fadeIn">
-              <div className="flex items-center space-x-1.5 text-emerald-400 font-semibold">
+              <div className="flex items-center space-x-1.5 text-sky-400 font-semibold">
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>AI解説:</span>
               </div>
@@ -101,13 +101,13 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
             onClick={() => onAddToVocab(originalText, translatedText, contextSentence, nuanceNote || undefined)}
             className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
               isSavedAsVocab
-                ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-500/40'
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20'
+                ? 'bg-blue-950/70 text-blue-300 border border-blue-500/40'
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/25'
             }`}
           >
             {isSavedAsVocab ? (
               <>
-                <Check className="w-4 h-4 text-emerald-400" />
+                <Check className="w-4 h-4 text-sky-400" />
                 <span>弱点に追加済み（明日再出題）</span>
               </>
             ) : (

@@ -58,11 +58,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
   }, [selectedPhrase]);
 
-  // 単語以外の「関係ない場所（背景・余白）」をタップした時だけ閉じるグローバルリスナー
   useEffect(() => {
     const handleGlobalClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target as HTMLElement;
-      // 単語要素 (data-word="true") やボタン・入力欄をクリックした場合は閉じない
       if (target && (target.closest('[data-word="true"]') || target.closest('button') || target.closest('input') || target.closest('select') || target.closest('.pointer-events-auto'))) {
         return;
       }
@@ -87,7 +85,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return set;
   }, [vocabs]);
 
-  // 段落ごとのテキストを自然な英語タイポグラフィを保ったままセグメント分割
   const paragraphSegments = useMemo(() => {
     if (!currentStory) return [];
 
@@ -143,9 +140,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     e.stopPropagation();
     if (wIdx < 0) return;
 
-    // 同じ段落で、隣または複数単語を連続選択する場合
     if (selectionRange && selectionRange.pIdx === pIdx) {
-      // 既に選択範囲内の単語を再度タップした場合は、その1語のみを選択
       if (wIdx >= selectionRange.startWIdx && wIdx <= selectionRange.endWIdx && selectionRange.startWIdx !== selectionRange.endWIdx) {
         const newRange = { pIdx, startWIdx: wIdx, endWIdx: wIdx };
         setSelectionRange(newRange);
@@ -153,11 +148,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         return;
       }
 
-      // 範囲を拡張（単語を複数連結選択）
       const newStart = Math.min(selectionRange.startWIdx, wIdx);
       const newEnd = Math.max(selectionRange.endWIdx, wIdx);
       
-      // 最大8単語まで連結可能
       if (newEnd - newStart < 9) {
         const newRange = { pIdx, startWIdx: newStart, endWIdx: newEnd };
         setSelectionRange(newRange);
@@ -166,7 +159,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       }
     }
 
-    // 新規選択（1単語からスタート）
     const newRange = { pIdx, startWIdx: wIdx, endWIdx: wIdx };
     setSelectionRange(newRange);
     emitSelectedPhrase(newRange, fullParaText);
@@ -195,7 +187,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       particleCount: 80,
       spread: 70,
       origin: { y: 0.7 },
-      colors: ['#10b981', '#34d399', '#6ee7b7', '#f59e0b', '#38bdf8']
+      colors: ['#3b82f6', '#60a5fa', '#38bdf8', '#fbbf24', '#818cf8']
     });
   };
 
@@ -222,7 +214,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   title={desc}
                   className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
                     currentLevel === lvl
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
                       : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
                   }`}
                 >
@@ -232,7 +224,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             })}
           </div>
 
-          <span className="text-[11px] text-emerald-400 font-medium">
+          <span className="text-[11px] text-blue-400 font-medium">
             {currentLevel === 'A1' && 'A1: やさしい中学英語'}
             {currentLevel === 'A2' && 'A2: 日常基礎英語'}
             {currentLevel === 'B1' && 'B1: 標準的な日常英語'}
@@ -254,13 +246,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 }
               }}
               placeholder="テーマ（例: カフェ、友達との会話、SF、未指定でおまかせ）"
-              className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
+              className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
             />
           </div>
           <button
             onClick={() => onGenerate(promptInput)}
             disabled={isGenerating}
-            className="flex items-center justify-center space-x-2 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 active:scale-[0.98] text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="flex items-center justify-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-blue-600/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             {isGenerating ? (
               <>
@@ -288,13 +280,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </h1>
               <button
                 onClick={() => speakText(currentStory.storyContent)}
-                className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-xl transition-colors"
+                className="p-2 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-colors"
                 title="全文を音声再生"
               >
                 <Volume2 className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-sm sm:text-base text-emerald-400/90 font-medium">
+            <p className="text-sm sm:text-base text-blue-400/90 font-medium">
               {currentStory.titleJa}
             </p>
 
@@ -335,14 +327,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       seg.wIdx >= selectionRange.startWIdx && 
                       seg.wIdx <= selectionRange.endWIdx;
 
-                    let wordStyle = 'hover:bg-emerald-500/20 hover:text-emerald-300';
+                    let wordStyle = 'hover:bg-blue-500/20 hover:text-blue-300';
 
                     if (isSelected) {
-                      wordStyle = 'bg-emerald-500 text-slate-950 font-bold shadow-sm shadow-emerald-500/30';
+                      wordStyle = 'bg-blue-600 text-white font-bold shadow-sm shadow-blue-500/40';
                     } else if (isTarget) {
                       wordStyle = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
                     } else if (isSaved) {
-                      wordStyle = 'text-emerald-300 font-medium underline decoration-emerald-500/70 decoration-2 underline-offset-4 bg-emerald-950/20 hover:bg-emerald-950/50';
+                      wordStyle = 'text-sky-300 font-medium underline decoration-sky-400/70 decoration-2 underline-offset-4 bg-sky-950/20 hover:bg-sky-950/50';
                     }
 
                     return (
@@ -368,11 +360,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 onClick={handleFinishStory}
                 className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
                   isFinished
-                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600'
                 }`}
               >
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <CheckCircle2 className="w-4 h-4 text-sky-400" />
                 <span>{isFinished ? '読了完了！お疲れ様でした 🎉' : '読み終わった！ (読了)'}</span>
               </button>
 
@@ -388,7 +380,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
             {showTranslation && (
               <div className="p-4 sm:p-5 bg-slate-950/70 border border-slate-800/90 rounded-2xl space-y-2 animate-fadeIn">
-                <span className="text-xs font-bold uppercase text-emerald-400 tracking-wider">全文日本語訳</span>
+                <span className="text-xs font-bold uppercase text-blue-400 tracking-wider">全文日本語訳</span>
                 <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
                   {currentStory.japaneseTranslation}
                 </p>
@@ -398,8 +390,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </article>
       ) : (
         <div className="py-16 text-center space-y-4 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center">
-            <Sparkles className="w-8 h-8 text-emerald-400" />
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-950/60 border border-blue-500/30 flex items-center justify-center">
+            <Sparkles className="w-8 h-8 text-blue-400" />
           </div>
           <div className="space-y-1">
             <h2 className="text-xl font-bold text-white">物語を生成して学習を始めましょう</h2>

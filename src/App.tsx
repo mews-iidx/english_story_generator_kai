@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Header, NavTab } from './components/Header';
 import { ReaderView } from './components/ReaderView';
+import { QuizView } from './components/QuizView';
 import { VocabBankView } from './components/VocabBankView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
@@ -99,6 +100,11 @@ export const App: React.FC = () => {
     }
   }, [settings]);
 
+  const handleRecordTokenUsage = (promptTokens: number, candidatesTokens: number) => {
+    addTokenUsage(promptTokens, candidatesTokens);
+    setSettings(loadSettings());
+  };
+
   // ストーリー生成ハンドラー
   const handleGenerateStory = async (userPrompt?: string) => {
     if (!settings.geminiApiKey) {
@@ -123,8 +129,7 @@ export const App: React.FC = () => {
       const newStory = res.story;
 
       if (res.tokenUsage) {
-        addTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
-        setSettings(loadSettings());
+        handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
       }
 
       saveStory(newStory);
@@ -132,7 +137,6 @@ export const App: React.FC = () => {
       setStories(updatedStories);
       setCurrentStory(newStory);
 
-      // 選択をクリア
       setSelectedText('');
       setIsSheetOpen(false);
 
@@ -171,7 +175,7 @@ export const App: React.FC = () => {
     setIsSheetOpen(false);
   };
 
-  // ボトムシートから「弱点単語帳に追加」
+  // 単語・構文を弱点リストに追加
   const handleAddToVocab = (phrase: string, meaning: string, sentence?: string, note?: string) => {
     const lookup = {
       phrase,
@@ -200,8 +204,7 @@ export const App: React.FC = () => {
     );
 
     if (res.tokenUsage) {
-      addTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
-      setSettings(loadSettings());
+      handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
     }
 
     return res.explanation;
@@ -326,7 +329,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-emerald-500 selection:text-white">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-blue-600 selection:text-white">
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -337,6 +340,7 @@ export const App: React.FC = () => {
       />
 
       <main className="flex-1 pb-28">
+        {/* 1. Reader Tab */}
         {activeTab === 'reader' && (
           <ReaderView
             currentStory={currentStory}
@@ -351,6 +355,21 @@ export const App: React.FC = () => {
           />
         )}
 
+        {/* 2. Quiz Tab */}
+        {activeTab === 'quiz' && (
+          <QuizView
+            apiKey={settings.geminiApiKey}
+            model={settings.geminiModel}
+            cefrLevel={settings.cefrLevel}
+            onLevelChange={handleLevelChange}
+            dueVocabs={dueVocabs}
+            vocabs={vocabs}
+            onAddToVocab={handleAddToVocab}
+            onRecordTokenUsage={handleRecordTokenUsage}
+          />
+        )}
+
+        {/* 3. Vocab Bank Tab */}
         {activeTab === 'vocab' && (
           <VocabBankView
             vocabs={vocabs}
@@ -359,6 +378,7 @@ export const App: React.FC = () => {
           />
         )}
 
+        {/* 4. History Tab */}
         {activeTab === 'history' && (
           <HistoryView
             stories={stories}
@@ -367,6 +387,7 @@ export const App: React.FC = () => {
           />
         )}
 
+        {/* 5. Settings Tab */}
         {activeTab === 'settings' && (
           <SettingsView
             settings={settings}
