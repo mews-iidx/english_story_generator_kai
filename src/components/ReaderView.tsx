@@ -151,7 +151,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       const newStart = Math.min(selectionRange.startWIdx, wIdx);
       const newEnd = Math.max(selectionRange.endWIdx, wIdx);
       
-      if (newEnd - newStart < 9) {
+      // 長文・1文まるごとも選択できるように大幅拡張（最大50単語まで連結可能）
+      if (newEnd - newStart < 50) {
         const newRange = { pIdx, startWIdx: newStart, endWIdx: newEnd };
         setSelectionRange(newRange);
         emitSelectedPhrase(newRange, fullParaText);
@@ -302,7 +303,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
           {/* Operation Hint */}
           <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。続けて前後の単語を押すと熟語として連結選択できます。余白を押すと解除されます。</span>
+            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば文全体もまとめて選択できます。余白を押すと解除されます。</span>
           </div>
 
           {/* Story Body */}
