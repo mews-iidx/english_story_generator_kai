@@ -12,6 +12,7 @@ export interface Story {
   vocabList?: VocabLookupResult[];
   userPrompt?: string;
   cefrLevel: CefrLevel;
+  genres?: string[]; // ジャンルタグ (Adventure, Daily Life, Mystery, Thriller, Sci-Fi, etc.)
   createdAt: string;
 }
 
@@ -22,5 +23,6 @@ export interface StoryGenerationResponse {
   story: string;
   japanese_translation: string;
   target_vocab_used: string[];
+  genres?: string[];
   vocabulary_list?: VocabLookupResult[];
 }

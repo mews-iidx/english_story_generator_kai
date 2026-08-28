@@ -6,6 +6,7 @@ import { VocabBankView } from './components/VocabBankView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
+import { ImportStoryModal } from './components/ImportStoryModal';
 
 import { Story } from './types/story';
 import { VocabItem } from './types/vocab';
@@ -40,6 +41,7 @@ export const App: React.FC = () => {
   // ローディング状態
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // 単語・複数単語タップ選択＆ボトムシート翻訳状態
   const [isSheetOpen, setIsSheetOpen] = useState(false);
@@ -149,6 +151,18 @@ export const App: React.FC = () => {
     }
   };
 
+  // 外部JSONインポートハンドラー
+  const handleImportStory = (story: Story) => {
+    saveStory(story);
+    const updatedStories = [story, ...stories.filter(s => s.id !== story.id)];
+    setStories(updatedStories);
+    setCurrentStory(story);
+    setActiveTab('reader');
+    setSelectedText('');
+    setIsSheetOpen(false);
+    triggerAutoSync(vocabs, updatedStories);
+  };
+
   // 単語・複数単語タップ時の即時翻訳（Google Translate Free API）
   const handleWordOrPhraseTap = async (text: string, sentence: string) => {
     const trimmed = text.trim();
@@ -175,7 +189,7 @@ export const App: React.FC = () => {
     setIsSheetOpen(false);
   };
 
-  // 単語・構文を弱点リストに追加
+  // 単語・構文を弱点リストに追加 / Lapse記録
   const handleAddToVocab = (phrase: string, meaning: string, sentence?: string, note?: string) => {
     const lookup = {
       phrase,
@@ -188,6 +202,10 @@ export const App: React.FC = () => {
     const updatedVocabs = loadVocabs();
     setVocabs(updatedVocabs);
     triggerAutoSync(updatedVocabs, stories);
+  };
+
+  const handleLapseVocab = (phrase: string, meaning = '要復習') => {
+    handleAddToVocab(phrase, meaning, currentStory?.storyContent);
   };
 
   // AIによる詳細ニュアンス取得
@@ -352,6 +370,9 @@ export const App: React.FC = () => {
             onWordOrPhraseTap={handleWordOrPhraseTap}
             selectedPhrase={selectedText}
             onClearSelection={handleClearSelection}
+            onOpenImportModal={() => setIsImportModalOpen(true)}
+            onMasterVocab={handleMasterVocab}
+            onLapseVocab={handleLapseVocab}
           />
         )}
 
@@ -378,7 +399,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* 4. History Tab */}
+        {/* 4. History Tab (Bookshelf) */}
         {activeTab === 'history' && (
           <HistoryView
             stories={stories}
@@ -400,6 +421,15 @@ export const App: React.FC = () => {
           />
         )}
       </main>
+
+      {/* 外部AIプロンプト / JSONインポートモーダル */}
+      <ImportStoryModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        cefrLevel={settings.cefrLevel}
+        dueVocabs={dueVocabs}
+        onImportStory={handleImportStory}
+      />
 
       {/* スマホChrome風ボトムシート翻訳 */}
       <TranslationBottomSheet

@@ -1,5 +1,6 @@
-import { Story, StoryGenerationResponse } from '../types/story';
+import { Story } from '../types/story';
 import { CefrLevel } from '../types/settings';
+import { parseRobustStoryJson } from '../utils/jsonParser';
 
 export interface GenerateStoryParams {
   apiKey: string;
@@ -45,14 +46,13 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
     });
     promptText += `\n★重要ルール（構文・イディオムの応用出題について）：\n`;
     promptText += `- 登録語が構文パターン（例: "too ... to ...", "so ... that ...", "used to", "look forward to", "take care of" 等）や特定の一文の場合、全く同じ例文をそのまま使い回すのではなく、**その構文・イディオムの本質的なニュアンスや文法パターンを汲み取り、今回の物語のシチュエーションに合わせた新しい応用例文**（別の主語、別の形容詞/動詞など）として自然に登場させてください。\n`;
-    promptText += `  例: 前回が "too tired to walk" だった場合 ➔ 今回は "The box was too heavy to carry." や "He was too shy to speak." のように応用する。\n`;
     promptText += `- 単語の場合も、前回とは異なる自然な文脈や組み合わせで登場させてください。\n\n`;
   }
 
   if (userPrompt && userPrompt.trim().length > 0) {
-    promptText += `【ユーザーの希望テーマ】\n"${userPrompt}"\n\n`;
+    promptText += `【ユーザーの希望テーマ・ジャンル】\n"${userPrompt}"\n\n`;
   } else {
-    promptText += `【テーマ】\n指定なし（おまかせ）。日常、友情、小さな冒険、発見など楽しいシチュエーション。\n\n`;
+    promptText += `【テーマ】\n指定なし（おまかせ）。日常、冒険、発見、ミステリー、SFなど楽しいシチュエーション。\n\n`;
     if (recentSummaries.length > 0) {
       promptText += `【直近のストーリー概要（これらと設定やシチュエーションが重複しない、新鮮な設定にしてください）】\n`;
       recentSummaries.forEach(s => {
@@ -63,15 +63,17 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   }
 
   promptText += `【要件】\n`;
-  promptText += `1. 英語本文は読みやすく段落（改行）を適切に入れてください。\n`;
+  promptText += `1. 英語本文（story）は読みやすく段落（改行）を適切に入れてください。セリフや引用符のダブルクォートはJSON内で安全にエスケープするか、シングルクォート（‘ ’）を使ってください。\n`;
   promptText += `2. 日本語のあらすじ（summary）は、**物語のオチや結末のネタバレを絶対に書かず**、どんなシチュエーションで始まる物語かという導入・設定の紹介（1〜2文）のみを日本語で記述してください。\n`;
-  promptText += `3. 日本語訳（japanese_translation）には物語全体の自然な日本語対訳を含めてください。\n`;
-  promptText += `4. target_vocab_used には、今回ストーリー内で実際に使用・応用した表現や構文のリストを記載してください。\n`;
+  promptText += `3. genres には物語に合ったジャンルタグ（例: ["Adventure", "Daily Life"], ["Mystery", "Sci-Fi"], ["Thriller"], ["Comedy"] 等）を1〜2個指定してください。\n`;
+  promptText += `4. 日本語訳（japanese_translation）には物語全体の自然な日本語対訳を含めてください。\n`;
+  promptText += `5. target_vocab_used には、今回ストーリー内で実際に使用・応用した表現や構文のリストを記載してください。\n`;
   promptText += `\n必ず以下のJSONフォーマットのみを返してください。`;
 
   const jsonSchemaDescription = `{
   "title": "英語のタイトル",
   "title_ja": "日本語のタイトル",
+  "genres": ["Adventure", "Daily Life"],
   "summary": "日本語での1-2文のあらすじ・シチュエーション概要（ネタバレ厳禁・導入のみ）",
   "story": "英語の物語本文",
   "japanese_translation": "物語全体の自然な日本語訳",
@@ -118,14 +120,8 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
 
       if (!rawText) throw new Error('Gemini APIからの応答が空でした。');
 
-      let cleanJson = rawText.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json\s*/, '').replace(/```\s*$/, '');
-      } else if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```\s*/, '').replace(/```\s*$/, '');
-      }
-
-      const parsed: StoryGenerationResponse = JSON.parse(cleanJson);
+      // 堅牢パーサーを使用（セリフ等のクォート問題も自動修復）
+      const parsed = parseRobustStoryJson(rawText);
       const storyId = 'st_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 
       const usage = data?.usageMetadata;
@@ -140,6 +136,7 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
         storyContent: parsed.story,
         japaneseTranslation: parsed.japanese_translation,
         targetVocabList: parsed.target_vocab_used || targetVocabs,
+        genres: parsed.genres && parsed.genres.length > 0 ? parsed.genres : ['Daily Life'],
         userPrompt: userPrompt || undefined,
         cefrLevel,
         createdAt: new Date().toISOString(),

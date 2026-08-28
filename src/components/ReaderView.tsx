@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { CefrLevel } from '../types/settings';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw } from 'lucide-react';
+import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw, FileJson, Tag } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 
@@ -16,12 +16,15 @@ interface ReaderViewProps {
   onWordOrPhraseTap: (text: string, contextSentence: string) => void;
   selectedPhrase: string;
   onClearSelection: () => void;
+  onOpenImportModal: () => void;
+  onMasterVocab: (vocabId: string) => void;
+  onLapseVocab: (phrase: string, meaning: string) => void;
 }
 
 interface Segment {
   isWord: boolean;
   text: string;
-  wIdx: number; // 単語インデックス（非単語の場合はその直前の単語のwIdx）
+  wIdx: number;
   cleanWord: string;
   charStart: number;
   charEnd: number;
@@ -37,10 +40,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onWordOrPhraseTap,
   selectedPhrase,
   onClearSelection,
+  onOpenImportModal,
+  onMasterVocab,
+  onLapseVocab,
 }) => {
   const [promptInput, setPromptInput] = useState('');
   const [showTranslation, setShowTranslation] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [tappedWordsDuringStory, setTappedWordsDuringStory] = useState<Set<string>>(new Set());
 
   const [selectionRange, setSelectionRange] = useState<{
     pIdx: number;
@@ -52,6 +59,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setIsFinished(false);
     setShowTranslation(false);
     setSelectionRange(null);
+    setTappedWordsDuringStory(new Set());
   }, [currentStory?.id]);
 
   useEffect(() => {
@@ -63,7 +71,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   useEffect(() => {
     const handleGlobalClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target as HTMLElement;
-      if (target && (target.closest('[data-word="true"]') || target.closest('button') || target.closest('input') || target.closest('select') || target.closest('.pointer-events-auto'))) {
+      if (target && (target.closest('[data-word="true"]') || target.closest('button') || target.closest('input') || target.closest('select') || target.closest('.pointer-events-auto') || target.closest('.modal-content'))) {
         return;
       }
       if (selectedPhrase) {
@@ -79,7 +87,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     };
   }, [selectedPhrase, onClearSelection]);
 
-  // 段落ごとのセグメント構造化
   const paragraphSegments = useMemo(() => {
     if (!currentStory) return [];
 
@@ -97,7 +104,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           segments.push({
             isWord: false,
             text: para.substring(lastIndex, match.index),
-            wIdx: wordCounter - 1, // 直前の単語のインデックス
+            wIdx: wordCounter - 1,
             cleanWord: '',
             charStart: lastIndex,
             charEnd: match.index,
@@ -129,14 +136,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         });
       }
 
-      // 登録語彙・ターゲット語彙（単数・複数単語フレーズ両対応）の位置判定
       const targetMatches: { start: number; end: number }[] = [];
       const savedMatches: { start: number; end: number }[] = [];
 
       const targetList = currentStory.targetVocabList || [];
       const lowerPara = para.toLowerCase();
 
-      // ターゲット語彙マッチング
       targetList.forEach(t => {
         const cleanTarget = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
         if (!cleanTarget) return;
@@ -147,7 +152,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         }
       });
 
-      // 登録語彙（Vocab Bank）マッチング
       vocabs.forEach(v => {
         const cleanPhrase = v.phrase.trim().toLowerCase();
         if (!cleanPhrase || cleanPhrase.length < 2) return;
@@ -206,7 +210,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     para.segments.forEach(s => {
       if (s.isWord) {
         if (s.wIdx === range.startWIdx) insideSelection = true;
-        if (insideSelection) selectedTokens.push(s.text);
+        if (insideSelection) {
+          selectedTokens.push(s.text);
+          setTappedWordsDuringStory(prev => new Set(prev).add(s.cleanWord.toLowerCase()));
+        }
         if (s.wIdx === range.endWIdx) insideSelection = false;
       } else if (insideSelection) {
         selectedTokens.push(s.text);
@@ -221,6 +228,19 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   const handleFinishStory = () => {
     setIsFinished(true);
+
+    if (currentStory && currentStory.targetVocabList) {
+      currentStory.targetVocabList.forEach(t => {
+        const cleanTarget = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+        if (!tappedWordsDuringStory.has(cleanTarget)) {
+          const vocabMatch = vocabs.find(v => v.phrase.toLowerCase() === cleanTarget);
+          if (vocabMatch) {
+            onMasterVocab(vocabMatch.id);
+          }
+        }
+      });
+    }
+
     confetti({
       particleCount: 80,
       spread: 70,
@@ -231,9 +251,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-      {/* 1. Generator Control Bar */}
+      {/* 1. Generator & Import Control Bar */}
       <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20 space-y-4">
-        {/* Level Selector Pills */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center space-x-1.5">
             <span className="text-xs font-semibold text-slate-400">レベル:</span>
@@ -262,16 +281,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             })}
           </div>
 
-          <span className="text-[11px] text-blue-400 font-medium">
-            {currentLevel === 'A1' && 'A1: やさしい中学英語'}
-            {currentLevel === 'A2' && 'A2: 日常基礎英語'}
-            {currentLevel === 'B1' && 'B1: 標準的な日常英語'}
-            {currentLevel === 'B2' && 'B2: 自然なイディオム'}
-            {currentLevel === 'C1' && 'C1: 上級・高度な語彙'}
-          </span>
+          <button
+            onClick={onOpenImportModal}
+            className="flex items-center space-x-1.5 px-3 py-1 bg-slate-950 hover:bg-slate-800 text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg text-xs font-semibold transition-colors"
+            title="外部GeminiやChatGPTで生成したJSONをインポート"
+          >
+            <FileJson className="w-3.5 h-3.5" />
+            <span>外部AIプロンプト / JSONインポート</span>
+          </button>
         </div>
 
-        {/* Prompt Input & Generate Button */}
         <div className="flex flex-col sm:flex-row gap-2.5">
           <div className="relative flex-1">
             <input
@@ -283,7 +302,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   onGenerate(promptInput);
                 }
               }}
-              placeholder="テーマ（例: カフェ、友達との会話、SF、未指定でおまかせ）"
+              placeholder="テーマ・ジャンル（例: 冒険, SF, カフェでの再会, 未指定でおまかせ）"
               className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
             />
           </div>
@@ -310,60 +329,66 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       {/* 2. Story Content Area */}
       {currentStory ? (
         <article className="bg-slate-900/60 border border-slate-800/80 rounded-3xl p-6 sm:p-9 shadow-2xl backdrop-blur-sm space-y-6">
-          {/* Title Header */}
-          <div className="border-b border-slate-800/80 pb-5 space-y-2">
+          <div className="border-b border-slate-800/80 pb-5 space-y-2.5">
             <div className="flex items-center justify-between gap-3">
-              <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-                {currentStory.title}
-              </h1>
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2 flex-wrap">
+                  <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+                    {currentStory.title}
+                  </h1>
+                  <span className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">
+                    {currentStory.cefrLevel || 'A2'}
+                  </span>
+                </div>
+                <p className="text-sm sm:text-base text-blue-400/90 font-medium">
+                  {currentStory.titleJa}
+                </p>
+              </div>
+
               <button
                 onClick={() => speakText(currentStory.storyContent)}
-                className="p-2 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-colors"
+                className="p-2 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-colors flex-shrink-0"
                 title="全文を音声再生"
               >
                 <Volume2 className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-sm sm:text-base text-blue-400/90 font-medium">
-              {currentStory.titleJa}
-            </p>
 
-            {/* Summary Badge (Spoiler-free) */}
-            {currentStory.summary && (
-              <div className="pt-2">
-                <span className="inline-block text-xs bg-slate-800/90 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700/60 leading-relaxed">
-                  💡 <strong>導入・設定</strong>: {currentStory.summary}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {currentStory.genres && currentStory.genres.length > 0 && currentStory.genres.map((g, idx) => (
+                <span key={idx} className="inline-flex items-center gap-1 text-[11px] font-semibold bg-indigo-950/60 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-full">
+                  <Tag className="w-3 h-3 text-indigo-400" />
+                  {g}
                 </span>
-              </div>
-            )}
+              ))}
+
+              {currentStory.summary && (
+                <span className="inline-block text-xs bg-slate-800/90 text-slate-300 px-3 py-1 rounded-lg border border-slate-700/60 leading-relaxed">
+                  💡 <strong>導入</strong>: {currentStory.summary}
+                </span>
+              )}
+            </div>
           </div>
 
-          {/* Operation Hint */}
           <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば複数単語・文全体もまとめて選択できます。余白を押すと解除されます。</span>
+            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば文全体もまとめて選択できます。余白を押すと解除されます。</span>
           </div>
 
-          {/* Story Body */}
           <div className="story-body select-none py-2 space-y-6">
             {paragraphSegments.map((para) => {
               return (
                 <p key={para.pIdx} className="leading-relaxed text-slate-200 text-lg sm:text-xl">
                   {para.segments.map((seg, sIdx) => {
-                    // 1. ユーザーの選択中判定
                     const isSelected = 
                       selectionRange && 
                       selectionRange.pIdx === para.pIdx && 
                       ((seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx <= selectionRange.endWIdx) ||
                        (!seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx < selectionRange.endWIdx));
 
-                    // 2. ターゲット語彙（復習語彙）マッチ判定
                     const isTarget = para.targetMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
-
-                    // 3. 登録語彙（Vocab Bank）マッチ判定
                     const isSaved = para.savedMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
 
                     if (!seg.isWord) {
-                      // 非単語トークン（スペースや記号）
                       if (isSelected) {
                         return (
                           <span key={sIdx} className="bg-blue-600 text-white font-bold inline">
@@ -374,7 +399,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       return <span key={sIdx}>{seg.text}</span>;
                     }
 
-                    // 単語トークン
                     let wordStyle = 'hover:bg-blue-500/20 hover:text-blue-300';
 
                     if (isSelected) {
@@ -401,7 +425,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             })}
           </div>
 
-          {/* Actions & Full Translation Accordion */}
           <div className="pt-4 border-t border-slate-800/80 space-y-4">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
               <button
@@ -425,6 +448,58 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 {showTranslation ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </button>
             </div>
+
+            {/* 読了後の語彙セルフ評価カード */}
+            {isFinished && currentStory.targetVocabList && currentStory.targetVocabList.length > 0 && (
+              <div className="p-4 bg-slate-950/90 border border-blue-500/30 rounded-2xl space-y-3 animate-fadeIn">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック（Anki風SRS）
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    ※タップしなかった単語は自動で「覚えた」になります
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {currentStory.targetVocabList.map((t, idx) => {
+                    const cleanPhrase = t.replace(/\s*\([^)]*\)/g, '').trim();
+                    const wasTapped = tappedWordsDuringStory.has(cleanPhrase.toLowerCase());
+
+                    return (
+                      <div key={idx} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs">
+                        <div>
+                          <span className="font-bold text-white block">{cleanPhrase}</span>
+                          <span className="text-[11px] text-slate-400">
+                            {wasTapped ? '読書中にタップ・確認' : 'スラスラ読めた（定着）'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={() => {
+                              const match = vocabs.find(v => v.phrase.toLowerCase() === cleanPhrase.toLowerCase());
+                              if (match) onMasterVocab(match.id);
+                            }}
+                            className="px-2 py-1 bg-emerald-950/60 hover:bg-emerald-900 text-emerald-400 border border-emerald-500/30 rounded-lg text-[11px] font-semibold"
+                            title="簡単！覚えた（次回期日を延長）"
+                          >
+                            🟢 簡単
+                          </button>
+                          <button
+                            onClick={() => onLapseVocab(cleanPhrase, '要復習')}
+                            className="px-2 py-1 bg-amber-950/60 hover:bg-amber-900 text-amber-400 border border-amber-500/30 rounded-lg text-[11px] font-semibold"
+                            title="難しかった（次回すぐ再出題）"
+                          >
+                            🔴 難しい
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {showTranslation && (
               <div className="p-4 sm:p-5 bg-slate-950/70 border border-slate-800/90 rounded-2xl space-y-2 animate-fadeIn">
