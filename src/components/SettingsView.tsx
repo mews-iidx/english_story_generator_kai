@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { AppSettings, CefrLevel } from '../types/settings';
-import { Key, Cloud, Download, Upload, Check, ExternalLink, RefreshCw, ShieldCheck, HelpCircle, Activity, AlertTriangle } from 'lucide-react';
+import { Key, Cloud, Download, Upload, Check, ExternalLink, RefreshCw, ShieldCheck, HelpCircle, Activity, AlertTriangle, Smartphone } from 'lucide-react';
 import { exportAllData, importAllData } from '../services/storage';
 
 interface SettingsViewProps {
@@ -29,6 +29,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [clientId, setClientId] = useState(settings.googleClientId);
   const [isSaved, setIsSaved] = useState(false);
   const [showOauthGuide, setShowOauthGuide] = useState(false);
+  const [showPwaGuide, setShowPwaGuide] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const presetModels = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview'];
@@ -209,7 +210,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* 3. Google Drive / Sheets Private DB Settings */}
+        {/* 3. Smartphone PWA Install Guide */}
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2.5 text-white font-bold text-lg">
+              <Smartphone className="w-5 h-5 text-blue-400" />
+              <span>スマホにアプリとしてインストール (PWA)</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPwaGuide(!showPwaGuide)}
+              className="text-xs text-blue-400 hover:underline"
+            >
+              {showPwaGuide ? '閉じる' : '手順を見る'}
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-300 leading-relaxed">
+            StoryKaiは<strong>PWA（Progressive Web App）に対応</strong>しており、スマホのホーム画面にアプリアイコンを追加して、Safari/Chromeのアドレスバーのない全画面ネイティブアプリとして起動できます。
+          </p>
+
+          {showPwaGuide && (
+            <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl space-y-3 text-xs text-slate-300 animate-fadeIn">
+              <div>
+                <strong className="text-sky-300 block mb-1">📱 iPhone / iPad (Safari) の場合:</strong>
+                <ol className="list-decimal list-inside space-y-1 pl-1 text-slate-400">
+                  <li>Safariでこのページ（GitHub Pages）を開く</li>
+                  <li>画面下部中央の <strong>「共有ボタン（四角から矢印）」</strong> をタップ</li>
+                  <li>メニューから <strong>「ホーム画面に追加」</strong> を選択</li>
+                  <li>右上の「追加」を押すと、ホーム画面に専用アイコンが配置されます</li>
+                </ol>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800/80">
+                <strong className="text-sky-300 block mb-1">🤖 Android (Chrome) の場合:</strong>
+                <ol className="list-decimal list-inside space-y-1 pl-1 text-slate-400">
+                  <li>Chromeでこのページを開く</li>
+                  <li>右上のメニュー（縦の3点リーダー <strong>︙</strong>）をタップ</li>
+                  <li><strong>「アプリをインストール」</strong> または <strong>「ホーム画面に追加」</strong> を選択</li>
+                </ol>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 4. Google Drive / Sheets Private DB Settings */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center space-x-2.5 text-white font-bold text-lg">
@@ -312,7 +357,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* 4. Manual Backup, Restore & Reset */}
+        {/* 5. Manual Backup, Restore & Reset */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
           <div className="flex items-center space-x-2.5 text-white font-bold text-lg border-b border-slate-800 pb-3">
             <Download className="w-5 h-5 text-blue-400" />

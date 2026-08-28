@@ -8,13 +8,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'vite.svg'],
       manifest: {
         name: 'StoryKai - 英語読解＆語彙定着',
         short_name: 'StoryKai',
         description: 'Geminiと忘却曲線で学ぶ、パーソナライズ英語リーダー',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        theme_color: '#020617',
+        background_color: '#020617',
         display: 'standalone',
         orientation: 'portrait',
         icons: [
