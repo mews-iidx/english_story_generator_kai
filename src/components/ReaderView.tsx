@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Story } from '../types/story';
+import { VocabItem } from '../types/vocab';
 import { CefrLevel } from '../types/settings';
 import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw } from 'lucide-react';
 import confetti from 'canvas-confetti';
@@ -7,7 +8,7 @@ import { speakText } from '../utils/speech';
 
 interface ReaderViewProps {
   currentStory: Story | null;
-  dueVocabs: string[];
+  vocabs: VocabItem[];
   currentLevel: CefrLevel;
   onLevelChange: (level: CefrLevel) => void;
   isGenerating: boolean;
@@ -17,7 +18,7 @@ interface ReaderViewProps {
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
   currentStory,
-  dueVocabs,
+  vocabs,
   currentLevel,
   onLevelChange,
   isGenerating,
@@ -33,6 +34,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setIsFinished(false);
     setShowTranslation(false);
   }, [currentStory?.id]);
+
+  // 登録済み単語のSet（大文字小文字無視）
+  const savedVocabSet = useMemo(() => {
+    const set = new Set<string>();
+    vocabs.forEach(v => {
+      set.add(v.phrase.trim().toLowerCase());
+    });
+    return set;
+  }, [vocabs]);
 
   // テキスト選択（長押し・スワイプ選択）の検知
   useEffect(() => {
@@ -87,7 +97,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     });
   };
 
-  // ストーリー本文を「すべての単語がタップ可能」な構造にパースしてレンダリング
+  // ストーリー本文のレンダリング（全単語タップ可能 & 登録語ハイライト）
   const renderedParagraphs = useMemo(() => {
     if (!currentStory) return [];
 
@@ -95,7 +105,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const paragraphs = currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
 
     return paragraphs.map((para, pIdx) => {
-      // 単語と記号を分解してすべてタップ可能にする
       const tokens = para.split(/(\s+|[.,!?;:"()]+)/);
 
       return (
@@ -106,21 +115,25 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               return <span key={tIdx}>{token}</span>;
             }
 
-            const cleanWord = token.replace(/^[^\w]+|[^\w]+$/g, '');
-            const isTarget = targetSet.has(cleanWord.toLowerCase());
+            const cleanWord = token.replace(/^[^\w]+|[^\w]+$/g, '').toLowerCase();
+            const isTarget = targetSet.has(cleanWord);
+            const isSaved = savedVocabSet.has(cleanWord);
+
+            let highlightClass = 'hover:bg-emerald-500/20 hover:text-emerald-300';
+            if (isTarget) {
+              highlightClass = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
+            } else if (isSaved) {
+              highlightClass = 'text-emerald-300 font-medium underline decoration-emerald-500/70 decoration-2 underline-offset-4 bg-emerald-950/20 hover:bg-emerald-950/50';
+            }
 
             return (
               <span
                 key={tIdx}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onWordOrPhraseTap(cleanWord, para);
+                  onWordOrPhraseTap(token.replace(/^[^\w]+|[^\w]+$/g, ''), para);
                 }}
-                className={`cursor-pointer rounded px-0.5 transition-colors active:scale-95 ${
-                  isTarget
-                    ? 'text-amber-300 font-semibold underline decoration-amber-400/80 decoration-2 underline-offset-4 hover:bg-amber-950/60'
-                    : 'hover:bg-emerald-500/20 hover:text-emerald-300'
-                }`}
+                className={`cursor-pointer rounded px-0.5 transition-all active:scale-95 ${highlightClass}`}
               >
                 {token}
               </span>
@@ -129,7 +142,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </p>
       );
     });
-  }, [currentStory, onWordOrPhraseTap]);
+  }, [currentStory, savedVocabSet, onWordOrPhraseTap]);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
@@ -172,16 +185,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             {currentLevel === 'C1' && 'C1: 上級・高度な語彙'}
           </span>
         </div>
-
-        {/* Target Vocab Notice (SRS) */}
-        {dueVocabs.length > 0 && (
-          <div className="flex items-center space-x-2 text-xs text-amber-400/90 bg-amber-950/40 border border-amber-500/20 px-3 py-1.5 rounded-xl">
-            <Sparkles className="w-3.5 h-3.5 flex-shrink-0" />
-            <span>
-              復習対象（{dueVocabs.length}個）: <strong>{dueVocabs.join(', ')}</strong> を物語に注入します
-            </span>
-          </div>
-        )}
 
         {/* Prompt Input & Generate Button */}
         <div className="flex flex-col sm:flex-row gap-2.5">
@@ -240,17 +243,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               {currentStory.titleJa}
             </p>
 
+            {/* Summary Badge (Spoiler-free) */}
             {currentStory.summary && (
               <div className="pt-2">
-                <span className="inline-block text-xs bg-slate-800/90 text-slate-300 px-3 py-1 rounded-lg border border-slate-700/60">
-                  💡 <strong>あらすじ</strong>: {currentStory.summary}
+                <span className="inline-block text-xs bg-slate-800/90 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700/60 leading-relaxed">
+                  💡 <strong>導入・設定</strong>: {currentStory.summary}
                 </span>
               </div>
             )}
           </div>
 
           <div className="text-xs text-slate-400 flex items-center space-x-2 bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> すべての単語をタップ、または文章を選択すると下に訳が出ます。</span>
+            <span>👆 <strong>操作ヒント:</strong> 単語タップまたは文章選択で下に訳が出ます。緑やオレンジの下線は登録済み/復習語彙です。</span>
           </div>
 
           {/* Story Body */}

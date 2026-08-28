@@ -10,9 +10,17 @@ export interface GenerateStoryParams {
   recentSummaries: string[];
 }
 
+export interface GeneratedStoryResult {
+  story: Story;
+  tokenUsage?: {
+    promptTokens: number;
+    candidatesTokens: number;
+  };
+}
+
 const FALLBACK_MODELS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'];
 
-export async function generateStoryWithGemini(params: GenerateStoryParams): Promise<Story> {
+export async function generateStoryWithGemini(params: GenerateStoryParams): Promise<GeneratedStoryResult> {
   const { apiKey, model = 'gemini-3.7-flash', cefrLevel, userPrompt, targetVocabs, recentSummaries } = params;
 
   if (!apiKey) {
@@ -36,7 +44,7 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
       promptText += `${idx + 1}. "${v}"\n`;
     });
     promptText += `\n★重要ルール（構文・イディオムの応用出題について）：\n`;
-    promptText += `- 登録語が構文パターン（例: "too ... to ...", "so ... that ...", "used to", "look forward to", "take care of" 等）や特定の一文の場合、全く同じ例文をそのままコピペして使い回すのではなく、**その構文・イディオムの本質的なニュアンスや文法パターンを汲み取り、今回の物語のシチュエーションに合わせた新しい応用例文**（別の主語、別の形容詞/動詞など）として自然に登場させてください。\n`;
+    promptText += `- 登録語が構文パターン（例: "too ... to ...", "so ... that ...", "used to", "look forward to", "take care of" 等）や特定の一文の場合、全く同じ例文をそのまま使い回すのではなく、**その構文・イディオムの本質的なニュアンスや文法パターンを汲み取り、今回の物語のシチュエーションに合わせた新しい応用例文**（別の主語、別の形容詞/動詞など）として自然に登場させてください。\n`;
     promptText += `  例: 前回が "too tired to walk" だった場合 ➔ 今回は "The box was too heavy to carry." や "He was too shy to speak." のように応用する。\n`;
     promptText += `- 単語の場合も、前回とは異なる自然な文脈や組み合わせで登場させてください。\n\n`;
   }
@@ -56,14 +64,15 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
 
   promptText += `【要件】\n`;
   promptText += `1. 英語本文は読みやすく段落（改行）を適切に入れてください。\n`;
-  promptText += `2. 日本語のあらすじ（summary: 1〜2文）と、全体の日本語訳（japanese_translation）を含めてください。\n`;
-  promptText += `3. target_vocab_used には、今回ストーリー内で実際に使用・応用した表現や構文のリストを記載してください。\n`;
+  promptText += `2. 日本語のあらすじ（summary）は、**物語のオチや結末のネタバレを絶対に書かず**、どんなシチュエーションで始まる物語かという導入・設定の紹介（1〜2文）のみを日本語で記述してください。\n`;
+  promptText += `3. 日本語訳（japanese_translation）には物語全体の自然な日本語対訳を含めてください。\n`;
+  promptText += `4. target_vocab_used には、今回ストーリー内で実際に使用・応用した表現や構文のリストを記載してください。\n`;
   promptText += `\n必ず以下のJSONフォーマットのみを返してください。`;
 
   const jsonSchemaDescription = `{
   "title": "英語のタイトル",
   "title_ja": "日本語のタイトル",
-  "summary": "日本語での1-2文のあらすじ・シチュエーション概要",
+  "summary": "日本語での1-2文のあらすじ・シチュエーション概要（ネタバレ厳禁・導入のみ）",
   "story": "英語の物語本文",
   "japanese_translation": "物語全体の自然な日本語訳",
   "target_vocab_used": ["実際に物語で使った・応用したターゲット表現や構文"]
@@ -119,7 +128,11 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
       const parsed: StoryGenerationResponse = JSON.parse(cleanJson);
       const storyId = 'st_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 
-      return {
+      const usage = data?.usageMetadata;
+      const promptTokens = usage?.promptTokenCount || 0;
+      const candidatesTokens = usage?.candidatesTokenCount || 0;
+
+      const story: Story = {
         id: storyId,
         title: parsed.title || 'Untitled Story',
         titleJa: parsed.title_ja || '無題のストーリー',
@@ -130,6 +143,14 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
         userPrompt: userPrompt || undefined,
         cefrLevel,
         createdAt: new Date().toISOString(),
+      };
+
+      return {
+        story,
+        tokenUsage: {
+          promptTokens,
+          candidatesTokens,
+        }
       };
     } catch (err: any) {
       lastError = err;
@@ -148,8 +169,8 @@ export async function getDetailedNuanceWithGemini(
   contextSentence: string,
   apiKey: string,
   model = 'gemini-3.7-flash'
-): Promise<string> {
-  if (!apiKey) return '';
+): Promise<{ explanation: string; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
+  if (!apiKey) return { explanation: '' };
 
   const prompt = `以下の英文における「${phrase}」の使い方・文法構文・ニュアンスについて、英語学習者に分かりやすく1〜2文で解説してください。構文パターンの場合はその型（例: too [形容詞] to [動詞]）も簡潔に示してください。
 【英文】: "${contextSentence}"
@@ -171,11 +192,19 @@ export async function getDetailedNuanceWithGemini(
 
       if (response.ok) {
         const data = await response.json();
-        return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+        return {
+          explanation: text,
+          tokenUsage: {
+            promptTokens: usage?.promptTokenCount || 0,
+            candidatesTokens: usage?.candidatesTokenCount || 0,
+          }
+        };
       }
     } catch (e) {
       console.warn('Nuance fetch error', e);
     }
   }
-  return '';
+  return { explanation: '' };
 }

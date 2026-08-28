@@ -20,6 +20,8 @@ import {
   recordVocabLapse,
   recordVocabMastered,
   deleteVocab as removeVocabFromStorage,
+  addTokenUsage,
+  resetAllData,
 } from './services/storage';
 
 import { generateStoryWithGemini, getDetailedNuanceWithGemini } from './services/gemini';
@@ -60,7 +62,7 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // 今日の復習期日語彙
+  // 今日の復習期日語彙（自動重み付け）
   const dueVocabs = useMemo(() => {
     return pickTargetVocabsForStory(vocabs, 4);
   }, [vocabs]);
@@ -70,7 +72,6 @@ export const App: React.FC = () => {
     return vocabs.filter(v => v.nextReviewDate <= today).length;
   }, [vocabs]);
 
-  // 選択されたテキストがすでに語彙帳に保存されているか
   const isSavedAsVocab = useMemo(() => {
     if (!selectedText) return false;
     const norm = selectedText.trim().toLowerCase();
@@ -98,7 +99,7 @@ export const App: React.FC = () => {
     }
   }, [settings]);
 
-  // ストーリー生成
+  // ストーリー生成ハンドラー
   const handleGenerateStory = async (userPrompt?: string) => {
     if (!settings.geminiApiKey) {
       alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
@@ -110,7 +111,7 @@ export const App: React.FC = () => {
     try {
       const recentSummaries = extractRecentSummaries(stories, 5);
 
-      const newStory = await generateStoryWithGemini({
+      const res = await generateStoryWithGemini({
         apiKey: settings.geminiApiKey,
         model: settings.geminiModel,
         cefrLevel: settings.cefrLevel,
@@ -118,6 +119,14 @@ export const App: React.FC = () => {
         targetVocabs: dueVocabs,
         recentSummaries,
       });
+
+      const newStory = res.story;
+
+      // トークン使用量を積算
+      if (res.tokenUsage) {
+        addTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
+        setSettings(loadSettings());
+      }
 
       saveStory(newStory);
       const updatedStories = [newStory, ...stories.filter(s => s.id !== newStory.id)];
@@ -175,12 +184,19 @@ export const App: React.FC = () => {
       alert('Gemini APIキーを設定してください');
       return '';
     }
-    return await getDetailedNuanceWithGemini(
+    const res = await getDetailedNuanceWithGemini(
       selectedText,
       contextSentence,
       settings.geminiApiKey,
       settings.geminiModel
     );
+
+    if (res.tokenUsage) {
+      addTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
+      setSettings(loadSettings());
+    }
+
+    return res.explanation;
   };
 
   // レベル変更（A1, A2, B1, B2, C1）
@@ -289,6 +305,14 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleResetAllData = () => {
+    resetAllData();
+    setStories([]);
+    setVocabs([]);
+    setCurrentStory(null);
+    setSettings(loadSettings());
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-emerald-500 selection:text-white">
       <Header
@@ -304,7 +328,7 @@ export const App: React.FC = () => {
         {activeTab === 'reader' && (
           <ReaderView
             currentStory={currentStory}
-            dueVocabs={dueVocabs}
+            vocabs={vocabs}
             currentLevel={settings.cefrLevel}
             onLevelChange={handleLevelChange}
             isGenerating={isGenerating}
@@ -337,11 +361,11 @@ export const App: React.FC = () => {
             onGoogleSync={handleGoogleManualSync}
             isSyncing={isSyncing}
             onDataImported={handleDataImported}
+            onResetAllData={handleResetAllData}
           />
         )}
       </main>
 
-      {/* スマホChrome風ボトムシート翻訳 */}
       <TranslationBottomSheet
         isOpen={isSheetOpen}
         onClose={() => setIsSheetOpen(false)}

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { AppSettings, CefrLevel } from '../types/settings';
-import { Key, Cloud, Download, Upload, Check, ExternalLink, RefreshCw, ShieldCheck, HelpCircle } from 'lucide-react';
+import { Key, Cloud, Download, Upload, Check, ExternalLink, RefreshCw, ShieldCheck, HelpCircle, Activity, AlertTriangle } from 'lucide-react';
 import { exportAllData, importAllData } from '../services/storage';
 
 interface SettingsViewProps {
@@ -10,6 +10,7 @@ interface SettingsViewProps {
   onGoogleSync: () => Promise<void>;
   isSyncing: boolean;
   onDataImported: () => void;
+  onResetAllData: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -19,6 +20,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onGoogleSync,
   isSyncing,
   onDataImported,
+  onResetAllData,
 }) => {
   const [apiKey, setApiKey] = useState(settings.geminiApiKey);
   const [model, setModel] = useState(settings.geminiModel || 'gemini-3.7-flash');
@@ -31,6 +33,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const presetModels = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview'];
   const isPresetModel = presetModels.includes(model);
+
+  const tokenStats = settings.tokenStats || {
+    totalPromptTokens: 0,
+    totalCandidatesTokens: 0,
+    totalTokens: 0,
+    totalGenerations: 0,
+  };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,10 +84,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     reader.readAsText(file);
   };
 
+  const handleResetConfirm = () => {
+    if (confirm('【警告】すべてのストーリー履歴、登録単語、トークン統計を完全にリセットしますか？\n（APIキー設定は保持されます）')) {
+      onResetAllData();
+      alert('すべてのデータを初期化しました。');
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+      {/* 1. Token Counter Dashboard */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
+        <div className="flex items-center space-x-2.5 text-white font-bold text-lg border-b border-slate-800 pb-3">
+          <Activity className="w-5 h-5 text-emerald-400" />
+          <span>Gemini Token 使用量・統計</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl">
+            <span className="text-[11px] text-slate-400">総生成回数</span>
+            <p className="text-xl font-bold text-white mt-0.5">{tokenStats.totalGenerations}<span className="text-xs font-normal text-slate-400 ml-1">回</span></p>
+          </div>
+
+          <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl">
+            <span className="text-[11px] text-slate-400">入力 (Prompt)</span>
+            <p className="text-xl font-bold text-teal-400 mt-0.5">{tokenStats.totalPromptTokens.toLocaleString()}<span className="text-xs font-normal text-slate-400 ml-1">tok</span></p>
+          </div>
+
+          <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl">
+            <span className="text-[11px] text-slate-400">出力 (Output)</span>
+            <p className="text-xl font-bold text-emerald-400 mt-0.5">{tokenStats.totalCandidatesTokens.toLocaleString()}<span className="text-xs font-normal text-slate-400 ml-1">tok</span></p>
+          </div>
+
+          <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl">
+            <span className="text-[11px] text-slate-400">合計 Tokens</span>
+            <p className="text-xl font-bold text-amber-400 mt-0.5">{tokenStats.totalTokens.toLocaleString()}<span className="text-xs font-normal text-slate-400 ml-1">tok</span></p>
+          </div>
+        </div>
+      </div>
+
       <form onSubmit={handleSave} className="space-y-6">
-        {/* 1. Gemini API Settings */}
+        {/* 2. Gemini API Settings */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
           <div className="flex items-center space-x-2.5 text-white font-bold text-lg border-b border-slate-800 pb-3">
             <Key className="w-5 h-5 text-emerald-400" />
@@ -147,9 +193,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
           </div>
+
+          <div className="flex items-center justify-end space-x-3 pt-2">
+            {isSaved && (
+              <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1 animate-fadeIn">
+                <Check className="w-4 h-4" /> 設定を保存しました
+              </span>
+            )}
+            <button
+              type="submit"
+              className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white rounded-xl text-sm font-semibold shadow-lg shadow-emerald-600/20 transition-all"
+            >
+              設定を保存する
+            </button>
+          </div>
         </div>
 
-        {/* 2. Google Drive / Sheets Private DB Settings */}
+        {/* 3. Google Drive / Sheets Private DB Settings */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center space-x-2.5 text-white font-bold text-lg">
@@ -252,54 +312,55 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* 3. Manual Backup & Restore */}
+        {/* 4. Manual Backup, Restore & Reset */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
           <div className="flex items-center space-x-2.5 text-white font-bold text-lg border-b border-slate-800 pb-3">
             <Download className="w-5 h-5 text-emerald-400" />
-            <span>データのエクスポート・インポート（手動バックアップ）</span>
+            <span>データ管理（バックアップ・復元・リセット）</span>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={handleExport}
-              className="flex items-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
-            >
-              <Download className="w-4 h-4 text-emerald-400" />
-              <span>JSONバックアップをダウンロード</span>
-            </button>
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleExport}
+                className="flex items-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
+              >
+                <Download className="w-4 h-4 text-emerald-400" />
+                <span>JSONバックアップをダウンロード</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
-            >
-              <Upload className="w-4 h-4 text-teal-400" />
-              <span>JSONバックアップから復元</span>
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleImportFile}
-              accept=".json"
-              className="hidden"
-            />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
+              >
+                <Upload className="w-4 h-4 text-teal-400" />
+                <span>JSONバックアップから復元</span>
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleImportFile}
+                accept=".json"
+                className="hidden"
+              />
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+              <div className="text-xs text-slate-400">
+                <span>ストーリー履歴と登録語彙を初期状態に戻します。</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleResetConfirm}
+                className="flex items-center space-x-1.5 px-3.5 py-2 bg-red-950/40 hover:bg-red-950/80 text-red-400 border border-red-500/30 rounded-xl text-xs font-semibold transition-all"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>全データをリセット</span>
+              </button>
+            </div>
           </div>
-        </div>
-
-        {/* Save Button */}
-        <div className="flex items-center justify-end space-x-3 pt-2">
-          {isSaved && (
-            <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1 animate-fadeIn">
-              <Check className="w-4 h-4" /> 設定を保存しました
-            </span>
-          )}
-          <button
-            type="submit"
-            className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white rounded-xl text-sm font-semibold shadow-lg shadow-emerald-600/20 transition-all"
-          >
-            設定を保存する
-          </button>
         </div>
       </form>
     </div>

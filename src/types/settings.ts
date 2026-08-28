@@ -1,5 +1,12 @@
 export type CefrLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
 
+export interface TokenStats {
+  totalPromptTokens: number;
+  totalCandidatesTokens: number;
+  totalTokens: number;
+  totalGenerations: number;
+}
+
 export interface AppSettings {
   geminiApiKey: string;
   geminiModel: string;
@@ -8,6 +15,7 @@ export interface AppSettings {
   googleSpreadsheetId: string | null;
   googleAccessToken: string | null;
   lastSyncedAt: string | null;
+  tokenStats: TokenStats;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -18,4 +26,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   googleSpreadsheetId: null,
   googleAccessToken: null,
   lastSyncedAt: null,
+  tokenStats: {
+    totalPromptTokens: 0,
+    totalCandidatesTokens: 0,
+    totalTokens: 0,
+    totalGenerations: 0,
+  },
 };

@@ -1,6 +1,6 @@
 import { VocabItem, VocabLookupResult } from '../types/vocab';
 import { Story } from '../types/story';
-import { AppSettings, DEFAULT_SETTINGS } from '../types/settings';
+import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { calculateLapseSRS, calculateSuccessSRS } from '../utils/srs';
 
 const STORAGE_KEYS = {
@@ -14,8 +14,14 @@ export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!raw) return DEFAULT_SETTINGS;
-    const parsed: AppSettings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-    // 古い/非推奨モデル（gemini-2.*, gemini-1.*, gemini-2.5-flashなど）は自動で最新 gemini-3.7-flash にマイグレーション
+    const parsed: AppSettings = { 
+      ...DEFAULT_SETTINGS, 
+      ...JSON.parse(raw),
+      tokenStats: {
+        ...DEFAULT_SETTINGS.tokenStats,
+        ...(JSON.parse(raw).tokenStats || {})
+      }
+    };
     if (!parsed.geminiModel || parsed.geminiModel.startsWith('gemini-2.') || parsed.geminiModel.startsWith('gemini-1.')) {
       parsed.geminiModel = 'gemini-3.7-flash';
       saveSettings(parsed);
@@ -33,6 +39,22 @@ export function saveSettings(settings: AppSettings): void {
   } catch (e) {
     console.error('Failed to save settings to localStorage', e);
   }
+}
+
+export function addTokenUsage(promptTokens: number, candidatesTokens: number): TokenStats {
+  const current = loadSettings();
+  const updatedStats: TokenStats = {
+    totalPromptTokens: current.tokenStats.totalPromptTokens + (promptTokens || 0),
+    totalCandidatesTokens: current.tokenStats.totalCandidatesTokens + (candidatesTokens || 0),
+    totalTokens: current.tokenStats.totalTokens + (promptTokens || 0) + (candidatesTokens || 0),
+    totalGenerations: current.tokenStats.totalGenerations + 1,
+  };
+  const updatedSettings: AppSettings = {
+    ...current,
+    tokenStats: updatedStats,
+  };
+  saveSettings(updatedSettings);
+  return updatedStats;
 }
 
 // ===================== STORIES =====================
@@ -151,6 +173,26 @@ export function deleteVocab(vocabId: string): void {
   const vocabs = loadVocabs();
   const updated = vocabs.filter(v => v.id !== vocabId);
   saveVocabsBatch(updated);
+}
+
+// ===================== RESET ALL DATA =====================
+export function resetAllData(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.STORIES);
+    localStorage.removeItem(STORAGE_KEYS.VOCABS);
+    const s = loadSettings();
+    saveSettings({
+      ...s,
+      tokenStats: {
+        totalPromptTokens: 0,
+        totalCandidatesTokens: 0,
+        totalTokens: 0,
+        totalGenerations: 0,
+      }
+    });
+  } catch (e) {
+    console.error('Failed to reset data', e);
+  }
 }
 
 // ===================== EXPORT / IMPORT =====================
