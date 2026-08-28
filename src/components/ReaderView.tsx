@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { CefrLevel } from '../types/settings';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw } from 'lucide-react';
+import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw, X } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 
@@ -14,6 +14,17 @@ interface ReaderViewProps {
   isGenerating: boolean;
   onGenerate: (userPrompt?: string) => Promise<void>;
   onWordOrPhraseTap: (text: string, contextSentence: string) => void;
+  selectedPhrase: string;
+  onClearSelection: () => void;
+}
+
+interface WordToken {
+  id: string;
+  pIdx: number;
+  wIdx: number;
+  rawText: string;
+  cleanWord: string;
+  isWord: boolean;
 }
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
@@ -24,18 +35,31 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   isGenerating,
   onGenerate,
   onWordOrPhraseTap,
+  selectedPhrase,
+  onClearSelection,
 }) => {
   const [promptInput, setPromptInput] = useState('');
   const [showTranslation, setShowTranslation] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
-  const storyContainerRef = useRef<HTMLDivElement>(null);
+
+  const [selectionRange, setSelectionRange] = useState<{
+    pIdx: number;
+    startWIdx: number;
+    endWIdx: number;
+  } | null>(null);
 
   useEffect(() => {
     setIsFinished(false);
     setShowTranslation(false);
+    setSelectionRange(null);
   }, [currentStory?.id]);
 
-  // 登録済み単語のSet（大文字小文字無視）
+  useEffect(() => {
+    if (!selectedPhrase) {
+      setSelectionRange(null);
+    }
+  }, [selectedPhrase]);
+
   const savedVocabSet = useMemo(() => {
     const set = new Set<string>();
     vocabs.forEach(v => {
@@ -44,47 +68,79 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return set;
   }, [vocabs]);
 
-  // テキスト選択（長押し・スワイプ選択）の検知
-  useEffect(() => {
-    const handleMouseUpOrTouchEnd = () => {
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || !storyContainerRef.current) return;
+  const paragraphTokens = useMemo(() => {
+    if (!currentStory) return [];
 
-      if (!storyContainerRef.current.contains(selection.anchorNode)) return;
+    const paragraphs = currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
 
-      const selectedText = selection.toString().trim();
-      if (selectedText.length > 0 && selectedText.length < 120) {
-        const fullText = storyContainerRef.current.innerText || '';
-        const sentence = findSurroundingSentence(fullText, selectedText);
-        onWordOrPhraseTap(selectedText, sentence);
+    return paragraphs.map((para, pIdx) => {
+      const parts = para.split(/(\s+|[.,!?;:"()]+)/);
+      let wordCounter = 0;
+
+      const tokens: WordToken[] = parts.map((part) => {
+        const isWord = /^[a-zA-Z0-9'-]+$/.test(part);
+        const wIdx = isWord ? wordCounter++ : -1;
+        const cleanWord = isWord ? part.replace(/^[^\w]+|[^\w]+$/g, '') : '';
+        return {
+          id: `p${pIdx}_w${wIdx}`,
+          pIdx,
+          wIdx,
+          rawText: part,
+          cleanWord,
+          isWord,
+        };
+      });
+
+      return {
+        pIdx,
+        fullParaText: para,
+        tokens,
+      };
+    });
+  }, [currentStory]);
+
+  const handleTokenClick = (token: WordToken, fullParaText: string) => {
+    if (!token.isWord) return;
+
+    if (selectionRange && selectionRange.pIdx === token.pIdx) {
+      if (token.wIdx >= selectionRange.startWIdx && token.wIdx <= selectionRange.endWIdx && selectionRange.startWIdx !== selectionRange.endWIdx) {
+        const newRange = { pIdx: token.pIdx, startWIdx: token.wIdx, endWIdx: token.wIdx };
+        setSelectionRange(newRange);
+        emitSelectedPhrase(newRange, fullParaText);
+        return;
       }
-    };
 
-    const container = storyContainerRef.current;
-    if (container) {
-      container.addEventListener('mouseup', handleMouseUpOrTouchEnd);
-      container.addEventListener('touchend', handleMouseUpOrTouchEnd);
+      const newStart = Math.min(selectionRange.startWIdx, token.wIdx);
+      const newEnd = Math.max(selectionRange.endWIdx, token.wIdx);
+      
+      if (newEnd - newStart < 9) {
+        const newRange = { pIdx: token.pIdx, startWIdx: newStart, endWIdx: newEnd };
+        setSelectionRange(newRange);
+        emitSelectedPhrase(newRange, fullParaText);
+        return;
+      }
     }
-    return () => {
-      if (container) {
-        container.removeEventListener('mouseup', handleMouseUpOrTouchEnd);
-        container.removeEventListener('touchend', handleMouseUpOrTouchEnd);
+
+    const newRange = { pIdx: token.pIdx, startWIdx: token.wIdx, endWIdx: token.wIdx };
+    setSelectionRange(newRange);
+    emitSelectedPhrase(newRange, fullParaText);
+  };
+
+  const emitSelectedPhrase = (range: { pIdx: number; startWIdx: number; endWIdx: number }, fullParaText: string) => {
+    const para = paragraphTokens[range.pIdx];
+    if (!para) return;
+
+    const selectedWords: string[] = [];
+    para.tokens.forEach(t => {
+      if (t.isWord && t.wIdx >= range.startWIdx && t.wIdx <= range.endWIdx) {
+        selectedWords.push(t.rawText);
       }
-    };
-  }, [onWordOrPhraseTap]);
+    });
 
-  const findSurroundingSentence = (fullText: string, phrase: string): string => {
-    const idx = fullText.indexOf(phrase);
-    if (idx === -1) return phrase;
-
-    const prevDot = Math.max(0, fullText.lastIndexOf('.', idx), fullText.lastIndexOf('!', idx), fullText.lastIndexOf('?', idx));
-    let nextDot = fullText.indexOf('.', idx + phrase.length);
-    if (nextDot === -1) nextDot = fullText.indexOf('!', idx + phrase.length);
-    if (nextDot === -1) nextDot = fullText.indexOf('?', idx + phrase.length);
-    if (nextDot === -1) nextDot = fullText.length;
-
-    const start = prevDot === 0 ? 0 : prevDot + 1;
-    return fullText.substring(start, nextDot + 1).trim();
+    const phrase = selectedWords.join(' ').replace(/\s+/g, ' ').trim();
+    if (phrase) {
+      onWordOrPhraseTap(phrase, fullParaText);
+    }
   };
 
   const handleFinishStory = () => {
@@ -96,53 +152,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       colors: ['#10b981', '#34d399', '#6ee7b7', '#f59e0b', '#38bdf8']
     });
   };
-
-  // ストーリー本文のレンダリング（全単語タップ可能 & 登録語ハイライト）
-  const renderedParagraphs = useMemo(() => {
-    if (!currentStory) return [];
-
-    const targetSet = new Set((currentStory.targetVocabList || []).map(t => t.toLowerCase()));
-    const paragraphs = currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
-
-    return paragraphs.map((para, pIdx) => {
-      const tokens = para.split(/(\s+|[.,!?;:"()]+)/);
-
-      return (
-        <p key={pIdx} className="mb-6 leading-relaxed text-slate-200 text-lg sm:text-xl selection:bg-emerald-500/30">
-          {tokens.map((token, tIdx) => {
-            const isWord = /^[a-zA-Z0-9'-]+$/.test(token);
-            if (!isWord) {
-              return <span key={tIdx}>{token}</span>;
-            }
-
-            const cleanWord = token.replace(/^[^\w]+|[^\w]+$/g, '').toLowerCase();
-            const isTarget = targetSet.has(cleanWord);
-            const isSaved = savedVocabSet.has(cleanWord);
-
-            let highlightClass = 'hover:bg-emerald-500/20 hover:text-emerald-300';
-            if (isTarget) {
-              highlightClass = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
-            } else if (isSaved) {
-              highlightClass = 'text-emerald-300 font-medium underline decoration-emerald-500/70 decoration-2 underline-offset-4 bg-emerald-950/20 hover:bg-emerald-950/50';
-            }
-
-            return (
-              <span
-                key={tIdx}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onWordOrPhraseTap(token.replace(/^[^\w]+|[^\w]+$/g, ''), para);
-                }}
-                className={`cursor-pointer rounded px-0.5 transition-all active:scale-95 ${highlightClass}`}
-              >
-                {token}
-              </span>
-            );
-          })}
-        </p>
-      );
-    });
-  }, [currentStory, savedVocabSet, onWordOrPhraseTap]);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
@@ -253,13 +262,68 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             )}
           </div>
 
-          <div className="text-xs text-slate-400 flex items-center space-x-2 bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語タップまたは文章選択で下に訳が出ます。緑やオレンジの下線は登録済み/復習語彙です。</span>
+          {/* Operation Hint */}
+          <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
+            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。続けて前後の単語を押すと熟語として連結選択できます。</span>
+            {selectionRange && (
+              <button
+                onClick={onClearSelection}
+                className="ml-2 px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] flex items-center gap-1 transition-colors flex-shrink-0"
+              >
+                <X className="w-3 h-3" />
+                <span>選択解除</span>
+              </button>
+            )}
           </div>
 
-          {/* Story Body */}
-          <div ref={storyContainerRef} className="story-body select-text py-2">
-            {renderedParagraphs}
+          {/* Story Body (select-none to avoid mobile OS popups) */}
+          <div className="story-body select-none py-2 space-y-6">
+            {paragraphTokens.map((para) => {
+              const targetSet = new Set((currentStory.targetVocabList || []).map(t => t.toLowerCase()));
+
+              return (
+                <p key={para.pIdx} className="leading-relaxed text-slate-200 text-lg sm:text-xl">
+                  {para.tokens.map((token, tIdx) => {
+                    if (!token.isWord) {
+                      return <span key={tIdx} className="text-slate-400">{token.rawText}</span>;
+                    }
+
+                    const clean = token.cleanWord.toLowerCase();
+                    const isTarget = targetSet.has(clean);
+                    const isSaved = savedVocabSet.has(clean);
+
+                    const isSelected = 
+                      selectionRange && 
+                      selectionRange.pIdx === token.pIdx && 
+                      token.wIdx >= selectionRange.startWIdx && 
+                      token.wIdx <= selectionRange.endWIdx;
+
+                    let wordStyle = 'hover:bg-emerald-500/20 hover:text-emerald-300 text-slate-200';
+
+                    if (isSelected) {
+                      wordStyle = 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/30 scale-105';
+                    } else if (isTarget) {
+                      wordStyle = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
+                    } else if (isSaved) {
+                      wordStyle = 'text-emerald-300 font-medium underline decoration-emerald-500/70 decoration-2 underline-offset-4 bg-emerald-950/20 hover:bg-emerald-950/50';
+                    }
+
+                    return (
+                      <span
+                        key={tIdx}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleTokenClick(token, para.fullParaText);
+                        }}
+                        className={`inline-block cursor-pointer rounded px-1 py-0.5 mx-0.5 transition-all active:scale-95 ${wordStyle}`}
+                      >
+                        {token.rawText}
+                      </span>
+                    );
+                  })}
+                </p>
+              );
+            })}
           </div>
 
           {/* Actions & Full Translation Accordion */}

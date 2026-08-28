@@ -40,7 +40,7 @@ export const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // スマホChrome風ボトムシート翻訳状態
+  // 単語・複数単語タップ選択＆ボトムシート翻訳状態
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [selectedText, setSelectedText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
@@ -62,7 +62,7 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // 今日の復習期日語彙（自動重み付け）
+  // 今日の復習期日語彙
   const dueVocabs = useMemo(() => {
     return pickTargetVocabsForStory(vocabs, 4);
   }, [vocabs]);
@@ -122,7 +122,6 @@ export const App: React.FC = () => {
 
       const newStory = res.story;
 
-      // トークン使用量を積算
       if (res.tokenUsage) {
         addTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
         setSettings(loadSettings());
@@ -133,6 +132,10 @@ export const App: React.FC = () => {
       setStories(updatedStories);
       setCurrentStory(newStory);
 
+      // 選択をクリア
+      setSelectedText('');
+      setIsSheetOpen(false);
+
       triggerAutoSync(vocabs, updatedStories);
     } catch (err: any) {
       console.error('Generation error', err);
@@ -142,7 +145,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // 単語・フレーズタップ時の即時翻訳（Google Translate Free API）
+  // 単語・複数単語タップ時の即時翻訳（Google Translate Free API）
   const handleWordOrPhraseTap = async (text: string, sentence: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -161,6 +164,11 @@ export const App: React.FC = () => {
     } finally {
       setIsTranslating(false);
     }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedText('');
+    setIsSheetOpen(false);
   };
 
   // ボトムシートから「弱点単語帳に追加」
@@ -237,6 +245,8 @@ export const App: React.FC = () => {
   const handleSelectStory = (story: Story) => {
     setCurrentStory(story);
     setActiveTab('reader');
+    setSelectedText('');
+    setIsSheetOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -310,6 +320,8 @@ export const App: React.FC = () => {
     setStories([]);
     setVocabs([]);
     setCurrentStory(null);
+    setSelectedText('');
+    setIsSheetOpen(false);
     setSettings(loadSettings());
   };
 
@@ -324,7 +336,7 @@ export const App: React.FC = () => {
         onSyncClick={handleGoogleManualSync}
       />
 
-      <main className="flex-1 pb-24">
+      <main className="flex-1 pb-28">
         {activeTab === 'reader' && (
           <ReaderView
             currentStory={currentStory}
@@ -334,6 +346,8 @@ export const App: React.FC = () => {
             isGenerating={isGenerating}
             onGenerate={handleGenerateStory}
             onWordOrPhraseTap={handleWordOrPhraseTap}
+            selectedPhrase={selectedText}
+            onClearSelection={handleClearSelection}
           />
         )}
 
@@ -366,9 +380,13 @@ export const App: React.FC = () => {
         )}
       </main>
 
+      {/* スマホChrome風ボトムシート翻訳 */}
       <TranslationBottomSheet
         isOpen={isSheetOpen}
-        onClose={() => setIsSheetOpen(false)}
+        onClose={() => {
+          setIsSheetOpen(false);
+          setSelectedText('');
+        }}
         originalText={selectedText}
         translatedText={translatedText}
         contextSentence={contextSentence}
