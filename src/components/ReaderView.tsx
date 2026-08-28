@@ -50,6 +50,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isFinished, setIsFinished] = useState(false);
   const [tappedWordsDuringStory, setTappedWordsDuringStory] = useState<Set<string>>(new Set());
 
+  // 単語ごとの読了後評価状態 ('easy' | 'hard') を個別キーで管理
+  const [vocabEvaluations, setVocabEvaluations] = useState<Record<string, 'easy' | 'hard'>>({});
+
   const [selectionRange, setSelectionRange] = useState<{
     pIdx: number;
     startWIdx: number;
@@ -61,6 +64,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setShowTranslation(false);
     setSelectionRange(null);
     setTappedWordsDuringStory(new Set());
+    setVocabEvaluations({});
   }, [currentStory?.id]);
 
   useEffect(() => {
@@ -227,20 +231,29 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
   };
 
+  // 読了ハンドラー
   const handleFinishStory = () => {
     setIsFinished(true);
+
+    const initialEvals: Record<string, 'easy' | 'hard'> = {};
 
     if (currentStory && currentStory.targetVocabList) {
       currentStory.targetVocabList.forEach(t => {
         const cleanTarget = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-        if (!tappedWordsDuringStory.has(cleanTarget)) {
+        const wasTapped = tappedWordsDuringStory.has(cleanTarget);
+        if (!wasTapped) {
+          initialEvals[cleanTarget] = 'easy';
           const vocabMatch = vocabs.find(v => v.phrase.toLowerCase() === cleanTarget);
           if (vocabMatch) {
             onMasterVocab(vocabMatch.id);
           }
+        } else {
+          initialEvals[cleanTarget] = 'hard';
         }
       });
     }
+
+    setVocabEvaluations(initialEvals);
 
     confetti({
       particleCount: 80,
@@ -248,6 +261,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       origin: { y: 0.7 },
       colors: ['#3b82f6', '#60a5fa', '#38bdf8', '#fbbf24', '#818cf8']
     });
+  };
+
+  // 個別単語の「簡単」ボタン押下ハンドラー
+  const handleRateEasy = (cleanPhrase: string) => {
+    const key = cleanPhrase.toLowerCase();
+    setVocabEvaluations(prev => ({ ...prev, [key]: 'easy' }));
+    const match = vocabs.find(v => v.phrase.toLowerCase() === key);
+    if (match) {
+      onMasterVocab(match.id);
+    }
+  };
+
+  // 個別単語の「難しい」ボタン押下ハンドラー
+  const handleRateHard = (cleanPhrase: string) => {
+    const key = cleanPhrase.toLowerCase();
+    setVocabEvaluations(prev => ({ ...prev, [key]: 'hard' }));
+    onLapseVocab(cleanPhrase, '要復習');
   };
 
   const changeWordCount = (delta: number) => {
@@ -258,7 +288,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-5">
       {/* 1. Generator & Word Count Control Bar */}
       <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-3.5 sm:p-5 shadow-xl shadow-black/20 space-y-3.5">
-        {/* Level & Word Count Controls */}
         <div className="flex items-center justify-between flex-wrap gap-2.5">
           {/* Level Pills */}
           <div className="flex items-center space-x-1">
@@ -279,7 +308,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
           {/* Word Count Spinner & Import */}
           <div className="flex items-center space-x-2">
-            {/* Word Count Selector */}
             <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5">
               <span className="text-[11px] text-slate-400 font-medium px-2 hidden sm:inline">語数:</span>
               <button
@@ -485,46 +513,55 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </button>
             </div>
 
-            {/* 読了後の語彙セルフ評価カード */}
+            {/* 読了後の語彙セルフ評価カード（単語ごとに独立した評価ボタングループ） */}
             {isFinished && currentStory.targetVocabList && currentStory.targetVocabList.length > 0 && (
               <div className="p-4 bg-slate-950/90 border border-blue-500/30 rounded-2xl space-y-3 animate-fadeIn">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-1">
                   <span className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック（Anki風SRS）
+                    <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック
                   </span>
                   <span className="text-[11px] text-slate-400">
-                    ※タップしなかった単語は自動で「覚えた」になります
+                    単語ごとに「簡単」「難しい」を個別に調整できます
                   </span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                   {currentStory.targetVocabList.map((t, idx) => {
                     const cleanPhrase = t.replace(/\s*\([^)]*\)/g, '').trim();
-                    const wasTapped = tappedWordsDuringStory.has(cleanPhrase.toLowerCase());
+                    const key = cleanPhrase.toLowerCase();
+                    const currentRating = vocabEvaluations[key] || (tappedWordsDuringStory.has(key) ? 'hard' : 'easy');
 
                     return (
-                      <div key={idx} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs">
-                        <div>
-                          <span className="font-bold text-white block">{cleanPhrase}</span>
-                          <span className="text-[11px] text-slate-400">
-                            {wasTapped ? '読書中にタップ・確認' : 'スラスラ読めた（定着）'}
+                      <div key={idx} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs gap-2">
+                        <div className="min-w-0 flex-1">
+                          <span className="font-bold text-white block truncate">{cleanPhrase}</span>
+                          <span className="text-[10px] text-slate-400">
+                            {currentRating === 'easy' ? '🟢 スラスラ読めた（定着）' : '🔴 要復習（次回再出題）'}
                           </span>
                         </div>
 
-                        <div className="flex items-center space-x-1">
+                        {/* 単語ごとに独立した [簡単] / [難しい] ボタングループ */}
+                        <div className="flex items-center space-x-1 flex-shrink-0">
                           <button
-                            onClick={() => {
-                              const match = vocabs.find(v => v.phrase.toLowerCase() === cleanPhrase.toLowerCase());
-                              if (match) onMasterVocab(match.id);
-                            }}
-                            className="px-2 py-1 bg-emerald-950/60 hover:bg-emerald-900 text-emerald-400 border border-emerald-500/30 rounded-lg text-[11px] font-semibold"
+                            type="button"
+                            onClick={() => handleRateEasy(cleanPhrase)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                              currentRating === 'easy'
+                                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30 border border-emerald-400'
+                                : 'bg-slate-950 text-slate-400 hover:text-emerald-400 border border-slate-800'
+                            }`}
                             title="簡単！覚えた（次回期日を延長）"
                           >
                             🟢 簡単
                           </button>
                           <button
-                            onClick={() => onLapseVocab(cleanPhrase, '要復習')}
-                            className="px-2 py-1 bg-amber-950/60 hover:bg-amber-900 text-amber-400 border border-amber-500/30 rounded-lg text-[11px] font-semibold"
+                            type="button"
+                            onClick={() => handleRateHard(cleanPhrase)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                              currentRating === 'hard'
+                                ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30 border border-amber-400'
+                                : 'bg-slate-950 text-slate-400 hover:text-amber-400 border border-slate-800'
+                            }`}
                             title="難しかった（次回すぐ再出題）"
                           >
                             🔴 難しい
