@@ -21,8 +21,10 @@ interface ReaderViewProps {
 interface Segment {
   isWord: boolean;
   text: string;
-  wIdx: number;
+  wIdx: number; // 単語インデックス（非単語の場合はその直前の単語のwIdx）
   cleanWord: string;
+  charStart: number;
+  charEnd: number;
 }
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
@@ -77,14 +79,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     };
   }, [selectedPhrase, onClearSelection]);
 
-  const savedVocabSet = useMemo(() => {
-    const set = new Set<string>();
-    vocabs.forEach(v => {
-      set.add(v.phrase.trim().toLowerCase());
-    });
-    return set;
-  }, [vocabs]);
-
+  // 段落ごとのセグメント構造化
   const paragraphSegments = useMemo(() => {
     if (!currentStory) return [];
 
@@ -102,8 +97,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           segments.push({
             isWord: false,
             text: para.substring(lastIndex, match.index),
-            wIdx: -1,
+            wIdx: wordCounter - 1, // 直前の単語のインデックス
             cleanWord: '',
+            charStart: lastIndex,
+            charEnd: match.index,
           });
         }
 
@@ -114,6 +111,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           text: rawWord,
           wIdx: wordCounter++,
           cleanWord,
+          charStart: match.index,
+          charEnd: regex.lastIndex,
         });
 
         lastIndex = regex.lastIndex;
@@ -123,18 +122,51 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         segments.push({
           isWord: false,
           text: para.substring(lastIndex),
-          wIdx: -1,
+          wIdx: wordCounter - 1,
           cleanWord: '',
+          charStart: lastIndex,
+          charEnd: para.length,
         });
       }
+
+      // 登録語彙・ターゲット語彙（単数・複数単語フレーズ両対応）の位置判定
+      const targetMatches: { start: number; end: number }[] = [];
+      const savedMatches: { start: number; end: number }[] = [];
+
+      const targetList = currentStory.targetVocabList || [];
+      const lowerPara = para.toLowerCase();
+
+      // ターゲット語彙マッチング
+      targetList.forEach(t => {
+        const cleanTarget = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+        if (!cleanTarget) return;
+        let pos = 0;
+        while ((pos = lowerPara.indexOf(cleanTarget, pos)) !== -1) {
+          targetMatches.push({ start: pos, end: pos + cleanTarget.length });
+          pos += cleanTarget.length;
+        }
+      });
+
+      // 登録語彙（Vocab Bank）マッチング
+      vocabs.forEach(v => {
+        const cleanPhrase = v.phrase.trim().toLowerCase();
+        if (!cleanPhrase || cleanPhrase.length < 2) return;
+        let pos = 0;
+        while ((pos = lowerPara.indexOf(cleanPhrase, pos)) !== -1) {
+          savedMatches.push({ start: pos, end: pos + cleanPhrase.length });
+          pos += cleanPhrase.length;
+        }
+      });
 
       return {
         pIdx,
         fullParaText: para,
         segments,
+        targetMatches,
+        savedMatches,
       };
     });
-  }, [currentStory]);
+  }, [currentStory, vocabs]);
 
   const handleWordClick = (pIdx: number, wIdx: number, fullParaText: string, e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -151,7 +183,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       const newStart = Math.min(selectionRange.startWIdx, wIdx);
       const newEnd = Math.max(selectionRange.endWIdx, wIdx);
       
-      // 長文・1文まるごとも選択できるように大幅拡張（最大50単語まで連結可能）
       if (newEnd - newStart < 50) {
         const newRange = { pIdx, startWIdx: newStart, endWIdx: newEnd };
         setSelectionRange(newRange);
@@ -169,14 +200,20 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const para = paragraphSegments[range.pIdx];
     if (!para) return;
 
-    const selectedWords: string[] = [];
+    const selectedTokens: string[] = [];
+    let insideSelection = false;
+
     para.segments.forEach(s => {
-      if (s.isWord && s.wIdx >= range.startWIdx && s.wIdx <= range.endWIdx) {
-        selectedWords.push(s.text);
+      if (s.isWord) {
+        if (s.wIdx === range.startWIdx) insideSelection = true;
+        if (insideSelection) selectedTokens.push(s.text);
+        if (s.wIdx === range.endWIdx) insideSelection = false;
+      } else if (insideSelection) {
+        selectedTokens.push(s.text);
       }
     });
 
-    const phrase = selectedWords.join(' ').replace(/\s+/g, ' ').trim();
+    const phrase = selectedTokens.join('').replace(/\s+/g, ' ').trim();
     if (phrase) {
       onWordOrPhraseTap(phrase, fullParaText);
     }
@@ -303,31 +340,41 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
           {/* Operation Hint */}
           <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば文全体もまとめて選択できます。余白を押すと解除されます。</span>
+            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば複数単語・文全体もまとめて選択できます。余白を押すと解除されます。</span>
           </div>
 
           {/* Story Body */}
           <div className="story-body select-none py-2 space-y-6">
             {paragraphSegments.map((para) => {
-              const targetSet = new Set((currentStory.targetVocabList || []).map(t => t.toLowerCase()));
-
               return (
                 <p key={para.pIdx} className="leading-relaxed text-slate-200 text-lg sm:text-xl">
                   {para.segments.map((seg, sIdx) => {
-                    if (!seg.isWord) {
-                      return <span key={sIdx}>{seg.text}</span>;
-                    }
-
-                    const clean = seg.cleanWord.toLowerCase();
-                    const isTarget = targetSet.has(clean);
-                    const isSaved = savedVocabSet.has(clean);
-
+                    // 1. ユーザーの選択中判定
                     const isSelected = 
                       selectionRange && 
                       selectionRange.pIdx === para.pIdx && 
-                      seg.wIdx >= selectionRange.startWIdx && 
-                      seg.wIdx <= selectionRange.endWIdx;
+                      ((seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx <= selectionRange.endWIdx) ||
+                       (!seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx < selectionRange.endWIdx));
 
+                    // 2. ターゲット語彙（復習語彙）マッチ判定
+                    const isTarget = para.targetMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
+
+                    // 3. 登録語彙（Vocab Bank）マッチ判定
+                    const isSaved = para.savedMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
+
+                    if (!seg.isWord) {
+                      // 非単語トークン（スペースや記号）
+                      if (isSelected) {
+                        return (
+                          <span key={sIdx} className="bg-blue-600 text-white font-bold inline">
+                            {seg.text}
+                          </span>
+                        );
+                      }
+                      return <span key={sIdx}>{seg.text}</span>;
+                    }
+
+                    // 単語トークン
                     let wordStyle = 'hover:bg-blue-500/20 hover:text-blue-300';
 
                     if (isSelected) {
