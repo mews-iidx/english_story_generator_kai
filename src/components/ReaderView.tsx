@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { CefrLevel } from '../types/settings';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw, X } from 'lucide-react';
+import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 
@@ -18,13 +18,11 @@ interface ReaderViewProps {
   onClearSelection: () => void;
 }
 
-interface WordToken {
-  id: string;
-  pIdx: number;
-  wIdx: number;
-  rawText: string;
-  cleanWord: string;
+interface Segment {
   isWord: boolean;
+  text: string;
+  wIdx: number; // 単語インデックス（記号・スペースの場合は -1）
+  cleanWord: string;
 }
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
@@ -68,72 +66,97 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return set;
   }, [vocabs]);
 
-  const paragraphTokens = useMemo(() => {
+  // 段落ごとのテキストを自然な英語タイポグラフィを保ったままセグメント分割
+  const paragraphSegments = useMemo(() => {
     if (!currentStory) return [];
 
     const paragraphs = currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
 
     return paragraphs.map((para, pIdx) => {
-      const parts = para.split(/(\s+|[.,!?;:"()]+)/);
+      // 単語（英数字およびアポストロフィ/ハイフン）とその間の区切り文字に正確にマッチ
+      const regex = /([a-zA-Z0-9'-]+)/g;
+      const segments: Segment[] = [];
+      let lastIndex = 0;
       let wordCounter = 0;
+      let match: RegExpExecArray | null;
 
-      const tokens: WordToken[] = parts.map((part) => {
-        const isWord = /^[a-zA-Z0-9'-]+$/.test(part);
-        const wIdx = isWord ? wordCounter++ : -1;
-        const cleanWord = isWord ? part.replace(/^[^\w]+|[^\w]+$/g, '') : '';
-        return {
-          id: `p${pIdx}_w${wIdx}`,
-          pIdx,
-          wIdx,
-          rawText: part,
+      while ((match = regex.exec(para)) !== null) {
+        // マッチ前の区切り文字（スペース、ピリオド、カンマ等）
+        if (match.index > lastIndex) {
+          segments.push({
+            isWord: false,
+            text: para.substring(lastIndex, match.index),
+            wIdx: -1,
+            cleanWord: '',
+          });
+        }
+
+        // 単語本体
+        const rawWord = match[0];
+        const cleanWord = rawWord.replace(/^[^\w]+|[^\w]+$/g, '');
+        segments.push({
+          isWord: true,
+          text: rawWord,
+          wIdx: wordCounter++,
           cleanWord,
-          isWord,
-        };
-      });
+        });
+
+        lastIndex = regex.lastIndex;
+      }
+
+      // 末尾の残りの文字
+      if (lastIndex < para.length) {
+        segments.push({
+          isWord: false,
+          text: para.substring(lastIndex),
+          wIdx: -1,
+          cleanWord: '',
+        });
+      }
 
       return {
         pIdx,
         fullParaText: para,
-        tokens,
+        segments,
       };
     });
   }, [currentStory]);
 
-  const handleTokenClick = (token: WordToken, fullParaText: string) => {
-    if (!token.isWord) return;
+  const handleWordClick = (pIdx: number, wIdx: number, fullParaText: string) => {
+    if (wIdx < 0) return;
 
-    if (selectionRange && selectionRange.pIdx === token.pIdx) {
-      if (token.wIdx >= selectionRange.startWIdx && token.wIdx <= selectionRange.endWIdx && selectionRange.startWIdx !== selectionRange.endWIdx) {
-        const newRange = { pIdx: token.pIdx, startWIdx: token.wIdx, endWIdx: token.wIdx };
+    if (selectionRange && selectionRange.pIdx === pIdx) {
+      if (wIdx >= selectionRange.startWIdx && wIdx <= selectionRange.endWIdx && selectionRange.startWIdx !== selectionRange.endWIdx) {
+        const newRange = { pIdx, startWIdx: wIdx, endWIdx: wIdx };
         setSelectionRange(newRange);
         emitSelectedPhrase(newRange, fullParaText);
         return;
       }
 
-      const newStart = Math.min(selectionRange.startWIdx, token.wIdx);
-      const newEnd = Math.max(selectionRange.endWIdx, token.wIdx);
+      const newStart = Math.min(selectionRange.startWIdx, wIdx);
+      const newEnd = Math.max(selectionRange.endWIdx, wIdx);
       
       if (newEnd - newStart < 9) {
-        const newRange = { pIdx: token.pIdx, startWIdx: newStart, endWIdx: newEnd };
+        const newRange = { pIdx, startWIdx: newStart, endWIdx: newEnd };
         setSelectionRange(newRange);
         emitSelectedPhrase(newRange, fullParaText);
         return;
       }
     }
 
-    const newRange = { pIdx: token.pIdx, startWIdx: token.wIdx, endWIdx: token.wIdx };
+    const newRange = { pIdx, startWIdx: wIdx, endWIdx: wIdx };
     setSelectionRange(newRange);
     emitSelectedPhrase(newRange, fullParaText);
   };
 
   const emitSelectedPhrase = (range: { pIdx: number; startWIdx: number; endWIdx: number }, fullParaText: string) => {
-    const para = paragraphTokens[range.pIdx];
+    const para = paragraphSegments[range.pIdx];
     if (!para) return;
 
     const selectedWords: string[] = [];
-    para.tokens.forEach(t => {
-      if (t.isWord && t.wIdx >= range.startWIdx && t.wIdx <= range.endWIdx) {
-        selectedWords.push(t.rawText);
+    para.segments.forEach(s => {
+      if (s.isWord && s.wIdx >= range.startWIdx && s.wIdx <= range.endWIdx) {
+        selectedWords.push(s.text);
       }
     });
 
@@ -264,44 +287,35 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
           {/* Operation Hint */}
           <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。続けて前後の単語を押すと熟語として連結選択できます。</span>
-            {selectionRange && (
-              <button
-                onClick={onClearSelection}
-                className="ml-2 px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] flex items-center gap-1 transition-colors flex-shrink-0"
-              >
-                <X className="w-3 h-3" />
-                <span>選択解除</span>
-              </button>
-            )}
+            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。続けて前後の単語を押すと熟語として連結選択できます。画面の何もない場所を押すと解除されます。</span>
           </div>
 
-          {/* Story Body (select-none to avoid mobile OS popups) */}
-          <div className="story-body select-none py-2 space-y-6">
-            {paragraphTokens.map((para) => {
+          {/* Story Body (natural typography, select-none to avoid mobile OS popups) */}
+          <div className="story-body select-none py-2 space-y-6" onClick={onClearSelection}>
+            {paragraphSegments.map((para) => {
               const targetSet = new Set((currentStory.targetVocabList || []).map(t => t.toLowerCase()));
 
               return (
                 <p key={para.pIdx} className="leading-relaxed text-slate-200 text-lg sm:text-xl">
-                  {para.tokens.map((token, tIdx) => {
-                    if (!token.isWord) {
-                      return <span key={tIdx} className="text-slate-400">{token.rawText}</span>;
+                  {para.segments.map((seg, sIdx) => {
+                    if (!seg.isWord) {
+                      return <span key={sIdx}>{seg.text}</span>;
                     }
 
-                    const clean = token.cleanWord.toLowerCase();
+                    const clean = seg.cleanWord.toLowerCase();
                     const isTarget = targetSet.has(clean);
                     const isSaved = savedVocabSet.has(clean);
 
                     const isSelected = 
                       selectionRange && 
-                      selectionRange.pIdx === token.pIdx && 
-                      token.wIdx >= selectionRange.startWIdx && 
-                      token.wIdx <= selectionRange.endWIdx;
+                      selectionRange.pIdx === para.pIdx && 
+                      seg.wIdx >= selectionRange.startWIdx && 
+                      seg.wIdx <= selectionRange.endWIdx;
 
-                    let wordStyle = 'hover:bg-emerald-500/20 hover:text-emerald-300 text-slate-200';
+                    let wordStyle = 'hover:bg-emerald-500/20 hover:text-emerald-300';
 
                     if (isSelected) {
-                      wordStyle = 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/30 scale-105';
+                      wordStyle = 'bg-emerald-500 text-slate-950 font-bold shadow-sm shadow-emerald-500/30';
                     } else if (isTarget) {
                       wordStyle = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
                     } else if (isSaved) {
@@ -310,14 +324,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
                     return (
                       <span
-                        key={tIdx}
+                        key={sIdx}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleTokenClick(token, para.fullParaText);
+                          handleWordClick(para.pIdx, seg.wIdx, para.fullParaText);
                         }}
-                        className={`inline-block cursor-pointer rounded px-1 py-0.5 mx-0.5 transition-all active:scale-95 ${wordStyle}`}
+                        className={`inline cursor-pointer rounded px-0.5 transition-all ${wordStyle}`}
                       >
-                        {token.rawText}
+                        {seg.text}
                       </span>
                     );
                   })}
