@@ -1,4 +1,5 @@
 import { VocabItem, VocabLookupResult } from '../types/vocab';
+import { DifficultSentenceItem } from '../types/sentence';
 import { Story } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { calculateLapseSRS, calculateSuccessSRS } from '../utils/srs';
@@ -7,6 +8,7 @@ const STORAGE_KEYS = {
   SETTINGS: 'storykai_settings_v1',
   STORIES: 'storykai_stories_v1',
   VOCABS: 'storykai_vocabs_v1',
+  DIFFICULT_SENTENCES: 'storykai_difficult_sentences_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -175,11 +177,58 @@ export function deleteVocab(vocabId: string): void {
   saveVocabsBatch(updated);
 }
 
+// ===================== DIFFICULT SENTENCES (訳せなかった文章リスト) =====================
+export function loadDifficultSentences(): DifficultSentenceItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DIFFICULT_SENTENCES);
+    if (!raw) return [];
+    const sentences: DifficultSentenceItem[] = JSON.parse(raw);
+    return sentences.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  } catch (e) {
+    console.error('Failed to load difficult sentences', e);
+    return [];
+  }
+}
+
+export function saveDifficultSentence(
+  item: Omit<DifficultSentenceItem, 'id' | 'createdAt'>
+): DifficultSentenceItem {
+  const list = loadDifficultSentences();
+  const newItem: DifficultSentenceItem = {
+    ...item,
+    id: 'sen_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    createdAt: new Date().toISOString(),
+  };
+
+  // 重複登録の防止（全く同じ文がすでにある場合は先頭に移動＆更新）
+  const filtered = list.filter(s => s.sentence.trim() !== item.sentence.trim());
+  const updated = [newItem, ...filtered];
+
+  try {
+    localStorage.setItem(STORAGE_KEYS.DIFFICULT_SENTENCES, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to save difficult sentence', e);
+  }
+
+  return newItem;
+}
+
+export function deleteDifficultSentence(id: string): void {
+  const list = loadDifficultSentences();
+  const updated = list.filter(s => s.id !== id);
+  try {
+    localStorage.setItem(STORAGE_KEYS.DIFFICULT_SENTENCES, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to delete difficult sentence', e);
+  }
+}
+
 // ===================== RESET ALL DATA =====================
 export function resetAllData(): void {
   try {
     localStorage.removeItem(STORAGE_KEYS.STORIES);
     localStorage.removeItem(STORAGE_KEYS.VOCABS);
+    localStorage.removeItem(STORAGE_KEYS.DIFFICULT_SENTENCES);
     const s = loadSettings();
     saveSettings({
       ...s,
@@ -201,15 +250,17 @@ export interface ExportData {
   exportedAt: string;
   stories: Story[];
   vocabs: VocabItem[];
+  difficultSentences?: DifficultSentenceItem[];
   settings: Partial<AppSettings>;
 }
 
 export function exportAllData(): string {
   const data: ExportData = {
-    version: '1.0.0',
+    version: '1.1.0',
     exportedAt: new Date().toISOString(),
     stories: loadStories(),
     vocabs: loadVocabs(),
+    difficultSentences: loadDifficultSentences(),
     settings: {
       cefrLevel: loadSettings().cefrLevel,
       geminiModel: loadSettings().geminiModel,
@@ -218,7 +269,7 @@ export function exportAllData(): string {
   return JSON.stringify(data, null, 2);
 }
 
-export function importAllData(jsonStr: string): { success: boolean; storyCount: number; vocabCount: number } {
+export function importAllData(jsonStr: string): { success: boolean; storyCount: number; vocabCount: number; sentenceCount: number } {
   try {
     const data: ExportData = JSON.parse(jsonStr);
     if (data.stories && Array.isArray(data.stories)) {
@@ -227,10 +278,14 @@ export function importAllData(jsonStr: string): { success: boolean; storyCount: 
     if (data.vocabs && Array.isArray(data.vocabs)) {
       localStorage.setItem(STORAGE_KEYS.VOCABS, JSON.stringify(data.vocabs));
     }
+    if (data.difficultSentences && Array.isArray(data.difficultSentences)) {
+      localStorage.setItem(STORAGE_KEYS.DIFFICULT_SENTENCES, JSON.stringify(data.difficultSentences));
+    }
     return {
       success: true,
       storyCount: data.stories?.length || 0,
       vocabCount: data.vocabs?.length || 0,
+      sentenceCount: data.difficultSentences?.length || 0,
     };
   } catch (e) {
     console.error('Import failed', e);

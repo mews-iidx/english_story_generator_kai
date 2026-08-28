@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Volume2, Sparkles, Plus, Check } from 'lucide-react';
+import { Volume2, Sparkles, Plus, Check, BookmarkPlus, BookmarkCheck } from 'lucide-react';
 import { speakText } from '../utils/speech';
 
 interface TranslationBottomSheetProps {
@@ -10,7 +10,9 @@ interface TranslationBottomSheetProps {
   contextSentence?: string;
   isLoading?: boolean;
   isSavedAsVocab?: boolean;
+  isSavedAsSentence?: boolean;
   onAddToVocab: (phrase: string, meaning: string, contextSentence?: string, note?: string) => void;
+  onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onFetchDetailedNuance?: () => Promise<string>;
 }
 
@@ -21,7 +23,9 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   contextSentence,
   isLoading,
   isSavedAsVocab,
+  isSavedAsSentence,
   onAddToVocab,
+  onSaveDifficultSentence,
   onFetchDetailedNuance,
 }) => {
   const [nuanceNote, setNuanceNote] = useState<string | null>(null);
@@ -43,19 +47,26 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
     }
   };
 
+  const handleSaveSentence = () => {
+    if (!onSaveDifficultSentence) return;
+    // 選択されたテキストが文そのものか、コンテキスト文を保存
+    const sentenceToSave = (originalText.split(' ').length > 4 || !contextSentence) ? originalText : contextSentence;
+    onSaveDifficultSentence(sentenceToSave, translatedText, originalText);
+  };
+
   return (
     <div 
       className="fixed inset-x-0 bottom-0 z-50 p-3 sm:p-4 animate-slideUp pointer-events-none"
     >
       <div 
-        className="max-w-2xl mx-auto bg-slate-900/95 border border-slate-700/80 rounded-2xl shadow-2xl backdrop-blur-xl p-4 sm:p-5 text-slate-100 pointer-events-auto transition-all"
+        className="max-w-2xl mx-auto bg-slate-900/95 border border-slate-700/80 rounded-2xl shadow-2xl backdrop-blur-xl p-4 sm:p-5 text-slate-100 pointer-events-auto transition-all space-y-3"
         onClick={(e) => e.stopPropagation()}
         onTouchEnd={(e) => e.stopPropagation()}
       >
         {/* Header: English Text & Speech */}
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2.5">
           <div className="flex items-center space-x-2.5 flex-wrap">
-            <h3 className="text-xl sm:text-2xl font-bold text-sky-400 tracking-tight">
+            <h3 className="text-lg sm:text-xl font-bold text-sky-400 tracking-tight">
               {originalText}
             </h3>
             <button
@@ -67,19 +78,19 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
             </button>
           </div>
           <span className="text-[11px] text-slate-500">
-            外側をタップして閉じる
+            外側をタップで閉じる
           </span>
         </div>
 
         {/* Translation Body */}
-        <div className="py-3 space-y-2.5">
+        <div className="space-y-2">
           {isLoading ? (
             <div className="flex items-center space-x-2 text-slate-400 text-sm py-1">
               <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
               <span>翻訳中...</span>
             </div>
           ) : (
-            <p className="text-lg font-semibold text-white">
+            <p className="text-base sm:text-lg font-semibold text-white">
               {translatedText || '（翻訳なし）'}
             </p>
           )}
@@ -97,35 +108,64 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
 
         {/* Action Buttons */}
         <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-          <button
-            onClick={() => onAddToVocab(originalText, translatedText, contextSentence, nuanceNote || undefined)}
-            className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
-              isSavedAsVocab
-                ? 'bg-blue-950/70 text-blue-300 border border-blue-500/40'
-                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/25'
-            }`}
-          >
-            {isSavedAsVocab ? (
-              <>
-                <Check className="w-4 h-4 text-sky-400" />
-                <span>弱点に追加済み（明日再出題）</span>
-              </>
-            ) : (
-              <>
-                <Plus className="w-4 h-4" />
-                <span>弱点単語帳に追加</span>
-              </>
-            )}
-          </button>
+          <div className="flex items-center space-x-2 flex-wrap gap-y-1.5">
+            {/* 1. 弱点単語帳に追加 */}
+            <button
+              onClick={() => onAddToVocab(originalText, translatedText, contextSentence, nuanceNote || undefined)}
+              className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                isSavedAsVocab
+                  ? 'bg-blue-950/70 text-blue-300 border border-blue-500/40'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/25'
+              }`}
+            >
+              {isSavedAsVocab ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-sky-400" />
+                  <span>単語帳に追加済み</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>単語帳に追加</span>
+                </>
+              )}
+            </button>
 
+            {/* 2. 訳せなかった文を保存（自己分析用） */}
+            {onSaveDifficultSentence && (
+              <button
+                onClick={handleSaveSentence}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                  isSavedAsSentence
+                    ? 'bg-indigo-950/80 text-indigo-300 border border-indigo-500/40'
+                    : 'bg-slate-800 hover:bg-slate-750 text-indigo-300 border border-indigo-500/30'
+                }`}
+                title="単語は分かるが文構造・訳脈が難しかった文を記録"
+              >
+                {isSavedAsSentence ? (
+                  <>
+                    <BookmarkCheck className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>訳せなかった文に保存済み</span>
+                  </>
+                ) : (
+                  <>
+                    <BookmarkPlus className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>訳せなかった文として保存</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {/* AIニュアンスボタン */}
           {onFetchDetailedNuance && !nuanceNote && (
             <button
               onClick={handleFetchNuance}
               disabled={isFetchingNuance}
-              className="flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors border border-slate-700/60"
+              className="flex items-center space-x-1 px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors border border-slate-700/60"
             >
               <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${isFetchingNuance ? 'animate-spin' : ''}`} />
-              <span>{isFetchingNuance ? '解説取得中...' : 'AIで詳しいニュアンスを聞く'}</span>
+              <span>{isFetchingNuance ? '取得中...' : 'AI解説'}</span>
             </button>
           )}
         </div>

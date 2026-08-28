@@ -10,6 +10,7 @@ import { ImportStoryModal } from './components/ImportStoryModal';
 
 import { Story } from './types/story';
 import { VocabItem } from './types/vocab';
+import { DifficultSentenceItem } from './types/sentence';
 import { AppSettings, DEFAULT_SETTINGS, CefrLevel } from './types/settings';
 
 import {
@@ -22,6 +23,9 @@ import {
   recordVocabLapse,
   recordVocabMastered,
   deleteVocab as removeVocabFromStorage,
+  loadDifficultSentences,
+  saveDifficultSentence,
+  deleteDifficultSentence as removeSentenceFromStorage,
   addTokenUsage,
   resetAllData,
 } from './services/storage';
@@ -36,6 +40,7 @@ export const App: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [stories, setStories] = useState<Story[]>([]);
   const [vocabs, setVocabs] = useState<VocabItem[]>([]);
+  const [difficultSentences, setDifficultSentences] = useState<DifficultSentenceItem[]>([]);
   const [currentStory, setCurrentStory] = useState<Story | null>(null);
 
   // ローディング状態
@@ -55,10 +60,12 @@ export const App: React.FC = () => {
     const s = loadSettings();
     const st = loadStories();
     const v = loadVocabs();
+    const ds = loadDifficultSentences();
 
     setSettings(s);
     setStories(st);
     setVocabs(v);
+    setDifficultSentences(ds);
 
     if (st.length > 0) {
       setCurrentStory(st[0]);
@@ -80,6 +87,12 @@ export const App: React.FC = () => {
     const norm = selectedText.trim().toLowerCase();
     return vocabs.some(v => v.phrase.toLowerCase() === norm);
   }, [selectedText, vocabs]);
+
+  const isSavedAsSentence = useMemo(() => {
+    if (!selectedText) return false;
+    const norm = selectedText.trim().toLowerCase();
+    return difficultSentences.some(s => s.sentence.toLowerCase().includes(norm) || norm.includes(s.sentence.toLowerCase()));
+  }, [selectedText, difficultSentences]);
 
   // Google Sheets 自動同期
   const triggerAutoSync = useCallback(async (currentVocabs: VocabItem[], currentStories: Story[]) => {
@@ -209,6 +222,23 @@ export const App: React.FC = () => {
     handleAddToVocab(phrase, meaning, currentStory?.storyContent);
   };
 
+  // 訳せなかった文を独立して保存（自己分析用）
+  const handleSaveDifficultSentence = (sentence: string, translation: string, phrase: string) => {
+    saveDifficultSentence({
+      sentence: sentence.trim(),
+      translation: translation.trim(),
+      highlightedPhrase: phrase.trim(),
+      sourceStoryId: currentStory?.id,
+      sourceStoryTitle: currentStory?.title,
+    });
+    setDifficultSentences(loadDifficultSentences());
+  };
+
+  const handleDeleteDifficultSentence = (id: string) => {
+    removeSentenceFromStorage(id);
+    setDifficultSentences(loadDifficultSentences());
+  };
+
   // AIによる詳細ニュアンス取得
   const handleFetchDetailedNuance = async (): Promise<string> => {
     if (!settings.geminiApiKey) {
@@ -330,6 +360,7 @@ export const App: React.FC = () => {
   const handleDataImported = () => {
     setStories(loadStories());
     setVocabs(loadVocabs());
+    setDifficultSentences(loadDifficultSentences());
     setSettings(loadSettings());
     const latestStories = loadStories();
     if (latestStories.length > 0) {
@@ -341,6 +372,7 @@ export const App: React.FC = () => {
     resetAllData();
     setStories([]);
     setVocabs([]);
+    setDifficultSentences([]);
     setCurrentStory(null);
     setSelectedText('');
     setIsSheetOpen(false);
@@ -395,8 +427,10 @@ export const App: React.FC = () => {
         {activeTab === 'vocab' && (
           <VocabBankView
             vocabs={vocabs}
+            difficultSentences={difficultSentences}
             onMasterVocab={handleMasterVocab}
             onDeleteVocab={handleDeleteVocab}
+            onDeleteSentence={handleDeleteDifficultSentence}
           />
         )}
 
@@ -444,7 +478,9 @@ export const App: React.FC = () => {
         contextSentence={contextSentence}
         isLoading={isTranslating}
         isSavedAsVocab={isSavedAsVocab}
+        isSavedAsSentence={isSavedAsSentence}
         onAddToVocab={handleAddToVocab}
+        onSaveDifficultSentence={handleSaveDifficultSentence}
         onFetchDetailedNuance={handleFetchDetailedNuance}
       />
     </div>
