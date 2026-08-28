@@ -21,7 +21,7 @@ interface ReaderViewProps {
 interface Segment {
   isWord: boolean;
   text: string;
-  wIdx: number; // 単語インデックス（記号・スペースの場合は -1）
+  wIdx: number;
   cleanWord: string;
 }
 
@@ -58,6 +58,27 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
   }, [selectedPhrase]);
 
+  // 単語以外の「関係ない場所（背景・余白）」をタップした時だけ閉じるグローバルリスナー
+  useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as HTMLElement;
+      // 単語要素 (data-word="true") やボタン・入力欄をクリックした場合は閉じない
+      if (target && (target.closest('[data-word="true"]') || target.closest('button') || target.closest('input') || target.closest('select') || target.closest('.pointer-events-auto'))) {
+        return;
+      }
+      if (selectedPhrase) {
+        onClearSelection();
+      }
+    };
+
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('touchend', handleGlobalClick);
+    return () => {
+      window.removeEventListener('click', handleGlobalClick);
+      window.removeEventListener('touchend', handleGlobalClick);
+    };
+  }, [selectedPhrase, onClearSelection]);
+
   const savedVocabSet = useMemo(() => {
     const set = new Set<string>();
     vocabs.forEach(v => {
@@ -73,7 +94,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const paragraphs = currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
 
     return paragraphs.map((para, pIdx) => {
-      // 単語（英数字およびアポストロフィ/ハイフン）とその間の区切り文字に正確にマッチ
       const regex = /([a-zA-Z0-9'-]+)/g;
       const segments: Segment[] = [];
       let lastIndex = 0;
@@ -81,7 +101,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       let match: RegExpExecArray | null;
 
       while ((match = regex.exec(para)) !== null) {
-        // マッチ前の区切り文字（スペース、ピリオド、カンマ等）
         if (match.index > lastIndex) {
           segments.push({
             isWord: false,
@@ -91,7 +110,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           });
         }
 
-        // 単語本体
         const rawWord = match[0];
         const cleanWord = rawWord.replace(/^[^\w]+|[^\w]+$/g, '');
         segments.push({
@@ -104,7 +122,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         lastIndex = regex.lastIndex;
       }
 
-      // 末尾の残りの文字
       if (lastIndex < para.length) {
         segments.push({
           isWord: false,
@@ -122,10 +139,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     });
   }, [currentStory]);
 
-  const handleWordClick = (pIdx: number, wIdx: number, fullParaText: string) => {
+  const handleWordClick = (pIdx: number, wIdx: number, fullParaText: string, e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
     if (wIdx < 0) return;
 
+    // 同じ段落で、隣または複数単語を連続選択する場合
     if (selectionRange && selectionRange.pIdx === pIdx) {
+      // 既に選択範囲内の単語を再度タップした場合は、その1語のみを選択
       if (wIdx >= selectionRange.startWIdx && wIdx <= selectionRange.endWIdx && selectionRange.startWIdx !== selectionRange.endWIdx) {
         const newRange = { pIdx, startWIdx: wIdx, endWIdx: wIdx };
         setSelectionRange(newRange);
@@ -133,9 +153,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         return;
       }
 
+      // 範囲を拡張（単語を複数連結選択）
       const newStart = Math.min(selectionRange.startWIdx, wIdx);
       const newEnd = Math.max(selectionRange.endWIdx, wIdx);
       
+      // 最大8単語まで連結可能
       if (newEnd - newStart < 9) {
         const newRange = { pIdx, startWIdx: newStart, endWIdx: newEnd };
         setSelectionRange(newRange);
@@ -144,6 +166,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       }
     }
 
+    // 新規選択（1単語からスタート）
     const newRange = { pIdx, startWIdx: wIdx, endWIdx: wIdx };
     setSelectionRange(newRange);
     emitSelectedPhrase(newRange, fullParaText);
@@ -287,11 +310,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
           {/* Operation Hint */}
           <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。続けて前後の単語を押すと熟語として連結選択できます。画面の何もない場所を押すと解除されます。</span>
+            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。続けて前後の単語を押すと熟語として連結選択できます。余白を押すと解除されます。</span>
           </div>
 
-          {/* Story Body (natural typography, select-none to avoid mobile OS popups) */}
-          <div className="story-body select-none py-2 space-y-6" onClick={onClearSelection}>
+          {/* Story Body */}
+          <div className="story-body select-none py-2 space-y-6">
             {paragraphSegments.map((para) => {
               const targetSet = new Set((currentStory.targetVocabList || []).map(t => t.toLowerCase()));
 
@@ -325,10 +348,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     return (
                       <span
                         key={sIdx}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleWordClick(para.pIdx, seg.wIdx, para.fullParaText);
-                        }}
+                        data-word="true"
+                        onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
                         className={`inline cursor-pointer rounded px-0.5 transition-all ${wordStyle}`}
                       >
                         {seg.text}
