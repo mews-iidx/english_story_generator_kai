@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    container_name: english_story_kai
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - WATCHPACK_POLLING=true

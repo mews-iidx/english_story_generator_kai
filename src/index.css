@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased overflow-x-hidden;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Story reading text styles */
+.story-body {
+  font-family: 'Lora', 'Georgia', serif;
+  line-height: 1.95;
+  letter-spacing: 0.01em;
+}
+
+.vocab-highlight {
+  position: relative;
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 211, 153, 0.45);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.vocab-highlight:hover {
+  background-color: rgba(16, 185, 129, 0.15);
+  text-decoration-color: rgba(52, 211, 153, 0.9);
+}
+
+.vocab-highlight-target {
+  text-decoration-color: rgba(251, 146, 60, 0.6);
+  text-decoration-thickness: 2.5px;
+}
+
+.vocab-highlight-target:hover {
+  background-color: rgba(249, 115, 22, 0.15);
+  text-decoration-color: rgba(251, 146, 60, 1);
+}
