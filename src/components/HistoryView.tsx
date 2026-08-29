@@ -1,17 +1,23 @@
 import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
-import { BookOpen, Calendar, Trash2, Search, Tag, Sparkles, Filter } from 'lucide-react';
+import { BookOpen, Calendar, Trash2, Search, Tag, Sparkles, Filter, RefreshCw, PlusCircle } from 'lucide-react';
 
 interface HistoryViewProps {
   stories: Story[];
   onSelectStory: (story: Story) => void;
   onDeleteStory: (storyId: string) => void;
+  onNavigateToCreate?: () => void;
+  isGenerating?: boolean;
+  generatingTheme?: string;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
   stories,
   onSelectStory,
   onDeleteStory,
+  onNavigateToCreate,
+  isGenerating,
+  generatingTheme,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [levelFilter, setLevelFilter] = useState<string>('all');
@@ -73,26 +79,38 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* 1. Header & Search Shelf Controls */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
+      {/* 1. Header & Bookshelf Shelf Controls */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-              <BookOpen className="w-5 h-5 text-blue-400" />
+            <div className="w-11 h-11 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+              <BookOpen className="w-6 h-6 text-blue-400" />
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                マイスクール本棚（読解履歴）📚
+                マイスクール本棚 📚
               </h2>
               <p className="text-xs sm:text-sm text-slate-400">
-                あなたが読んだ物語のコレクションです。いつでも再読して復習できます。
+                本を選んでタップすると読書が始まります。読了時は忘却曲線で復習判定されます。
               </p>
             </div>
           </div>
 
-          <div className="bg-slate-950 px-4 py-2 rounded-xl border border-slate-800 text-center">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">所蔵冊数</span>
-            <span className="text-xl font-bold text-blue-400">{stories.length} <span className="text-xs font-normal text-slate-400">冊</span></span>
+          <div className="flex items-center space-x-3">
+            {onNavigateToCreate && (
+              <button
+                onClick={onNavigateToCreate}
+                className="flex items-center space-x-1.5 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/25 transition-all"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>新しい本を作成</span>
+              </button>
+            )}
+
+            <div className="bg-slate-950 px-3.5 py-1.5 rounded-xl border border-slate-800 text-center hidden sm:block">
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">所蔵</span>
+              <span className="text-base font-bold text-blue-400">{stories.length} <span className="text-xs font-normal text-slate-400">冊</span></span>
+            </div>
           </div>
         </div>
 
@@ -177,6 +195,26 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         </div>
       </div>
 
+      {/* Background Generating Notification Card */}
+      {isGenerating && (
+        <div className="bg-gradient-to-r from-blue-950/70 via-slate-900 to-indigo-950/70 border border-blue-500/40 rounded-2xl p-4 shadow-lg flex items-center justify-between gap-3 animate-fadeIn">
+          <div className="flex items-center space-x-3">
+            <RefreshCw className="w-5 h-5 text-sky-400 animate-spin flex-shrink-0" />
+            <div>
+              <span className="text-xs sm:text-sm font-bold text-white block">
+                AIが新しい物語を裏で執筆中...
+              </span>
+              <span className="text-[11px] text-slate-300">
+                {generatingTheme ? `テーマ: 「${generatingTheme}」` : '完成すると自動で本棚の先頭に追加されます'}
+              </span>
+            </div>
+          </div>
+          <span className="text-[11px] px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
+            執筆中
+          </span>
+        </div>
+      )}
+
       {/* 2. Bookshelf Grid */}
       {filteredStories.length > 0 ? (
         <div className="space-y-8">
@@ -197,6 +235,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-black/40 text-white font-bold backdrop-blur-md border border-white/20">
                         {story.cefrLevel || 'A2'}
                       </span>
+                      {story.targetWordCount && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/20 text-slate-200 backdrop-blur-md">
+                          約{story.targetWordCount}語
+                        </span>
+                      )}
                       {story.genres && story.genres.length > 0 && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-slate-200 font-medium backdrop-blur-md">
                           {story.genres[0]}
@@ -237,12 +280,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       {new Date(story.createdAt).toLocaleDateString('ja-JP')}
                     </span>
 
-                    {story.targetVocabList && story.targetVocabList.length > 0 && (
-                      <span className="flex items-center gap-1 text-amber-300 font-semibold">
-                        <Sparkles className="w-3 h-3" />
-                        復習語彙: {story.targetVocabList.length}
-                      </span>
-                    )}
+                    <span className="flex items-center gap-1 text-sky-300 font-semibold group-hover:underline">
+                      <BookOpen className="w-3.5 h-3.5" />
+                      開いて読む ➔
+                    </span>
                   </div>
                 </div>
               );
@@ -252,9 +293,23 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           <div className="h-3 bg-gradient-to-r from-slate-950 via-slate-800 to-slate-950 rounded-full shadow-inner border-t border-slate-700/60" />
         </div>
       ) : (
-        <div className="py-20 text-center space-y-3 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
+        <div className="py-20 text-center space-y-4 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
           <BookOpen className="w-12 h-12 text-slate-600 mx-auto" />
-          <p className="text-sm text-slate-400">条件に一致するストーリーは見つかりませんでした。</p>
+          <div className="space-y-1">
+            <h3 className="text-lg font-bold text-white">本棚に物語がまだありません</h3>
+            <p className="text-xs sm:text-sm text-slate-400">
+              「新しい本を作成」ボタンから、AIに物語を生成してもらいましょう！
+            </p>
+          </div>
+          {onNavigateToCreate && (
+            <button
+              onClick={onNavigateToCreate}
+              className="inline-flex items-center space-x-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/30 transition-all"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>物語を作成する</span>
+            </button>
+          )}
         </div>
       )}
     </div>

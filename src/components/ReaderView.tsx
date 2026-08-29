@@ -1,24 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
-import { CefrLevel } from '../types/settings';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, RefreshCw, FileJson, Tag, Minus, Plus } from 'lucide-react';
+import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, Volume2, ArrowLeft, Tag } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 
 interface ReaderViewProps {
-  currentStory: Story | null;
+  currentStory: Story;
   vocabs: VocabItem[];
-  currentLevel: CefrLevel;
-  onLevelChange: (level: CefrLevel) => void;
-  isGenerating: boolean;
-  onGenerate: (userPrompt?: string, wordCount?: number) => Promise<void>;
   onWordOrPhraseTap: (text: string, contextSentence: string) => void;
   selectedPhrase: string;
   onClearSelection: () => void;
-  onOpenImportModal: () => void;
   onMasterVocab: (vocabId: string) => void;
   onLapseVocab: (phrase: string, meaning: string) => void;
+  onBackToBookshelf: () => void;
 }
 
 interface Segment {
@@ -33,19 +28,13 @@ interface Segment {
 export const ReaderView: React.FC<ReaderViewProps> = ({
   currentStory,
   vocabs,
-  currentLevel,
-  onLevelChange,
-  isGenerating,
-  onGenerate,
   onWordOrPhraseTap,
   selectedPhrase,
   onClearSelection,
-  onOpenImportModal,
   onMasterVocab,
   onLapseVocab,
+  onBackToBookshelf,
 }) => {
-  const [promptInput, setPromptInput] = useState('');
-  const [wordCount, setWordCount] = useState<number>(700);
   const [showTranslation, setShowTranslation] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [tappedWordsDuringStory, setTappedWordsDuringStory] = useState<Set<string>>(new Set());
@@ -280,323 +269,218 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     onLapseVocab(cleanPhrase, '要復習');
   };
 
-  const changeWordCount = (delta: number) => {
-    setWordCount(prev => Math.max(100, Math.min(2500, (prev || 700) + delta)));
-  };
-
   return (
-    <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-5">
-      {/* 1. Generator & Word Count Control Bar */}
-      <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-3.5 sm:p-5 shadow-xl shadow-black/20 space-y-3.5">
-        <div className="flex items-center justify-between flex-wrap gap-2.5">
-          {/* Level Pills */}
-          <div className="flex items-center space-x-1">
-            {(['A1', 'A2', 'B1', 'B2', 'C1'] as const).map((lvl) => (
-              <button
-                key={lvl}
-                onClick={() => onLevelChange(lvl)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                  currentLevel === lvl
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                {lvl}
-              </button>
-            ))}
-          </div>
+    <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4">
+      {/* 1. Top Navigation Bar (Back to Bookshelf) */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBackToBookshelf}
+          className="flex items-center space-x-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-xl text-xs sm:text-sm font-semibold transition-all group"
+        >
+          <ArrowLeft className="w-4 h-4 text-blue-400 group-hover:-translate-x-0.5 transition-transform" />
+          <span>本棚に戻る</span>
+        </button>
 
-          {/* Word Count Spinner & Import */}
-          <div className="flex items-center space-x-2">
-            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5">
-              <span className="text-[11px] text-slate-400 font-medium px-2 hidden sm:inline">語数:</span>
-              <button
-                type="button"
-                onClick={() => changeWordCount(-100)}
-                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-                title="100語減らす"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-              <input
-                type="number"
-                step="100"
-                min="100"
-                max="2500"
-                value={wordCount}
-                onChange={(e) => setWordCount(Number(e.target.value) || 700)}
-                className="w-14 bg-transparent text-center text-xs font-bold text-blue-400 outline-none"
-              />
-              <span className="text-[10px] text-slate-500 pr-1">語</span>
-              <button
-                type="button"
-                onClick={() => changeWordCount(100)}
-                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-                title="100語増やす"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <button
-              onClick={onOpenImportModal}
-              className="flex items-center space-x-1 px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-semibold transition-colors"
-              title="外部GeminiやChatGPTで生成したJSONをインポート"
-            >
-              <FileJson className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">JSONインポート</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Prompt Input & Generate Button */}
-        <div className="flex flex-col sm:flex-row gap-2.5">
-          <div className="relative flex-1">
-            <input
-              type="text"
-              value={promptInput}
-              onChange={(e) => setPromptInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !isGenerating) {
-                  onGenerate(promptInput, wordCount);
-                }
-              }}
-              placeholder="テーマ・ジャンル（例: 冒険, SF, カフェでの再会, 未指定でおまかせ）"
-              className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
-            />
-          </div>
-          <button
-            onClick={() => onGenerate(promptInput, wordCount)}
-            disabled={isGenerating}
-            className="flex items-center justify-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-blue-600/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
-          >
-            {isGenerating ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>生成中...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4" />
-                <span>{currentStory ? '次の物語を生成' : '物語を生成する'}</span>
-              </>
-            )}
-          </button>
+        <div className="flex items-center space-x-2 text-xs">
+          <span className="px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">
+            {currentStory.cefrLevel || 'A2'}
+          </span>
+          {currentStory.targetWordCount && (
+            <span className="px-2 py-1 rounded-lg bg-slate-900 text-slate-400 font-medium border border-slate-800">
+              約{currentStory.targetWordCount}語
+            </span>
+          )}
         </div>
       </div>
 
       {/* 2. Story Content Area */}
-      {currentStory ? (
-        <article className="bg-slate-900/60 border border-slate-800/80 rounded-3xl p-5 sm:p-9 shadow-2xl backdrop-blur-sm space-y-6">
-          <div className="border-b border-slate-800/80 pb-5 space-y-2.5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 flex-wrap">
-                  <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">
-                    {currentStory.title}
-                  </h1>
-                  <span className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">
-                    {currentStory.cefrLevel || 'A2'}
-                  </span>
-                  {currentStory.targetWordCount && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 font-medium">
-                      約{currentStory.targetWordCount}語
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm sm:text-base text-blue-400/90 font-medium">
-                  {currentStory.titleJa}
-                </p>
-              </div>
-
-              <button
-                onClick={() => speakText(currentStory.storyContent)}
-                className="p-2 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-colors flex-shrink-0"
-                title="全文を音声再生"
-              >
-                <Volume2 className="w-5 h-5" />
-              </button>
+      <article className="bg-slate-900/60 border border-slate-800/80 rounded-3xl p-5 sm:p-9 shadow-2xl backdrop-blur-sm space-y-6">
+        <div className="border-b border-slate-800/80 pb-5 space-y-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1">
+              <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">
+                {currentStory.title}
+              </h1>
+              <p className="text-sm sm:text-base text-blue-400/90 font-medium">
+                {currentStory.titleJa}
+              </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              {currentStory.genres && currentStory.genres.length > 0 && currentStory.genres.map((g, idx) => (
-                <span key={idx} className="inline-flex items-center gap-1 text-[11px] font-semibold bg-indigo-950/60 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-full">
-                  <Tag className="w-3 h-3 text-indigo-400" />
-                  {g}
-                </span>
-              ))}
-
-              {currentStory.summary && (
-                <span className="inline-block text-xs bg-slate-800/90 text-slate-300 px-3 py-1 rounded-lg border border-slate-700/60 leading-relaxed">
-                  💡 <strong>導入</strong>: {currentStory.summary}
-                </span>
-              )}
-            </div>
+            <button
+              onClick={() => speakText(currentStory.storyContent)}
+              className="p-2.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-2xl transition-colors border border-slate-800 flex-shrink-0"
+              title="全文を音声再生"
+            >
+              <Volume2 className="w-5 h-5" />
+            </button>
           </div>
 
-          <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-            <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば文全体もまとめて選択できます。余白を押すと解除されます。</span>
-          </div>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {currentStory.genres && currentStory.genres.length > 0 && currentStory.genres.map((g, idx) => (
+              <span key={idx} className="inline-flex items-center gap-1 text-[11px] font-semibold bg-indigo-950/60 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-full">
+                <Tag className="w-3 h-3 text-indigo-400" />
+                {g}
+              </span>
+            ))}
 
-          <div className="story-body select-none py-2 space-y-6">
-            {paragraphSegments.map((para) => {
-              return (
-                <p key={para.pIdx} className="leading-relaxed text-slate-200 text-lg sm:text-xl">
-                  {para.segments.map((seg, sIdx) => {
-                    const isSelected = 
-                      selectionRange && 
-                      selectionRange.pIdx === para.pIdx && 
-                      ((seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx <= selectionRange.endWIdx) ||
-                       (!seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx < selectionRange.endWIdx));
-
-                    const isTarget = para.targetMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
-                    const isSaved = para.savedMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
-
-                    if (!seg.isWord) {
-                      if (isSelected) {
-                        return (
-                          <span key={sIdx} className="bg-blue-600 text-white font-bold inline">
-                            {seg.text}
-                          </span>
-                        );
-                      }
-                      return <span key={sIdx}>{seg.text}</span>;
-                    }
-
-                    let wordStyle = 'hover:bg-blue-500/20 hover:text-blue-300';
-
-                    if (isSelected) {
-                      wordStyle = 'bg-blue-600 text-white font-bold shadow-sm shadow-blue-500/40';
-                    } else if (isTarget) {
-                      wordStyle = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
-                    } else if (isSaved) {
-                      wordStyle = 'text-sky-300 font-medium underline decoration-sky-400/70 decoration-2 underline-offset-4 bg-sky-950/20 hover:bg-sky-950/50';
-                    }
-
-                    return (
-                      <span
-                        key={sIdx}
-                        data-word="true"
-                        onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
-                        className={`inline cursor-pointer rounded px-0.5 transition-all ${wordStyle}`}
-                      >
-                        {seg.text}
-                      </span>
-                    );
-                  })}
-                </p>
-              );
-            })}
-          </div>
-
-          <div className="pt-4 border-t border-slate-800/80 space-y-4">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-              <button
-                onClick={handleFinishStory}
-                className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                  isFinished
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
-                    : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600'
-                }`}
-              >
-                <CheckCircle2 className="w-4 h-4 text-sky-400" />
-                <span>{isFinished ? '読了完了！お疲れ様でした 🎉' : '読み終わった！ (読了)'}</span>
-              </button>
-
-              <button
-                onClick={() => setShowTranslation(!showTranslation)}
-                className="w-full sm:w-auto flex items-center justify-center space-x-1.5 px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-all"
-              >
-                <Languages className="w-4 h-4" />
-                <span>{showTranslation ? '日本語訳を隠す' : '全文日本語訳を表示'}</span>
-                {showTranslation ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-
-            {/* 読了後の語彙セルフ評価カード（単語ごとに独立した評価ボタングループ） */}
-            {isFinished && currentStory.targetVocabList && currentStory.targetVocabList.length > 0 && (
-              <div className="p-4 bg-slate-950/90 border border-blue-500/30 rounded-2xl space-y-3 animate-fadeIn">
-                <div className="flex items-center justify-between flex-wrap gap-1">
-                  <span className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    単語ごとに「簡単」「難しい」を個別に調整できます
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                  {currentStory.targetVocabList.map((t, idx) => {
-                    const cleanPhrase = t.replace(/\s*\([^)]*\)/g, '').trim();
-                    const key = cleanPhrase.toLowerCase();
-                    const currentRating = vocabEvaluations[key] || (tappedWordsDuringStory.has(key) ? 'hard' : 'easy');
-
-                    return (
-                      <div key={idx} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs gap-2">
-                        <div className="min-w-0 flex-1">
-                          <span className="font-bold text-white block truncate">{cleanPhrase}</span>
-                          <span className="text-[10px] text-slate-400">
-                            {currentRating === 'easy' ? '🟢 スラスラ読めた（定着）' : '🔴 要復習（次回再出題）'}
-                          </span>
-                        </div>
-
-                        {/* 単語ごとに独立した [簡単] / [難しい] ボタングループ */}
-                        <div className="flex items-center space-x-1 flex-shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleRateEasy(cleanPhrase)}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                              currentRating === 'easy'
-                                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30 border border-emerald-400'
-                                : 'bg-slate-950 text-slate-400 hover:text-emerald-400 border border-slate-800'
-                            }`}
-                            title="簡単！覚えた（次回期日を延長）"
-                          >
-                            🟢 簡単
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRateHard(cleanPhrase)}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                              currentRating === 'hard'
-                                ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30 border border-amber-400'
-                                : 'bg-slate-950 text-slate-400 hover:text-amber-400 border border-slate-800'
-                            }`}
-                            title="難しかった（次回すぐ再出題）"
-                          >
-                            🔴 難しい
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+            {currentStory.summary && (
+              <span className="inline-block text-xs bg-slate-800/90 text-slate-300 px-3 py-1 rounded-lg border border-slate-700/60 leading-relaxed">
+                💡 <strong>導入</strong>: {currentStory.summary}
+              </span>
             )}
-
-            {showTranslation && (
-              <div className="p-4 sm:p-5 bg-slate-950/70 border border-slate-800/90 rounded-2xl space-y-2 animate-fadeIn">
-                <span className="text-xs font-bold uppercase text-blue-400 tracking-wider">全文日本語訳</span>
-                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
-                  {currentStory.japaneseTranslation}
-                </p>
-              </div>
-            )}
-          </div>
-        </article>
-      ) : (
-        <div className="py-16 text-center space-y-4 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-950/60 border border-blue-500/30 flex items-center justify-center">
-            <Sparkles className="w-8 h-8 text-blue-400" />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-xl font-bold text-white">物語を生成して学習を始めましょう</h2>
-            <p className="text-sm text-slate-400 max-w-md mx-auto">
-              上部のレベルを選択して「物語を生成する」ボタンを押すと、あなたの弱点語彙を自然に組み込んだショートストーリーが作成されます。
-            </p>
           </div>
         </div>
-      )}
+
+        <div className="text-xs text-slate-400 flex items-center justify-between bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
+          <span>👆 <strong>操作ヒント:</strong> 単語を押すと選択。離れた単語を押せば文全体もまとめて選択できます。余白を押すと解除されます。</span>
+        </div>
+
+        <div className="story-body select-none py-2 space-y-6">
+          {paragraphSegments.map((para) => {
+            return (
+              <p key={para.pIdx} className="leading-relaxed text-slate-200 text-lg sm:text-xl font-serif">
+                {para.segments.map((seg, sIdx) => {
+                  const isSelected = 
+                    selectionRange && 
+                    selectionRange.pIdx === para.pIdx && 
+                    ((seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx <= selectionRange.endWIdx) ||
+                     (!seg.isWord && seg.wIdx >= selectionRange.startWIdx && seg.wIdx < selectionRange.endWIdx));
+
+                  const isTarget = para.targetMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
+                  const isSaved = para.savedMatches.some(m => seg.charStart >= m.start && seg.charEnd <= m.end);
+
+                  if (!seg.isWord) {
+                    if (isSelected) {
+                      return (
+                        <span key={sIdx} className="bg-blue-600 text-white font-bold inline">
+                          {seg.text}
+                        </span>
+                      );
+                    }
+                    return <span key={sIdx}>{seg.text}</span>;
+                  }
+
+                  let wordStyle = 'hover:bg-blue-500/20 hover:text-blue-300';
+
+                  if (isSelected) {
+                    wordStyle = 'bg-blue-600 text-white font-bold shadow-sm shadow-blue-500/40';
+                  } else if (isTarget) {
+                    wordStyle = 'text-amber-300 font-semibold underline decoration-amber-400/90 decoration-2 underline-offset-4 bg-amber-950/30 hover:bg-amber-950/60';
+                  } else if (isSaved) {
+                    wordStyle = 'text-sky-300 font-medium underline decoration-sky-400/70 decoration-2 underline-offset-4 bg-sky-950/20 hover:bg-sky-950/50';
+                  }
+
+                  return (
+                    <span
+                      key={sIdx}
+                      data-word="true"
+                      onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
+                      className={`inline cursor-pointer rounded px-0.5 transition-all ${wordStyle}`}
+                    >
+                      {seg.text}
+                    </span>
+                  );
+                })}
+              </p>
+            );
+          })}
+        </div>
+
+        <div className="pt-4 border-t border-slate-800/80 space-y-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <button
+              onClick={handleFinishStory}
+              className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                isFinished
+                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+                  : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600'
+              }`}
+            >
+              <CheckCircle2 className="w-4 h-4 text-sky-400" />
+              <span>{isFinished ? '読了完了！お疲れ様でした 🎉' : '読み終わった！ (読了)'}</span>
+            </button>
+
+            <button
+              onClick={() => setShowTranslation(!showTranslation)}
+              className="w-full sm:w-auto flex items-center justify-center space-x-1.5 px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-all"
+            >
+              <Languages className="w-4 h-4" />
+              <span>{showTranslation ? '日本語訳を隠す' : '全文日本語訳を表示'}</span>
+              {showTranslation ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
+          {/* 読了後の語彙セルフ評価カード（単語ごとに独立した評価ボタングループ） */}
+          {isFinished && currentStory.targetVocabList && currentStory.targetVocabList.length > 0 && (
+            <div className="p-4 bg-slate-950/90 border border-blue-500/30 rounded-2xl space-y-3 animate-fadeIn">
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <span className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  単語ごとに「簡単」「難しい」を個別に調整できます
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {currentStory.targetVocabList.map((t, idx) => {
+                  const cleanPhrase = t.replace(/\s*\([^)]*\)/g, '').trim();
+                  const key = cleanPhrase.toLowerCase();
+                  const currentRating = vocabEvaluations[key] || (tappedWordsDuringStory.has(key) ? 'hard' : 'easy');
+
+                  return (
+                    <div key={idx} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs gap-2">
+                      <div className="min-w-0 flex-1">
+                        <span className="font-bold text-white block truncate">{cleanPhrase}</span>
+                        <span className="text-[10px] text-slate-400">
+                          {currentRating === 'easy' ? '🟢 スラスラ読めた（定着）' : '🔴 要復習（次回再出題）'}
+                        </span>
+                      </div>
+
+                      {/* 単語ごとに独立した [簡単] / [難しい] ボタングループ */}
+                      <div className="flex items-center space-x-1 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleRateEasy(cleanPhrase)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                            currentRating === 'easy'
+                              ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30 border border-emerald-400'
+                              : 'bg-slate-950 text-slate-400 hover:text-emerald-400 border border-slate-800'
+                          }`}
+                          title="簡単！覚えた（次回期日を延長）"
+                        >
+                          🟢 簡単
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRateHard(cleanPhrase)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                            currentRating === 'hard'
+                              ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30 border border-amber-400'
+                              : 'bg-slate-950 text-slate-400 hover:text-amber-400 border border-slate-800'
+                          }`}
+                          title="難しかった（次回すぐ再出題）"
+                        >
+                          🔴 難しい
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {showTranslation && (
+            <div className="p-4 sm:p-5 bg-slate-950/70 border border-slate-800/90 rounded-2xl space-y-2 animate-fadeIn">
+              <span className="text-xs font-bold uppercase text-blue-400 tracking-wider">全文日本語訳</span>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {currentStory.japaneseTranslation}
+              </p>
+            </div>
+          )}
+        </div>
+      </article>
     </div>
   );
 };

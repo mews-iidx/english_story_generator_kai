@@ -207,3 +207,93 @@ export async function getDetailedNuanceWithGemini(
   }
   return { explanation: '' };
 }
+export interface VocabRankItem {
+  id: string;
+  phrase: string;
+  meaning: string;
+}
+
+export interface VocabRankResult {
+  id: string;
+  importance: number; // 1〜5
+  reason?: string;
+}
+
+/**
+ * 登録語彙をGeminiで一括ランク付け（日常英会話における重要度 1〜5）
+ */
+export async function rankVocabImportanceWithGemini(
+  vocabs: VocabRankItem[],
+  apiKey: string,
+  model = 'gemini-3.7-flash'
+): Promise<{ rankings: VocabRankResult[]; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
+  if (!apiKey || vocabs.length === 0) return { rankings: [] };
+
+  const prompt = `あなたは英語教育・日常英会話の専門家です。
+以下の英語表現（単語・イディオム・構文）リストを【日常英会話・実用英語における重要度・頻出度】の観点から 1〜5 の整数でスコアリングしてください。
+
+【スコアリング基準】
+5: 日常英会話で極めて頻出・必須レベル（基本動詞、最重要イディオム、毎日使う表現）
+4: 一般的な会話・ビジネス・日常コミュニケーションでよく使われる重要表現
+3: 標準的な語彙・知っておくと便利な表現
+2: やや文学的・専門的・使用場面が限定される表現
+1: 稀・難解・日常会話では滅多に使われない表現
+
+【対象語彙リスト】
+${JSON.stringify(vocabs.map(v => ({ id: v.id, phrase: v.phrase, meaning: v.meaning })), null, 2)}
+
+【出力ルール】
+必ず以下のJSON配列形式のみを出力してください（Markdownタグや解説文は不要）:
+[
+  {
+    "id": "語彙のID",
+    "importance": 5,
+    "reason": "日常会話で頻出の重要イディオム"
+  }
+]`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          }
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+        
+        let rankings: VocabRankResult[] = [];
+        try {
+          const cleanJson = rawText.replace(/^```json\s*/, '').replace(/```\s*$/, '').trim();
+          rankings = JSON.parse(cleanJson);
+        } catch (parseErr) {
+          console.warn('JSON parse error for vocab rankings', parseErr, rawText);
+        }
+
+        return {
+          rankings,
+          tokenUsage: {
+            promptTokens: usage?.promptTokenCount || 0,
+            candidatesTokens: usage?.candidatesTokenCount || 0,
+          }
+        };
+      }
+    } catch (e) {
+      console.warn('Rank vocab error with model ' + currentModel, e);
+    }
+  }
+
+  return { rankings: [] };
+}

@@ -177,6 +177,40 @@ export function deleteVocab(vocabId: string): void {
   saveVocabsBatch(updated);
 }
 
+export function updateVocabImportance(vocabId: string, importance: number): void {
+  const vocabs = loadVocabs();
+  const index = vocabs.findIndex(v => v.id === vocabId);
+  if (index >= 0) {
+    vocabs[index] = {
+      ...vocabs[index],
+      importance: Math.max(1, Math.min(5, importance)),
+    };
+    saveVocabsBatch(vocabs);
+  }
+}
+
+export function batchUpdateVocabImportance(updates: { id: string; importance: number }[]): void {
+  const vocabs = loadVocabs();
+  const map = new Map(updates.map(u => [u.id, u.importance]));
+  let changed = false;
+
+  const updated = vocabs.map(v => {
+    if (map.has(v.id)) {
+      changed = true;
+      return {
+        ...v,
+        importance: Math.max(1, Math.min(5, map.get(v.id)!)),
+      };
+    }
+    return v;
+  });
+
+  if (changed) {
+    saveVocabsBatch(updated);
+  }
+}
+
+
 // ===================== DIFFICULT SENTENCES (訳せなかった文章リスト) =====================
 export function loadDifficultSentences(): DifficultSentenceItem[] {
   try {

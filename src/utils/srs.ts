@@ -49,7 +49,10 @@ export function calculateSuccessSRS(item: VocabItem): {
 
 /**
  * 今回のストーリーに注入すべき復習対象語彙（3〜5個）を選定
- * 単なる単語文字列だけでなく、文脈・構文メモ（contextNote）があればそれも付与してGeminiに渡す
+ * 【重要度優先ルール】:
+ * 1. 日常会話における重要度 (importance 5 -> 1) が高いものを最優先
+ * 2. 忘却タップ回数 (lapseCount) が多いもの
+ * 3. 復習期日 (due) または未定着のもの
  */
 export function pickTargetVocabsForStory(vocabList: VocabItem[], count: number = 4): string[] {
   if (!vocabList || vocabList.length === 0) return [];
@@ -58,7 +61,11 @@ export function pickTargetVocabsForStory(vocabList: VocabItem[], count: number =
 
   const dueItems = vocabList.filter(v => v.nextReviewDate <= today);
   
+  // 重要度(降順) ➔ lapseCount(降順) ➔ 最終復習日時(昇順)
   dueItems.sort((a, b) => {
+    const impA = a.importance ?? 3;
+    const impB = b.importance ?? 3;
+    if (impB !== impA) return impB - impA;
     if (b.lapseCount !== a.lapseCount) return b.lapseCount - a.lapseCount;
     return new Date(a.lastReviewedAt).getTime() - new Date(b.lastReviewedAt).getTime();
   });
@@ -72,7 +79,13 @@ export function pickTargetVocabsForStory(vocabList: VocabItem[], count: number =
 
   if (selectedItems.length < count) {
     const remaining = vocabList.filter(v => !selectedItems.some(s => s.id === v.id));
-    remaining.sort((a, b) => b.lapseCount - a.lapseCount || a.repetitionCount - b.repetitionCount);
+    remaining.sort((a, b) => {
+      const impA = a.importance ?? 3;
+      const impB = b.importance ?? 3;
+      if (impB !== impA) return impB - impA;
+      if (b.lapseCount !== a.lapseCount) return b.lapseCount - a.lapseCount;
+      return a.repetitionCount - b.repetitionCount;
+    });
 
     for (const item of remaining) {
       if (selectedItems.length >= count) break;

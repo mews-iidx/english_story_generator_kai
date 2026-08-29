@@ -20,6 +20,7 @@ export interface VocabItem {
   lastReviewedAt: string;     // ISO timestamp
   createdAt: string;          // ISO timestamp
   sourceStoryId?: string;     // どのストーリー由来か
+  importance?: number;        // 重要度スコア: 1〜5 (5が最重要・日常英会話必須)
 }
 
 export type VocabFilterStatus = 'all' | 'due' | 'learning' | 'mastered';

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem } from '../types/sentence';
-import { BookMarked, Search, Volume2, Trash2, CheckCircle2, ChevronDown, ChevronUp, FileText, Calendar } from 'lucide-react';
+import { BookMarked, Search, Volume2, Trash2, CheckCircle2, ChevronDown, ChevronUp, FileText, Calendar, Sparkles, RefreshCw, Star } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
 
@@ -11,6 +11,9 @@ interface VocabBankViewProps {
   onMasterVocab: (vocabId: string) => void;
   onDeleteVocab: (vocabId: string) => void;
   onDeleteSentence?: (sentenceId: string) => void;
+  onUpdateImportance?: (vocabId: string, importance: number) => void;
+  onRankVocabImportance?: () => Promise<void>;
+  isRankingImportance?: boolean;
 }
 
 export const VocabBankView: React.FC<VocabBankViewProps> = ({
@@ -19,36 +22,59 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
   onMasterVocab,
   onDeleteVocab,
   onDeleteSentence,
+  onUpdateImportance,
+  onRankVocabImportance,
+  isRankingImportance,
 }) => {
   const [activeTab, setActiveTab] = useState<'words' | 'sentences'>('words');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'due' | 'learning' | 'mastered'>('all');
+  const [sortBy, setSortBy] = useState<'importance' | 'due' | 'alpha' | 'lapses'>('importance');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const today = getTodayDateString();
 
-  // 単語フィルタリング
+  // 単語フィルタリング＆ソート
   const filteredVocabs = useMemo(() => {
-    return vocabs.filter((v) => {
-      const matchesSearch =
-        v.phrase.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        v.meaning.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (v.contextNote && v.contextNote.toLowerCase().includes(searchTerm.toLowerCase()));
+    return vocabs
+      .filter((v) => {
+        const matchesSearch =
+          v.phrase.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          v.meaning.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (v.contextNote && v.contextNote.toLowerCase().includes(searchTerm.toLowerCase()));
 
-      if (!matchesSearch) return false;
+        if (!matchesSearch) return false;
 
-      if (statusFilter === 'due') {
-        return v.nextReviewDate <= today;
-      }
-      if (statusFilter === 'mastered') {
-        return v.repetitionCount >= 4;
-      }
-      if (statusFilter === 'learning') {
-        return v.repetitionCount < 4;
-      }
-      return true;
-    });
-  }, [vocabs, searchTerm, statusFilter, today]);
+        if (statusFilter === 'due') {
+          return v.nextReviewDate <= today;
+        }
+        if (statusFilter === 'mastered') {
+          return v.repetitionCount >= 4;
+        }
+        if (statusFilter === 'learning') {
+          return v.repetitionCount < 4;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === 'importance') {
+          const impA = a.importance ?? 3;
+          const impB = b.importance ?? 3;
+          if (impB !== impA) return impB - impA;
+          return b.lapseCount - a.lapseCount;
+        }
+        if (sortBy === 'due') {
+          return a.nextReviewDate.localeCompare(b.nextReviewDate);
+        }
+        if (sortBy === 'alpha') {
+          return a.phrase.localeCompare(b.phrase);
+        }
+        if (sortBy === 'lapses') {
+          return b.lapseCount - a.lapseCount;
+        }
+        return 0;
+      });
+  }, [vocabs, searchTerm, statusFilter, sortBy, today]);
 
   // 訳せなかった文フィルタリング
   const filteredSentences = useMemo(() => {
@@ -69,9 +95,20 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
     setExpandedId(prev => (prev === id ? null : id));
   };
 
+  const getImportanceLabel = (imp: number = 3) => {
+    switch (imp) {
+      case 5: return '⭐⭐⭐⭐⭐ 日常必須・超重要';
+      case 4: return '⭐⭐⭐⭐ 重要・頻出';
+      case 3: return '⭐⭐⭐ 標準';
+      case 2: return '⭐⭐ やや専門的';
+      case 1: return '⭐ 稀・難解';
+      default: return '⭐⭐⭐ 標準';
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-5">
-      {/* 1. Subtab Switcher & Header */}
+      {/* 1. Subtab Switcher & AI Importance Rank Action */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3.5">
         <div className="flex items-center justify-between flex-wrap gap-2.5">
           {/* Subtab Buttons */}
@@ -100,67 +137,107 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
             </button>
           </div>
 
-          {/* Quick Count Badges for Words tab */}
-          {activeTab === 'words' && (
-            <div className="flex items-center space-x-1.5 text-xs">
-              <span className="px-2 py-0.5 rounded-lg bg-amber-950/60 border border-amber-500/30 text-amber-400 font-bold">
-                今日復習: {dueCount}
-              </span>
-              <span className="px-2 py-0.5 rounded-lg bg-blue-950/60 border border-blue-500/30 text-blue-400 font-bold">
-                習得中: {learningCount}
-              </span>
-              <span className="px-2 py-0.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 font-bold hidden sm:inline">
-                定着済: {masteredCount}
-              </span>
-            </div>
+          {/* AI Rank Importance Button */}
+          {activeTab === 'words' && onRankVocabImportance && (
+            <button
+              onClick={onRankVocabImportance}
+              disabled={isRankingImportance || vocabs.length === 0}
+              className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              title="日常英会話における重要度（★1〜★5）をAIで自動判定します"
+            >
+              {isRankingImportance ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>AIランク付け中...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
+                  <span>AIで重要度を自動ランク付け</span>
+                </>
+              )}
+            </button>
           )}
         </div>
 
-        {/* Search Bar & Filter Buttons */}
-        <div className="flex flex-col sm:flex-row gap-2.5 pt-1 border-t border-slate-800/80">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder={activeTab === 'words' ? '単語・フレーズ・意味を検索...' : '訳せなかった英文や日本語訳を検索...'}
-              className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none"
-            />
+        {/* Search Bar, Filters & Sort Dropdown */}
+        <div className="space-y-2.5 pt-1 border-t border-slate-800/80">
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder={activeTab === 'words' ? '単語・フレーズ・意味を検索...' : '訳せなかった英文や日本語訳を検索...'}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none"
+              />
+            </div>
+
+            {activeTab === 'words' && (
+              <div className="flex items-center space-x-2">
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-3 py-2 outline-none"
+                >
+                  <option value="importance">⭐ 重要度順 (高→低)</option>
+                  <option value="due">📅 復習期日順</option>
+                  <option value="lapses">🔥 忘却回数順</option>
+                  <option value="alpha">🔤 アルファベット順</option>
+                </select>
+              </div>
+            )}
           </div>
 
           {activeTab === 'words' && (
-            <div className="flex items-center space-x-1 overflow-x-auto pb-0.5 text-xs font-semibold">
-              <button
-                onClick={() => setStatusFilter('all')}
-                className={`px-3 py-1.5 rounded-xl transition-all ${
-                  statusFilter === 'all'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                すべて
-              </button>
-              <button
-                onClick={() => setStatusFilter('due')}
-                className={`px-3 py-1.5 rounded-xl transition-all ${
-                  statusFilter === 'due'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                要復習 ({dueCount})
-              </button>
-              <button
-                onClick={() => setStatusFilter('learning')}
-                className={`px-3 py-1.5 rounded-xl transition-all ${
-                  statusFilter === 'learning'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                習得中 ({learningCount})
-              </button>
+            <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
+              <div className="flex items-center space-x-1 overflow-x-auto pb-0.5 font-semibold">
+                <button
+                  onClick={() => setStatusFilter('all')}
+                  className={`px-3 py-1 rounded-xl transition-all ${
+                    statusFilter === 'all'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  すべて ({vocabs.length})
+                </button>
+                <button
+                  onClick={() => setStatusFilter('due')}
+                  className={`px-3 py-1 rounded-xl transition-all ${
+                    statusFilter === 'due'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  要復習 ({dueCount})
+                </button>
+                <button
+                  onClick={() => setStatusFilter('learning')}
+                  className={`px-3 py-1 rounded-xl transition-all ${
+                    statusFilter === 'learning'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  習得中 ({learningCount})
+                </button>
+                <button
+                  onClick={() => setStatusFilter('mastered')}
+                  className={`px-3 py-1 rounded-xl transition-all ${
+                    statusFilter === 'mastered'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  定着済 ({masteredCount})
+                </button>
+              </div>
+
+              <div className="text-[11px] text-slate-400 hidden sm:block">
+                ※重要度の高い語彙から優先的に物語に注入されます
+              </div>
             </div>
           )}
         </div>
@@ -174,6 +251,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
               {filteredVocabs.map((vocab) => {
                 const isDue = vocab.nextReviewDate <= today;
                 const isExpanded = expandedId === vocab.id;
+                const currentImportance = vocab.importance ?? 3;
 
                 return (
                   <div
@@ -204,10 +282,20 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
                         </button>
 
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center space-x-2 flex-wrap">
+                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                             <span className="text-base sm:text-lg font-bold text-white tracking-tight">
                               {vocab.phrase}
                             </span>
+
+                            {/* Importance Badge */}
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                              currentImportance >= 4
+                                ? 'bg-amber-950/60 text-amber-300 border-amber-500/40'
+                                : 'bg-slate-800 text-slate-300 border-slate-700'
+                            }`}>
+                              ★{currentImportance}
+                            </span>
+
                             {isDue && (
                               <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
                                 復習期日
@@ -259,6 +347,33 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
 
                     {isExpanded && (
                       <div className="px-4 pb-4 pt-1 bg-slate-950/60 border-t border-slate-800/80 space-y-3 text-xs animate-fadeIn">
+                        {/* Interactive Star Rating for Importance */}
+                        <div className="flex items-center justify-between bg-slate-900/60 p-2.5 rounded-xl border border-slate-800">
+                          <span className="text-slate-300 font-medium flex items-center gap-1">
+                            <span>日常会話における重要度:</span>
+                            <strong className="text-amber-400 font-bold ml-1">{getImportanceLabel(currentImportance)}</strong>
+                          </span>
+
+                          <div className="flex items-center space-x-1">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <button
+                                key={star}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (onUpdateImportance) onUpdateImportance(vocab.id, star);
+                                }}
+                                className={`p-1 transition-transform hover:scale-125 ${
+                                  star <= currentImportance ? 'text-amber-400' : 'text-slate-600 hover:text-slate-400'
+                                }`}
+                                title={`重要度を ${star} に設定`}
+                              >
+                                <Star className="w-4 h-4 fill-current" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         {vocab.exampleSentence ? (
                           <div className="space-y-1 bg-slate-900/80 p-3 rounded-xl border border-slate-800">
                             <div className="flex items-center justify-between text-[11px] text-blue-400 font-bold">
@@ -308,7 +423,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
         </>
       )}
 
-      {/* 3. Content Area: Subtab 2 - Difficult Sentences (訳せなかった文リスト・自己分析用) */}
+      {/* 3. Content Area: Subtab 2 - Difficult Sentences */}
       {activeTab === 'sentences' && (
         <div className="space-y-3">
           <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-xs text-slate-400 leading-relaxed">
