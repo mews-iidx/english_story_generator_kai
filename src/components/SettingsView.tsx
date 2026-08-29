@@ -11,6 +11,8 @@ interface SettingsViewProps {
   isSyncing: boolean;
   onDataImported: () => void;
   onResetAllData: () => void;
+  canInstallPWA?: boolean;
+  onInstallPWA?: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -21,6 +23,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   isSyncing,
   onDataImported,
   onResetAllData,
+  canInstallPWA,
+  onInstallPWA,
 }) => {
   const [apiKey, setApiKey] = useState(settings.geminiApiKey);
   const [model, setModel] = useState(settings.geminiModel || 'gemini-3.7-flash');
@@ -229,6 +233,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <p className="text-xs text-slate-300 leading-relaxed">
             StoryKaiは<strong>PWA（Progressive Web App）に対応</strong>しており、スマホのホーム画面にアプリアイコンを追加して、Safari/Chromeのアドレスバーのない全画面ネイティブアプリとして起動できます。
           </p>
+
+          {canInstallPWA && onInstallPWA && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={onInstallPWA}
+                className="flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30 transition-all active:scale-95"
+              >
+                <Smartphone className="w-4 h-4" />
+                <span>📲 今すぐアプリとしてインストール</span>
+              </button>
+            </div>
+          )}
 
           {showPwaGuide && (
             <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl space-y-3 text-xs text-slate-300 animate-fadeIn">

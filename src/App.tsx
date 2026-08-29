@@ -55,6 +55,30 @@ export const App: React.FC = () => {
   const [contextSentence, setContextSentence] = useState('');
   const [isTranslating, setIsTranslating] = useState(false);
 
+  // PWA インストールプロンプト
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
+
   // 初期ロード
   useEffect(() => {
     const s = loadSettings();
@@ -388,6 +412,8 @@ export const App: React.FC = () => {
         isSyncing={isSyncing}
         hasGoogleSync={Boolean(settings.googleSpreadsheetId)}
         onSyncClick={handleGoogleManualSync}
+        canInstallPWA={Boolean(deferredPrompt)}
+        onInstallPWA={handleInstallPWA}
       />
 
       <main className="flex-1 pb-24 md:pb-12">
@@ -453,6 +479,8 @@ export const App: React.FC = () => {
             isSyncing={isSyncing}
             onDataImported={handleDataImported}
             onResetAllData={handleResetAllData}
+            canInstallPWA={Boolean(deferredPrompt)}
+            onInstallPWA={handleInstallPWA}
           />
         )}
       </main>

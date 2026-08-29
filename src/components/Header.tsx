@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Sparkles, BookMarked, History, Settings, RefreshCw, Zap } from 'lucide-react';
+import { BookOpen, Sparkles, BookMarked, History, Settings, RefreshCw, Zap, Download } from 'lucide-react';
 
 export type NavTab = 'reader' | 'quiz' | 'vocab' | 'history' | 'settings';
 
@@ -10,6 +10,8 @@ interface HeaderProps {
   isSyncing: boolean;
   hasGoogleSync: boolean;
   onSyncClick: () => void;
+  canInstallPWA?: boolean;
+  onInstallPWA?: () => void;
 }
 
 interface TabItem {
@@ -26,6 +28,8 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing,
   hasGoogleSync,
   onSyncClick,
+  canInstallPWA,
+  onInstallPWA,
 }) => {
   const tabs: TabItem[] = [
     { id: 'reader', label: 'リーダー', icon: BookOpen },
@@ -37,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <>
-      {/* 1. Desktop & Mobile Top Header (Clean & Minimal) */}
+      {/* 1. Desktop & Mobile Top Header */}
       <header className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur-md border-b border-slate-800">
         <div className="max-w-5xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between">
           {/* Logo */}
@@ -85,8 +89,19 @@ export const Header: React.FC<HeaderProps> = ({
             })}
           </nav>
 
-          {/* Right Action (Google Sync Indicator) */}
+          {/* Right Action (Install PWA & Google Sync Indicator) */}
           <div className="flex items-center space-x-2">
+            {canInstallPWA && onInstallPWA && (
+              <button
+                onClick={onInstallPWA}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/25 transition-all animate-pulse"
+                title="アプリをスマホにインストール"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>アプリをインストール</span>
+              </button>
+            )}
+
             {hasGoogleSync && (
               <button
                 onClick={onSyncClick}
@@ -102,7 +117,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </header>
 
-      {/* 2. Mobile Bottom Navigation Bar (App-like fixed bottom bar) */}
+      {/* 2. Mobile Bottom Navigation Bar */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/90 px-2 py-1.5 flex items-center justify-around shadow-2xl safe-area-pb">
         {tabs.map((tab) => {
           const Icon = tab.icon;
