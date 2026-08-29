@@ -189,7 +189,7 @@ export const App: React.FC = () => {
     setTranslatedText('翻訳中...');
 
     try {
-      const res = await translateWithGoogleFree(trimmed);
+      const res = await translateWithGoogleFree(trimmed, settings.geminiApiKey);
       setTranslatedText(res.translatedText);
     } catch (e) {
       setTranslatedText('（翻訳取得失敗）');
