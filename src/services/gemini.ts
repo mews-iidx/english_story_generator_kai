@@ -642,3 +642,119 @@ ${userPrompt ? `ユーザーからの要望: 「${userPrompt}」` : '自然で�
 
   throw new Error('ペルソナの生成に失敗しました');
 }
+
+/**
+ * ペルソナとのテキストチャット対話関数
+ * 音声通話（Gemini Live）と同じペルソナ情報・動的記憶を共有してチャットを行う
+ */
+export async function chatWithPersona(params: {
+  apiKey: string;
+  model?: string;
+  persona?: Persona | null;
+  history: { role: 'user' | 'assistant'; text: string }[];
+  userText: string;
+}): Promise<{
+  text: string;
+  tokenUsage?: { promptTokens: number; candidatesTokens: number };
+}> {
+  const { apiKey, model = 'gemini-2.0-flash', persona, history, userText } = params;
+
+  let systemInstruction = '';
+  if (persona) {
+    const memory = persona.memory || { likes: [], dislikes: [], recentTopics: [], userNotes: [] };
+    const likesStr = memory.likes.length > 0 ? memory.likes.join(', ') : 'なし';
+    const dislikesStr = memory.dislikes.length > 0 ? memory.dislikes.join(', ') : 'なし';
+    const topicsStr = memory.recentTopics.length > 0
+      ? memory.recentTopics.map(t => `• [${t.date}] ${t.topic}: ${t.summary}`).join('\n')
+      : 'まだ過去の会話履歴はありません。';
+    const userNotesStr = memory.userNotes.length > 0 ? memory.userNotes.join('\n• ') : '特になし';
+
+    systemInstruction = `You are roleplaying as "${persona.name}", a native/fluent English speaker in a casual Language Exchange chat.
+
+[YOUR PROFILE]
+- Name: ${persona.name} (${persona.avatarEmoji})
+- Age: ${persona.age}
+- Nationality/City: ${persona.nationality}
+- Occupation: ${persona.occupation}
+- Personality & Tone: ${persona.personality}
+- Interests: ${persona.interests.join(', ')}
+- Your Likes: ${likesStr}
+- Your Dislikes: ${dislikesStr}
+
+[YOUR MEMORY & SHARED HISTORY WITH THE USER]
+- What you know about the user:
+  • ${userNotesStr}
+- Previous conversation topics & summaries:
+  ${topicsStr}
+
+[CORE CHAT RULES - VERY IMPORTANT]
+1. Respond in short, casual, and natural conversational English (1 to 3 sentences). Do NOT write long paragraphs.
+2. Ask one friendly follow-up question or react naturally like a real friend messaging on LINE/WhatsApp.
+3. Be consistent with your personality, likes, dislikes, and past conversation memories.
+4. If the user asks a question in Japanese or asks for English help/explanation (e.g. 「これってどういう意味？」「〜は英語で何て言う？」), seamlessly switch to Japanese to explain warmly and clearly, and then give a natural English example and continue the chat in English.`;
+  } else {
+    systemInstruction = `You are a friendly, encouraging native English speaking language exchange partner.
+- Respond in short, casual, conversational English (1 to 3 sentences).
+- If the user asks for explanations or types in Japanese, explain warmly in Japanese and then encourage them with a natural English response.`;
+  }
+
+  // Format contents for Gemini API (Multi-turn format)
+  const contents: any[] = [];
+
+  // Recent history (up to last 10 messages)
+  const recentHistory = history.slice(-10);
+  for (const msg of recentHistory) {
+    contents.push({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.text }],
+    });
+  }
+
+  // Current user message
+  contents.push({
+    role: 'user',
+    parts: [{ text: userText }],
+  });
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemInstruction }],
+          },
+          contents,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 500,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+
+        if (text) {
+          return {
+            text,
+            tokenUsage: {
+              promptTokens: usage?.promptTokenCount || 0,
+              candidatesTokens: usage?.candidatesTokenCount || 0,
+            },
+          };
+        }
+      }
+    } catch (e) {
+      console.warn(`chatWithPersona error on ${currentModel}:`, e);
+    }
+  }
+
+  throw new Error('メッセージの送信に失敗しました');
+}

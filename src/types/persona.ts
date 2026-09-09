@@ -48,6 +48,7 @@ export interface CallSession {
   id: string;
   personaId?: string;           // undefined の場合はフリー会話
   personaName?: string;
+  sessionType?: 'voice' | 'chat'; // 'voice' (音声通話) または 'chat' (テキストチャット)
   startedAt: string;
   endedAt?: string;
   durationSeconds: number;
