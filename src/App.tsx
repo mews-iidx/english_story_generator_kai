@@ -9,7 +9,6 @@ import { VocabBankView } from './components/VocabBankView';
 import { AiMentorChatView } from './components/AiMentorChatView';
 import { SettingsView } from './components/SettingsView';
 import { CallView } from './components/CallView';
-import { FloatingAiAssistant } from './components/FloatingAiAssistant';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
 import { ImportStoryModal } from './components/ImportStoryModal';
 
@@ -80,6 +79,7 @@ export const App: React.FC = () => {
 
   // リーダー画面上でのオーバーレイチャット状態
   const [isReaderChatOverlayOpen, setIsReaderChatOverlayOpen] = useState(false);
+  const savedReaderScrollYRef = React.useRef<number>(0);
 
   // バックグラウンド生成状態
   const [isGenerating, setIsGenerating] = useState(false);
@@ -542,7 +542,7 @@ export const App: React.FC = () => {
     setCallSessions(loadCallSessions());
   };
 
-  // フローティングAIボタン または ボトムシート「AIに質問」を押した時
+  // ボトムシート「AIに質問」を押した時
   const handleOpenChatWithSelection = (customText?: string) => {
     const targetText = customText || selectedText;
     if (targetText && targetText.trim()) {
@@ -552,12 +552,26 @@ export const App: React.FC = () => {
     }
 
     if (readingStory) {
+      // 現在の読書スクロール位置を確実に記憶
+      savedReaderScrollYRef.current = window.scrollY || document.documentElement.scrollTop || 0;
       // リーダー画面では画面遷移せずオーバーレイドロワーを開く
       setIsSheetOpen(false);
       setIsReaderChatOverlayOpen(true);
     } else {
       setActiveTab('chat');
     }
+  };
+
+  const handleCloseReaderChatOverlay = () => {
+    setIsReaderChatOverlayOpen(false);
+    const targetScrollY = savedReaderScrollYRef.current;
+    // スクロール位置を即座に復元
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: targetScrollY, behavior: 'instant' });
+      setTimeout(() => {
+        window.scrollTo({ top: targetScrollY, behavior: 'instant' });
+      }, 50);
+    });
   };
 
   // AIによる詳細ニュアンス取得
@@ -865,8 +879,14 @@ export const App: React.FC = () => {
 
       {/* リーダー画面上のオーバーレイAIチャットドロワー */}
       {readingStory && isReaderChatOverlayOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end animate-fadeIn">
-          <div className="w-full max-w-lg h-full bg-slate-950 border-l border-slate-800 shadow-2xl animate-slideLeft flex flex-col">
+        <div 
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end animate-fadeIn"
+          onClick={handleCloseReaderChatOverlay}
+        >
+          <div 
+            className="w-full max-w-lg h-full bg-slate-950 border-l border-slate-800 shadow-2xl animate-slideLeft flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             <AiMentorChatView
               apiKey={settings.geminiApiKey}
               model={settings.geminiModel}
@@ -878,17 +898,11 @@ export const App: React.FC = () => {
               savedVocabPhrases={savedVocabPhrases}
               initialInput={initialChatInput}
               isOverlayMode={true}
-              onClose={() => setIsReaderChatOverlayOpen(false)}
+              onClose={handleCloseReaderChatOverlay}
             />
           </div>
         </div>
       )}
-
-      {/* 右下フローティングAIメンターボタン（いつでもどこからでも質問可能） */}
-      <FloatingAiAssistant
-        selectedText={selectedText}
-        onClick={() => handleOpenChatWithSelection()}
-      />
 
       {/* 外部AIプロンプト / JSONインポートモーダル */}
       <ImportStoryModal

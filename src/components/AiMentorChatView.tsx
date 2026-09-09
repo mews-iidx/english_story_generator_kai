@@ -33,18 +33,21 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 }) => {
   const [inputText, setInputText] = useState(initialInput);
   const [isLoading, setIsLoading] = useState(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (initialInput) {
       setInputText(initialInput);
-      inputRef.current?.focus();
+      inputRef.current?.focus({ preventScroll: true });
     }
   }, [initialInput]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   }, [messages, isLoading]);
 
   const handleSend = async (textToSend?: string) => {
@@ -143,7 +146,10 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       </div>
 
       {/* 2. Messages List */}
-      <div className="flex-1 bg-slate-900/40 border border-slate-800/60 rounded-2xl p-4 overflow-y-auto space-y-4">
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 bg-slate-900/40 border border-slate-800/60 rounded-2xl p-4 overflow-y-auto space-y-4"
+      >
         {messages.map((msg) => {
           const isUser = msg.sender === 'user';
 
