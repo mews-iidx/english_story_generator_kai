@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
-import { BookOpen, Calendar, Trash2, Search, Tag, Sparkles, Filter, RefreshCw, PlusCircle } from 'lucide-react';
+import { BookOpen, Calendar, Trash2, Search, Sparkles, Filter, RefreshCw, PlusCircle, CheckCircle2, Headphones } from 'lucide-react';
 
 interface HistoryViewProps {
   stories: Story[];
@@ -21,19 +21,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [levelFilter, setLevelFilter] = useState<string>('all');
-  const [genreFilter, setGenreFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
 
-  // 全ストーリーからユニークなジャンル一覧を抽出
-  const allGenres = useMemo(() => {
-    const set = new Set<string>();
-    stories.forEach(s => {
-      if (s.genres && Array.isArray(s.genres)) {
-        s.genres.forEach(g => set.add(g));
-      }
-    });
-    return Array.from(set);
-  }, [stories]);
+  // 読書統計の計算
+  const readStories = useMemo(() => stories.filter(s => s.isRead), [stories]);
+  const totalWordsRead = useMemo(() => {
+    return readStories.reduce((acc, s) => acc + (s.actualWordCount || s.targetWordCount || 700), 0);
+  }, [readStories]);
 
   // 検索・フィルタリング・ソート
   const filteredStories = useMemo(() => {
@@ -51,9 +46,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           return false;
         }
 
-        if (genreFilter !== 'all') {
-          const storyGenres = s.genres || ['General'];
-          if (!storyGenres.includes(genreFilter)) return false;
+        if (typeFilter !== 'all' && (s.contentType || 'story') !== typeFilter) {
+          return false;
         }
 
         return true;
@@ -63,9 +57,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         const timeB = new Date(b.createdAt).getTime();
         return sortOrder === 'newest' ? timeB - timeA : timeA - timeB;
       });
-  }, [stories, searchTerm, levelFilter, genreFilter, sortOrder]);
+  }, [stories, searchTerm, levelFilter, typeFilter, sortOrder]);
 
-  const getCoverGradient = (index: number) => {
+  const getCoverGradient = (index: number, contentType?: string) => {
+    if (contentType === 'podcast') {
+      return 'from-purple-900 via-indigo-950 to-slate-950 border-purple-500/40';
+    }
+    if (contentType === 'dialogue') {
+      return 'from-emerald-900 via-teal-950 to-slate-950 border-emerald-500/40';
+    }
     const gradients = [
       'from-blue-600 via-indigo-700 to-slate-900 border-blue-400/40',
       'from-indigo-600 via-purple-700 to-slate-900 border-indigo-400/40',
@@ -79,7 +79,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* 1. Header & Bookshelf Shelf Controls */}
+      {/* 1. Header & Reading Stats Tracker */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center space-x-3">
@@ -91,7 +91,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 マイスクール本棚 📚
               </h2>
               <p className="text-xs sm:text-sm text-slate-400">
-                本を選んでタップすると読書が始まります。読了時は忘却曲線で復習判定されます。
+                本を選んでタップすると読書・リスニングが始まります
               </p>
             </div>
           </div>
@@ -106,16 +106,50 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <span>新しい本を作成</span>
               </button>
             )}
+          </div>
+        </div>
 
-            <div className="bg-slate-950 px-3.5 py-1.5 rounded-xl border border-slate-800 text-center hidden sm:block">
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">所蔵</span>
-              <span className="text-base font-bold text-blue-400">{stories.length} <span className="text-xs font-normal text-slate-400">冊</span></span>
+        {/* Reading Stat Badges */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
+          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-2xl flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center flex-shrink-0">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">読了冊数</span>
+              <span className="text-base sm:text-lg font-bold text-white">
+                {readStories.length} <span className="text-xs font-normal text-slate-400">/ {stories.length} 冊</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-2xl flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-600/20 text-emerald-400 flex items-center justify-center flex-shrink-0">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">累計読破語数</span>
+              <span className="text-base sm:text-lg font-bold text-emerald-400">
+                {totalWordsRead.toLocaleString()} <span className="text-xs font-normal text-slate-400">words</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-2xl flex items-center space-x-3 col-span-2 sm:col-span-1">
+            <div className="w-8 h-8 rounded-xl bg-purple-600/20 text-purple-400 flex items-center justify-center flex-shrink-0">
+              <Headphones className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">所蔵コンテンツ</span>
+              <span className="text-base sm:text-lg font-bold text-purple-400">
+                {stories.length} <span className="text-xs font-normal text-slate-400">本</span>
+              </span>
             </div>
           </div>
         </div>
 
         {/* Search Bar & Filters */}
-        <div className="space-y-3 pt-1 border-t border-slate-800/80">
+        <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <div className="flex flex-col sm:flex-row gap-2.5">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
@@ -140,8 +174,53 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             </div>
           </div>
 
-          {/* Level & Genre Filter Pills */}
+          {/* Level & Type Filter Pills */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+            {/* Format Type Filter */}
+            <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
+              <button
+                onClick={() => setTypeFilter('all')}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  typeFilter === 'all'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                全タイプ
+              </button>
+              <button
+                onClick={() => setTypeFilter('podcast')}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  typeFilter === 'podcast'
+                    ? 'bg-purple-600 text-white shadow-sm'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                🎙️ Podcast
+              </button>
+              <button
+                onClick={() => setTypeFilter('story')}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  typeFilter === 'story'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                📖 Story
+              </button>
+              <button
+                onClick={() => setTypeFilter('dialogue')}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  typeFilter === 'dialogue'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                💬 Dialogue
+              </button>
+            </div>
+
+            {/* Level Filter */}
             <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
               <span className="text-slate-500 mr-1 flex items-center gap-1 font-semibold">
                 <Filter className="w-3 h-3" /> レベル:
@@ -150,7 +229,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <button
                   key={lvl}
                   onClick={() => setLevelFilter(lvl)}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  className={`px-2 py-0.5 rounded-lg font-bold transition-all ${
                     levelFilter === lvl
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -160,37 +239,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 </button>
               ))}
             </div>
-
-            {allGenres.length > 0 && (
-              <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
-                <span className="text-slate-500 mr-1 flex items-center gap-1 font-semibold">
-                  <Tag className="w-3 h-3" /> ジャンル:
-                </span>
-                <button
-                  onClick={() => setGenreFilter('all')}
-                  className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                    genreFilter === 'all'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                  }`}
-                >
-                  すべて
-                </button>
-                {allGenres.map((g) => (
-                  <button
-                    key={g}
-                    onClick={() => setGenreFilter(g)}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                      genreFilter === g
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
-                  >
-                    {g}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -202,7 +250,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <RefreshCw className="w-5 h-5 text-sky-400 animate-spin flex-shrink-0" />
             <div>
               <span className="text-xs sm:text-sm font-bold text-white block">
-                AIが新しい物語を裏で執筆中...
+                AIが新しい物語・エピソードを裏で執筆中...
               </span>
               <span className="text-[11px] text-slate-300">
                 {generatingTheme ? `テーマ: 「${generatingTheme}」` : '完成すると自動で本棚の先頭に追加されます'}
@@ -220,7 +268,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="space-y-8">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredStories.map((story, index) => {
-              const coverStyle = getCoverGradient(index);
+              const coverStyle = getCoverGradient(index, story.contentType);
 
               return (
                 <div
@@ -235,14 +283,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-black/40 text-white font-bold backdrop-blur-md border border-white/20">
                         {story.cefrLevel || 'A2'}
                       </span>
-                      {story.targetWordCount && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/20 text-slate-200 backdrop-blur-md">
-                          約{story.targetWordCount}語
+                      {story.contentType === 'podcast' && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/30 text-purple-200 font-bold backdrop-blur-md">
+                          🎙️ Podcast
                         </span>
                       )}
-                      {story.genres && story.genres.length > 0 && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-slate-200 font-medium backdrop-blur-md">
-                          {story.genres[0]}
+                      {story.contentType === 'dialogue' && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-200 font-bold backdrop-blur-md">
+                          💬 Dialogue
+                        </span>
+                      )}
+                      {story.isRead && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 font-bold border border-emerald-400/40 backdrop-blur-md">
+                          ✓ 読了済
                         </span>
                       )}
                     </div>
@@ -282,7 +335,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
                     <span className="flex items-center gap-1 text-sky-300 font-semibold group-hover:underline">
                       <BookOpen className="w-3.5 h-3.5" />
-                      開いて読む ➔
+                      開く ➔
                     </span>
                   </div>
                 </div>
@@ -296,9 +349,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="py-20 text-center space-y-4 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
           <BookOpen className="w-12 h-12 text-slate-600 mx-auto" />
           <div className="space-y-1">
-            <h3 className="text-lg font-bold text-white">本棚に物語がまだありません</h3>
+            <h3 className="text-lg font-bold text-white">本棚にコンテンツがまだありません</h3>
             <p className="text-xs sm:text-sm text-slate-400">
-              「新しい本を作成」ボタンから、AIに物語を生成してもらいましょう！
+              「新しい本を作成」ボタンから、ポッドキャスト風エッセイや物語を生成してみましょう！
             </p>
           </div>
           {onNavigateToCreate && (
@@ -307,7 +360,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               className="inline-flex items-center space-x-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/30 transition-all"
             >
               <Sparkles className="w-4 h-4" />
-              <span>物語を作成する</span>
+              <span>コンテンツを作成する</span>
             </button>
           )}
         </div>

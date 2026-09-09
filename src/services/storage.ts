@@ -1,14 +1,16 @@
 import { VocabItem, VocabLookupResult } from '../types/vocab';
-import { DifficultSentenceItem } from '../types/sentence';
+import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
 import { Story } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
-import { calculateLapseSRS, calculateSuccessSRS } from '../utils/srs';
+import { ChatMessage } from '../types/chat';
+import { calculateLapseSRS, calculateSuccessSRS, addDaysToDate } from '../utils/srs';
 
 const STORAGE_KEYS = {
   SETTINGS: 'storykai_settings_v1',
   STORIES: 'storykai_stories_v1',
   VOCABS: 'storykai_vocabs_v1',
   DIFFICULT_SENTENCES: 'storykai_difficult_sentences_v1',
+  CHAT_MESSAGES: 'storykai_chat_messages_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -93,6 +95,25 @@ export function deleteStory(storyId: string): void {
   }
 }
 
+export function recordStoryRead(storyId: string, wpm?: number): Story | null {
+  const stories = loadStories();
+  const index = stories.findIndex(s => s.id === storyId);
+  if (index >= 0) {
+    const story = stories[index];
+    const updatedStory: Story = {
+      ...story,
+      isRead: true,
+      readAt: new Date().toISOString(),
+      readCount: (story.readCount || 0) + 1,
+      wpm: wpm || story.wpm,
+    };
+    stories[index] = updatedStory;
+    localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));
+    return updatedStory;
+  }
+  return null;
+}
+
 // ===================== VOCABULARIES =====================
 export function loadVocabs(): VocabItem[] {
   try {
@@ -147,6 +168,7 @@ export function recordVocabLapse(
       contextNote: lookup.explanation || '',
       exampleSentence: lookup.context_sentence || '',
       ...srs,
+      importance: 3,
       createdAt: new Date().toISOString(),
       sourceStoryId,
     };
@@ -210,6 +232,66 @@ export function batchUpdateVocabImportance(updates: { id: string; importance: nu
   }
 }
 
+// Anki 4段階評価 (again, hard, good, easy)
+export function recordAnkiRating(
+  vocabId: string,
+  rating: 'again' | 'hard' | 'good' | 'easy'
+): VocabItem | null {
+  const vocabs = loadVocabs();
+  const index = vocabs.findIndex(v => v.id === vocabId);
+  if (index < 0) return null;
+
+  const item = vocabs[index];
+  const now = new Date().toISOString();
+  let updated: VocabItem;
+
+  if (rating === 'again') {
+    updated = {
+      ...item,
+      lapseCount: item.lapseCount + 1,
+      repetitionCount: 0,
+      intervalDays: 1,
+      nextReviewDate: addDaysToDate(1),
+      lastReviewedAt: now,
+    };
+  } else if (rating === 'hard') {
+    const nextInterval = Math.max(1, Math.round(item.intervalDays * 1.2));
+    updated = {
+      ...item,
+      repetitionCount: Math.max(1, item.repetitionCount),
+      intervalDays: nextInterval,
+      nextReviewDate: addDaysToDate(nextInterval),
+      lastReviewedAt: now,
+    };
+  } else if (rating === 'good') {
+    const intervals = [1, 3, 7, 14, 30, 60, 120];
+    const nextRep = item.repetitionCount + 1;
+    const nextInterval = intervals[Math.min(nextRep, intervals.length - 1)];
+    updated = {
+      ...item,
+      repetitionCount: nextRep,
+      intervalDays: nextInterval,
+      nextReviewDate: addDaysToDate(nextInterval),
+      lastReviewedAt: now,
+    };
+  } else {
+    // easy
+    const intervals = [3, 7, 14, 30, 60, 120, 240];
+    const nextRep = item.repetitionCount + 2;
+    const nextInterval = intervals[Math.min(nextRep, intervals.length - 1)];
+    updated = {
+      ...item,
+      repetitionCount: nextRep,
+      intervalDays: nextInterval,
+      nextReviewDate: addDaysToDate(nextInterval),
+      lastReviewedAt: now,
+    };
+  }
+
+  vocabs[index] = updated;
+  saveVocabsBatch(vocabs);
+  return updated;
+}
 
 // ===================== DIFFICULT SENTENCES (訳せなかった文章リスト) =====================
 export function loadDifficultSentences(): DifficultSentenceItem[] {
@@ -234,7 +316,6 @@ export function saveDifficultSentence(
     createdAt: new Date().toISOString(),
   };
 
-  // 重複登録の防止（全く同じ文がすでにある場合は先頭に移動＆更新）
   const filtered = list.filter(s => s.sentence.trim() !== item.sentence.trim());
   const updated = [newItem, ...filtered];
 
@@ -247,6 +328,27 @@ export function saveDifficultSentence(
   return newItem;
 }
 
+export function updateDifficultSentenceReason(
+  id: string,
+  reasonCategory: DifficultyReasonCategory,
+  reasonNote: string
+): void {
+  const list = loadDifficultSentences();
+  const index = list.findIndex(s => s.id === id);
+  if (index >= 0) {
+    list[index] = {
+      ...list[index],
+      reasonCategory,
+      reasonNote,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEYS.DIFFICULT_SENTENCES, JSON.stringify(list));
+    } catch (e) {
+      console.error('Failed to update difficult sentence reason', e);
+    }
+  }
+}
+
 export function deleteDifficultSentence(id: string): void {
   const list = loadDifficultSentences();
   const updated = list.filter(s => s.id !== id);
@@ -257,12 +359,52 @@ export function deleteDifficultSentence(id: string): void {
   }
 }
 
+// ===================== CHAT MESSAGES (AIメンターチャット) =====================
+export function loadChatMessages(): ChatMessage[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.CHAT_MESSAGES);
+    if (!raw) {
+      return [
+        {
+          id: 'welcome_msg',
+          sender: 'assistant',
+          text: 'こんにちは！AI英語メンターのStoryKaiです。✨\n「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など、疑問に思ったことを何でも質問してください。回答からワンタップで語彙帳やAnkiに登録できます！',
+          createdAt: new Date().toISOString(),
+        }
+      ];
+    }
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load chat messages', e);
+    return [];
+  }
+}
+
+export function saveChatMessage(msg: ChatMessage): void {
+  try {
+    const list = loadChatMessages();
+    const updated = [...list, msg];
+    localStorage.setItem(STORAGE_KEYS.CHAT_MESSAGES, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to save chat message', e);
+  }
+}
+
+export function clearChatMessages(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.CHAT_MESSAGES);
+  } catch (e) {
+    console.error('Failed to clear chat messages', e);
+  }
+}
+
 // ===================== RESET ALL DATA =====================
 export function resetAllData(): void {
   try {
     localStorage.removeItem(STORAGE_KEYS.STORIES);
     localStorage.removeItem(STORAGE_KEYS.VOCABS);
     localStorage.removeItem(STORAGE_KEYS.DIFFICULT_SENTENCES);
+    localStorage.removeItem(STORAGE_KEYS.CHAT_MESSAGES);
     const s = loadSettings();
     saveSettings({
       ...s,
@@ -285,16 +427,18 @@ export interface ExportData {
   stories: Story[];
   vocabs: VocabItem[];
   difficultSentences?: DifficultSentenceItem[];
+  chatMessages?: ChatMessage[];
   settings: Partial<AppSettings>;
 }
 
 export function exportAllData(): string {
   const data: ExportData = {
-    version: '1.1.0',
+    version: '1.2.0',
     exportedAt: new Date().toISOString(),
     stories: loadStories(),
     vocabs: loadVocabs(),
     difficultSentences: loadDifficultSentences(),
+    chatMessages: loadChatMessages(),
     settings: {
       cefrLevel: loadSettings().cefrLevel,
       geminiModel: loadSettings().geminiModel,
@@ -314,6 +458,9 @@ export function importAllData(jsonStr: string): { success: boolean; storyCount: 
     }
     if (data.difficultSentences && Array.isArray(data.difficultSentences)) {
       localStorage.setItem(STORAGE_KEYS.DIFFICULT_SENTENCES, JSON.stringify(data.difficultSentences));
+    }
+    if (data.chatMessages && Array.isArray(data.chatMessages)) {
+      localStorage.setItem(STORAGE_KEYS.CHAT_MESSAGES, JSON.stringify(data.chatMessages));
     }
     return {
       success: true,

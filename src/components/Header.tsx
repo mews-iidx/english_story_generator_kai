@@ -1,7 +1,7 @@
 import React from 'react';
-import { BookOpen, Sparkles, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download } from 'lucide-react';
+import { BookOpen, Sparkles, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot } from 'lucide-react';
 
-export type NavTab = 'bookshelf' | 'create' | 'quiz' | 'vocab' | 'settings';
+export type NavTab = 'bookshelf' | 'create' | 'chat' | 'quiz' | 'vocab' | 'settings';
 
 interface HeaderProps {
   activeTab: NavTab;
@@ -37,8 +37,9 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const tabs: TabItem[] = [
     { id: 'bookshelf', label: '本棚', icon: BookOpen },
-    { id: 'create', label: '物語作成', icon: PlusCircle },
-    { id: 'quiz', label: 'クイズ', icon: Zap },
+    { id: 'create', label: '作成', icon: PlusCircle },
+    { id: 'chat', label: 'AI相談', icon: Bot },
+    { id: 'quiz', label: 'Anki', icon: Zap },
     { id: 'vocab', label: '語彙帳', icon: BookMarked, badge: dueCount > 0 ? dueCount : undefined },
     { id: 'settings', label: '設定', icon: Settings },
   ];
@@ -61,12 +62,12 @@ export const Header: React.FC<HeaderProps> = ({
                 StoryKai
               </span>
               <span className="text-[10px] uppercase font-bold text-blue-500/80 tracking-widest hidden sm:inline">
-                Bookshelf
+                Reader & Listen
               </span>
             </div>
           </div>
 
-          {/* Desktop Navigation Tabs (Hidden on mobile) */}
+          {/* Desktop Navigation Tabs */}
           <nav className="hidden md:flex items-center space-x-1 bg-slate-900/90 p-1 rounded-2xl border border-slate-800">
             {tabs.map((tab) => {
               const Icon = tab.icon;
@@ -75,13 +76,13 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`relative flex items-center space-x-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                  className={`relative flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                     isActive
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-3.5 h-3.5" />
                   <span>{tab.label}</span>
                   {tab.badge !== undefined && (
                     <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950">
@@ -93,7 +94,7 @@ export const Header: React.FC<HeaderProps> = ({
             })}
           </nav>
 
-          {/* Right Action (Background Generation, Install PWA & Google Sync Indicator) */}
+          {/* Right Action */}
           <div className="flex items-center space-x-2">
             {/* Background generation pill */}
             {isGenerating && (
@@ -133,8 +134,8 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </header>
 
-      {/* 2. Mobile Bottom Navigation Bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/90 px-2 py-1.5 flex items-center justify-around shadow-2xl safe-area-pb">
+      {/* 2. Mobile Bottom Navigation Bar (6 compact items) */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/90 px-1 py-1.5 flex items-center justify-around shadow-2xl safe-area-pb">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -142,23 +143,23 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`relative flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all flex-1 ${
+              className={`relative flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all flex-1 ${
                 isActive
                   ? 'text-blue-400 font-bold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <div className="relative">
-                <Icon className={`w-5 h-5 transition-transform ${isActive ? 'scale-110' : ''}`} />
+                <Icon className={`w-4 h-4 transition-transform ${isActive ? 'scale-110' : ''}`} />
                 {tab.badge !== undefined && (
-                  <span className="absolute -top-1 -right-2.5 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold bg-amber-500 text-slate-950 flex items-center justify-center">
+                  <span className="absolute -top-1 -right-2 min-w-[14px] h-3.5 px-0.5 rounded-full text-[8px] font-bold bg-amber-500 text-slate-950 flex items-center justify-center">
                     {tab.badge}
                   </span>
                 )}
               </div>
-              <span className="text-[10px] mt-0.5 tracking-tight">{tab.label}</span>
+              <span className="text-[9px] mt-0.5 tracking-tight">{tab.label}</span>
               {isActive && (
-                <span className="absolute bottom-0.5 w-1 h-1 bg-blue-400 rounded-full" />
+                <span className="absolute bottom-0 w-1 h-1 bg-blue-400 rounded-full" />
               )}
             </button>
           );

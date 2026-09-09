@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
-import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, CheckCircle2, Clock } from 'lucide-react';
+import { ContentType } from '../types/story';
+import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, CheckCircle2, Clock, Mic, MessageSquare, BookMarked } from 'lucide-react';
 
 interface StoryCreateViewProps {
   currentLevel: CefrLevel;
@@ -8,7 +9,7 @@ interface StoryCreateViewProps {
   isGenerating: boolean;
   generatingTheme?: string;
   dueVocabs: string[];
-  onGenerateStory: (prompt?: string, wordCount?: number) => void;
+  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType) => void;
   onOpenImportModal: () => void;
   onNavigateToBookshelf: () => void;
 }
@@ -23,6 +24,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
   onOpenImportModal,
   onNavigateToBookshelf,
 }) => {
+  const [contentType, setContentType] = useState<ContentType>('podcast');
   const [promptInput, setPromptInput] = useState('');
   const [wordCount, setWordCount] = useState<number>(700);
 
@@ -32,7 +34,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
 
   const handleStartGeneration = () => {
     if (isGenerating) return;
-    onGenerateStory(promptInput, wordCount);
+    onGenerateStory(promptInput, wordCount, contentType);
   };
 
   const levelDescriptions: Record<CefrLevel, { name: string; desc: string }> = {
@@ -42,6 +44,28 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
     B2: { name: '中上級 (B2)', desc: '自然なイディオムや句動詞を含む豊かな表現' },
     C1: { name: '上級 (C1)', desc: '高度で洗練された語彙と多彩な表現' },
   };
+
+  const contentTypes: { id: ContentType; label: string; icon: React.ComponentType<{ className?: string }>; desc: string; badge?: string }[] = [
+    {
+      id: 'podcast',
+      label: '🎙️ ポッドキャスト風エッセイ',
+      icon: Mic,
+      desc: '『Listening Time』風の親しみやすい1人語り。日常の思考や経験を自然な語り口で',
+      badge: '推奨・リスニング特化',
+    },
+    {
+      id: 'story',
+      label: '📖 ショートストーリー',
+      icon: BookMarked,
+      desc: '日常、冒険、発見、ミステリーなどの満足感ある短編小説',
+    },
+    {
+      id: 'dialogue',
+      label: '💬 日常会話（Dialogue）',
+      icon: MessageSquare,
+      desc: '2人の登場人物によるテンポの良い日常会話・リアルな掛け合い',
+    },
+  ];
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
@@ -54,10 +78,10 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                物語作成スタジオ ✨
+                物語・スクリプト作成スタジオ ✨
               </h2>
               <p className="text-xs sm:text-sm text-slate-400">
-                あなたの弱点語彙を自然に組み込んだ新しいショートストーリーを生成・追加します
+                あなたの弱点語彙を自然に組み込んだポッドキャストや物語を生成します
               </p>
             </div>
           </div>
@@ -82,7 +106,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
               </div>
               <div>
                 <h3 className="text-sm sm:text-base font-bold text-white">
-                  AIがバックグラウンドで物語を執筆中...
+                  AIがバックグラウンドで執筆中...
                 </h3>
                 <p className="text-xs text-slate-300">
                   {generatingTheme ? `テーマ: 「${generatingTheme}」` : 'テーマ: おまかせ・弱点語彙注入'}（完成すると自動で本棚に追加されます）
@@ -103,12 +127,56 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
 
       {/* 2. Generation Form */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-xl space-y-6">
-        {/* Step 1: CEFR Level */}
+        {/* Step 1: Content Type Selection */}
         <div className="space-y-3">
+          <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
+            <Mic className="w-4 h-4 text-blue-400" />
+            <span>1. コンテンツの形式（タイプ）を選択:</span>
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {contentTypes.map((type) => {
+              const isSelected = contentType === type.id;
+              const Icon = type.icon;
+
+              return (
+                <button
+                  key={type.id}
+                  type="button"
+                  onClick={() => setContentType(type.id)}
+                  className={`p-4 rounded-2xl border text-left transition-all relative flex flex-col justify-between space-y-2 ${
+                    isSelected
+                      ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-500/10 ring-2 ring-blue-500/40'
+                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 font-bold text-sm text-white">
+                      <Icon className="w-4 h-4 text-blue-400" />
+                      <span>{type.label}</span>
+                    </div>
+                    {type.badge && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        {type.badge}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    {type.desc}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 2: CEFR Level */}
+        <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <div className="flex items-center justify-between">
             <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
               <Layers className="w-4 h-4 text-blue-400" />
-              <span>1. 英語難易度レベルを選択:</span>
+              <span>2. 英語難易度レベルを選択:</span>
             </label>
             <span className="text-xs text-blue-400 font-bold">
               {levelDescriptions[currentLevel]?.name}
@@ -139,11 +207,11 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 2: Word Count Target */}
+        {/* Step 3: Word Count Target */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
             <Clock className="w-4 h-4 text-blue-400" />
-            <span>2. 目標単語数（ボリューム）:</span>
+            <span>3. 目標単語数（ボリューム）:</span>
           </label>
 
           <div className="flex items-center flex-wrap gap-3">
@@ -195,10 +263,10 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 3: Theme / Prompt & Target Vocabs */}
+        {/* Step 4: Theme / Prompt & Target Vocabs */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white block">
-            3. テーマ・シチュエーション（任意）:
+            4. テーマ・シチュエーション（任意）:
           </label>
 
           <input
@@ -210,14 +278,14 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
                 handleStartGeneration();
               }
             }}
-            placeholder="例: 深夜のカフェでの偶然の再会, SF冒険, ミステリー（未指定でおまかせ）"
+            placeholder="例: 朝のルーティン, カフェでの雑談, タイムマネジメント, SF冒険（未指定でおまかせ）"
             className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-2xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
           />
 
           {dueVocabs && dueVocabs.length > 0 && (
             <div className="p-3 bg-slate-950/60 border border-blue-500/20 rounded-2xl space-y-1.5">
               <span className="text-[11px] font-bold text-blue-400 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> 今回の物語に優先注入される重要語彙 ({dueVocabs.length}個):
+                <CheckCircle2 className="w-3.5 h-3.5" /> 今回優先注入される重要語彙 ({dueVocabs.length}個):
               </span>
               <div className="flex flex-wrap gap-1.5">
                 {dueVocabs.map((v, i) => (
@@ -249,7 +317,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             ) : (
               <>
                 <Sparkles className="w-4 h-4" />
-                <span>物語を生成する（バックグラウンド）</span>
+                <span>スクリプトを生成する（バックグラウンド）</span>
               </>
             )}
           </button>

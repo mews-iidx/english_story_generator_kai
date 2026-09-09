@@ -5,13 +5,16 @@ import { StoryCreateView } from './components/StoryCreateView';
 import { ReaderView } from './components/ReaderView';
 import { QuizView } from './components/QuizView';
 import { VocabBankView } from './components/VocabBankView';
+import { AiMentorChatView } from './components/AiMentorChatView';
 import { SettingsView } from './components/SettingsView';
+import { FloatingAiAssistant } from './components/FloatingAiAssistant';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
 import { ImportStoryModal } from './components/ImportStoryModal';
 
-import { Story } from './types/story';
+import { Story, ContentType } from './types/story';
 import { VocabItem } from './types/vocab';
-import { DifficultSentenceItem } from './types/sentence';
+import { DifficultSentenceItem, DifficultyReasonCategory } from './types/sentence';
+import { ChatMessage, ChatSuggestedVocab } from './types/chat';
 import { AppSettings, DEFAULT_SETTINGS, CefrLevel } from './types/settings';
 
 import {
@@ -20,15 +23,21 @@ import {
   loadStories,
   saveStory,
   deleteStory as removeStoryFromStorage,
+  recordStoryRead,
   loadVocabs,
   recordVocabLapse,
   recordVocabMastered,
   deleteVocab as removeVocabFromStorage,
   updateVocabImportance,
   batchUpdateVocabImportance,
+  recordAnkiRating,
   loadDifficultSentences,
   saveDifficultSentence,
+  updateDifficultSentenceReason,
   deleteDifficultSentence as removeSentenceFromStorage,
+  loadChatMessages,
+  saveChatMessage,
+  clearChatMessages,
   addTokenUsage,
   resetAllData,
 } from './services/storage';
@@ -47,6 +56,8 @@ export const App: React.FC = () => {
   const [stories, setStories] = useState<Story[]>([]);
   const [vocabs, setVocabs] = useState<VocabItem[]>([]);
   const [difficultSentences, setDifficultSentences] = useState<DifficultSentenceItem[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [initialChatInput, setInitialChatInput] = useState('');
 
   // バックグラウンド生成状態
   const [isGenerating, setIsGenerating] = useState(false);
@@ -96,11 +107,13 @@ export const App: React.FC = () => {
     const st = loadStories();
     const v = loadVocabs();
     const ds = loadDifficultSentences();
+    const cm = loadChatMessages();
 
     setSettings(s);
     setStories(st);
     setVocabs(v);
     setDifficultSentences(ds);
+    setChatMessages(cm);
   }, []);
 
   // 今日の復習期日語彙（重要度順に選出）
@@ -113,11 +126,14 @@ export const App: React.FC = () => {
     return vocabs.filter(v => v.nextReviewDate <= today).length;
   }, [vocabs]);
 
+  const savedVocabPhrases = useMemo(() => {
+    return new Set(vocabs.map(v => v.phrase.toLowerCase()));
+  }, [vocabs]);
+
   const isSavedAsVocab = useMemo(() => {
     if (!selectedText) return false;
-    const norm = selectedText.trim().toLowerCase();
-    return vocabs.some(v => v.phrase.toLowerCase() === norm);
-  }, [selectedText, vocabs]);
+    return savedVocabPhrases.has(selectedText.trim().toLowerCase());
+  }, [selectedText, savedVocabPhrases]);
 
   const isSavedAsSentence = useMemo(() => {
     if (!selectedText) return false;
@@ -159,8 +175,8 @@ export const App: React.FC = () => {
     setSettings(loadSettings());
   };
 
-  // バックグラウンド非同期ストーリー生成ハンドラー
-  const handleGenerateStoryInBackground = async (userPrompt?: string, wordCount = 700) => {
+  // バックグラウンド非同期ストーリー/スクリプト生成ハンドラー
+  const handleGenerateStoryInBackground = async (userPrompt?: string, wordCount = 700, contentType: ContentType = 'podcast') => {
     if (!settings.geminiApiKey) {
       alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
       setActiveTab('settings');
@@ -169,7 +185,6 @@ export const App: React.FC = () => {
 
     setIsGenerating(true);
     setGeneratingTheme(userPrompt || '');
-    // 生成開始後、ユーザーは即座に本棚に戻れる
     setActiveTab('bookshelf');
 
     try {
@@ -180,6 +195,7 @@ export const App: React.FC = () => {
         apiKey: settings.geminiApiKey,
         model: settings.geminiModel,
         cefrLevel: settings.cefrLevel,
+        contentType,
         userPrompt,
         targetVocabs: dueVocabs,
         recentSummaries,
@@ -196,13 +212,12 @@ export const App: React.FC = () => {
       const updatedStories = [newStory, ...loadStories().filter(s => s.id !== newStory.id)];
       setStories(updatedStories);
 
-      // 読書中であれば邪魔せずトーストで優しく通知
-      setNotificationToast(`🎉 新しい物語『${newStory.title}』が本棚に追加されました！`);
+      setNotificationToast(`🎉 新しいエピソード『${newStory.title}』が本棚に追加されました！`);
 
       triggerAutoSync(vocabs, updatedStories);
     } catch (err: any) {
       console.error('Generation error', err);
-      alert(`ストーリー生成に失敗しました:\n${err.message}`);
+      alert(`スクリプト生成に失敗しました:\n${err.message}`);
     } finally {
       setIsGenerating(false);
       setGeneratingTheme('');
@@ -264,7 +279,7 @@ export const App: React.FC = () => {
     handleAddToVocab(phrase, meaning, readingStory?.storyContent);
   };
 
-  // 訳せなかった文を独立して保存（自己分析用）
+  // 訳せなかった文を保存
   const handleSaveDifficultSentence = (sentence: string, translation: string, phrase: string) => {
     saveDifficultSentence({
       sentence: sentence.trim(),
@@ -276,15 +291,34 @@ export const App: React.FC = () => {
     setDifficultSentences(loadDifficultSentences());
   };
 
+  const handleUpdateSentenceReason = (sentenceId: string, category: DifficultyReasonCategory, note: string) => {
+    updateDifficultSentenceReason(sentenceId, category, note);
+    setDifficultSentences(loadDifficultSentences());
+  };
+
   const handleDeleteDifficultSentence = (id: string) => {
     removeSentenceFromStorage(id);
     setDifficultSentences(loadDifficultSentences());
   };
 
-  // 語彙の重要度（1〜5）手動更新
+  // 語彙重要度の手動更新
   const handleUpdateVocabImportance = (vocabId: string, importance: number) => {
     updateVocabImportance(vocabId, importance);
     setVocabs(loadVocabs());
+  };
+
+  // Anki 4段階評価
+  const handleRateAnkiCard = (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => {
+    recordAnkiRating(vocabId, rating);
+    const updated = loadVocabs();
+    setVocabs(updated);
+    triggerAutoSync(updated, stories);
+  };
+
+  // 読了記録
+  const handleRecordStoryRead = (storyId: string, wpm?: number) => {
+    recordStoryRead(storyId, wpm);
+    setStories(loadStories());
   };
 
   // AIによる登録語彙の一括重要度ランク付け
@@ -334,6 +368,43 @@ export const App: React.FC = () => {
     } finally {
       setIsRankingImportance(false);
     }
+  };
+
+  // AIメンターチャット メッセージ送信ハンドラー
+  const handleSendChatMessage = (userText: string, assistantReply: string, suggestedVocabs: ChatSuggestedVocab[]) => {
+    const userMsg: ChatMessage = {
+      id: 'msg_u_' + Date.now(),
+      sender: 'user',
+      text: userText,
+      createdAt: new Date().toISOString(),
+    };
+    const botMsg: ChatMessage = {
+      id: 'msg_b_' + (Date.now() + 1),
+      sender: 'assistant',
+      text: assistantReply,
+      suggestedVocabs,
+      createdAt: new Date().toISOString(),
+    };
+
+    saveChatMessage(userMsg);
+    saveChatMessage(botMsg);
+    setChatMessages(loadChatMessages());
+  };
+
+  const handleClearChat = () => {
+    clearChatMessages();
+    setChatMessages(loadChatMessages());
+  };
+
+  // フローティングAIボタンを押した時
+  const handleOpenChatWithSelection = () => {
+    if (selectedText) {
+      setInitialChatInput(`「${selectedText}」はどういう意味・ニュアンスですか？日常会話での自然な使い方を教えてください。`);
+    } else {
+      setInitialChatInput('');
+    }
+    setReadingStory(null);
+    setActiveTab('chat');
   };
 
   // AIによる詳細ニュアンス取得
@@ -450,6 +521,7 @@ export const App: React.FC = () => {
     setStories(loadStories());
     setVocabs(loadVocabs());
     setDifficultSentences(loadDifficultSentences());
+    setChatMessages(loadChatMessages());
     setSettings(loadSettings());
   };
 
@@ -458,6 +530,7 @@ export const App: React.FC = () => {
     setStories([]);
     setVocabs([]);
     setDifficultSentences([]);
+    setChatMessages([]);
     setReadingStory(null);
     setSelectedText('');
     setIsSheetOpen(false);
@@ -470,7 +543,7 @@ export const App: React.FC = () => {
         activeTab={activeTab}
         setActiveTab={(tab) => {
           setActiveTab(tab);
-          setReadingStory(null); // タブ切り替え時は本棚や各画面へ
+          setReadingStory(null);
         }}
         dueCount={dueCount}
         isSyncing={isSyncing}
@@ -496,16 +569,19 @@ export const App: React.FC = () => {
       )}
 
       <main className="flex-1 pb-24 md:pb-12">
-        {/* 読書モード (Reader View): 本棚で本を開いたときに表示 */}
+        {/* 読書・リスニングモード (Reader View): 本棚で本を開いたときに表示 */}
         {readingStory ? (
           <ReaderView
             currentStory={readingStory}
             vocabs={vocabs}
+            difficultSentences={difficultSentences}
             onWordOrPhraseTap={handleWordOrPhraseTap}
             selectedPhrase={selectedText}
             onClearSelection={handleClearSelection}
             onMasterVocab={handleMasterVocab}
             onLapseVocab={handleLapseVocab}
+            onUpdateSentenceReason={handleUpdateSentenceReason}
+            onRecordStoryRead={handleRecordStoryRead}
             onBackToBookshelf={() => setReadingStory(null)}
           />
         ) : (
@@ -527,7 +603,7 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* 2. Story Creation Studio Tab */}
+            {/* 2. Story / Script Creation Studio Tab */}
             {activeTab === 'create' && (
               <StoryCreateView
                 currentLevel={settings.cefrLevel}
@@ -541,7 +617,22 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* 3. Quiz Tab */}
+            {/* 3. AI Mentor Chat Tab */}
+            {activeTab === 'chat' && (
+              <AiMentorChatView
+                apiKey={settings.geminiApiKey}
+                model={settings.geminiModel}
+                messages={chatMessages}
+                onSendMessage={handleSendChatMessage}
+                onAddToVocab={handleAddToVocab}
+                onClearChat={handleClearChat}
+                onRecordTokenUsage={handleRecordTokenUsage}
+                savedVocabPhrases={savedVocabPhrases}
+                initialInput={initialChatInput}
+              />
+            )}
+
+            {/* 4. Anki & Interactive Quiz Tab */}
             {activeTab === 'quiz' && (
               <QuizView
                 apiKey={settings.geminiApiKey}
@@ -552,10 +643,11 @@ export const App: React.FC = () => {
                 vocabs={vocabs}
                 onAddToVocab={handleAddToVocab}
                 onRecordTokenUsage={handleRecordTokenUsage}
+                onRateAnkiCard={handleRateAnkiCard}
               />
             )}
 
-            {/* 4. Vocab Bank Tab */}
+            {/* 5. Vocab Bank Tab */}
             {activeTab === 'vocab' && (
               <VocabBankView
                 vocabs={vocabs}
@@ -569,7 +661,7 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* 5. Settings Tab */}
+            {/* 6. Settings Tab */}
             {activeTab === 'settings' && (
               <SettingsView
                 settings={settings}
@@ -586,6 +678,12 @@ export const App: React.FC = () => {
           </>
         )}
       </main>
+
+      {/* 右下フローティングAIメンターボタン（いつでもどこからでも質問可能） */}
+      <FloatingAiAssistant
+        selectedText={selectedText}
+        onClick={handleOpenChatWithSelection}
+      />
 
       {/* 外部AIプロンプト / JSONインポートモーダル */}
       <ImportStoryModal
