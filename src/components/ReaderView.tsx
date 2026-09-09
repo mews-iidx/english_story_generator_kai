@@ -424,7 +424,24 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const handleRateHard = (cleanPhrase: string) => {
     const key = cleanPhrase.toLowerCase();
     setVocabEvaluations(prev => ({ ...prev, [key]: 'hard' }));
-    onLapseVocab(cleanPhrase, '要復習');
+    
+    // ターゲット語彙リストから日本語訳を抽出、または既存語彙から引き継ぐ
+    const targetItem = currentStory.targetVocabList?.find(t => t.toLowerCase().includes(key));
+    let meaning = '';
+    if (targetItem) {
+      const match = targetItem.match(/\(([^)]+)\)/);
+      if (match) {
+        meaning = match[1].trim();
+      }
+    }
+    if (!meaning) {
+      const existing = vocabs.find(v => v.phrase.toLowerCase() === key);
+      if (existing && existing.meaning && existing.meaning !== '要復習' && existing.meaning !== '要確認') {
+        meaning = existing.meaning;
+      }
+    }
+
+    onLapseVocab(cleanPhrase, meaning);
   };
 
   // 今回のストーリーで記録された「訳せなかった文」

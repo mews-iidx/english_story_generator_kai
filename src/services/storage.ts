@@ -135,6 +135,18 @@ export function saveVocabsBatch(vocabs: VocabItem[]): void {
   }
 }
 
+export const isInvalidVocabMeaning = (m?: string): boolean => {
+  if (!m) return true;
+  const trimmed = m.trim();
+  return (
+    trimmed === '' ||
+    trimmed === '要復習' ||
+    trimmed === '要確認' ||
+    trimmed === '（意味未設定）' ||
+    trimmed === '（翻訳取得失敗）'
+  );
+};
+
 export function recordVocabLapse(
   lookup: VocabLookupResult,
   sourceStoryId?: string
@@ -148,9 +160,15 @@ export function recordVocabLapse(
   if (existingIndex >= 0) {
     const existing = vocabs[existingIndex];
     const srs = calculateLapseSRS(existing);
+    // 有効な訳のみ更新。'要復習'などのステータス文字列で既存の日本語訳を上書きしない
+    let finalMeaning = existing.meaning;
+    if (!isInvalidVocabMeaning(lookup.meaning)) {
+      finalMeaning = lookup.meaning.trim();
+    }
+
     updatedItem = {
       ...existing,
-      meaning: lookup.meaning || existing.meaning,
+      meaning: finalMeaning,
       partOfSpeech: lookup.part_of_speech || existing.partOfSpeech,
       contextNote: lookup.explanation || existing.contextNote,
       exampleSentence: lookup.context_sentence || existing.exampleSentence,
@@ -160,10 +178,11 @@ export function recordVocabLapse(
     vocabs[existingIndex] = updatedItem;
   } else {
     const srs = calculateLapseSRS();
+    const meaning = !isInvalidVocabMeaning(lookup.meaning) ? lookup.meaning.trim() : '';
     updatedItem = {
       id: 'voc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
       phrase: lookup.phrase.trim(),
-      meaning: lookup.meaning,
+      meaning,
       partOfSpeech: lookup.part_of_speech || 'word/phrase',
       contextNote: lookup.explanation || '',
       exampleSentence: lookup.context_sentence || '',
@@ -177,6 +196,18 @@ export function recordVocabLapse(
 
   saveVocabsBatch(vocabs);
   return updatedItem;
+}
+
+export function updateVocabMeaning(vocabId: string, meaning: string): void {
+  const vocabs = loadVocabs();
+  const index = vocabs.findIndex(v => v.id === vocabId);
+  if (index >= 0) {
+    vocabs[index] = {
+      ...vocabs[index],
+      meaning: meaning.trim(),
+    };
+    saveVocabsBatch(vocabs);
+  }
 }
 
 export function recordVocabMastered(vocabId: string): void {

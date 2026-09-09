@@ -30,6 +30,8 @@ import {
   deleteVocab as removeVocabFromStorage,
   updateVocabImportance,
   batchUpdateVocabImportance,
+  saveVocabsBatch,
+  isInvalidVocabMeaning,
   recordAnkiRating,
   loadDifficultSentences,
   saveDifficultSentence,
@@ -104,7 +106,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // 初期ロード
+  // 初期ロード＆壊れた意味データ（'要復習'など）の自動修復マイグレーション
   useEffect(() => {
     const s = loadSettings();
     const st = loadStories();
@@ -117,6 +119,42 @@ export const App: React.FC = () => {
     setVocabs(v);
     setDifficultSentences(ds);
     setChatMessages(cm);
+
+    // 意味が「要復習」や空欄になっている語彙の自動翻訳修復
+    const repairCorruptedVocabs = async () => {
+      const corrupted = v.filter(item => isInvalidVocabMeaning(item.meaning));
+      if (corrupted.length === 0) return;
+
+      console.log(`[CompileEng] Auto-repairing ${corrupted.length} vocabularies with corrupted/missing meanings...`);
+      let hasUpdates = false;
+      const updatedVocabs = [...v];
+
+      for (const item of corrupted) {
+        try {
+          const res = await translateWithGoogleFree(item.phrase, s.geminiApiKey);
+          if (res?.translatedText && res.translatedText.trim() && res.translatedText.trim() !== item.phrase) {
+            const idx = updatedVocabs.findIndex(x => x.id === item.id);
+            if (idx >= 0) {
+              updatedVocabs[idx] = {
+                ...updatedVocabs[idx],
+                meaning: res.translatedText.trim(),
+              };
+              hasUpdates = true;
+            }
+          }
+        } catch (e) {
+          console.warn(`[CompileEng] Auto-repair failed for "${item.phrase}":`, e);
+        }
+      }
+
+      if (hasUpdates) {
+        saveVocabsBatch(updatedVocabs);
+        setVocabs(updatedVocabs);
+        console.log(`[CompileEng] Successfully repaired ${corrupted.length} vocabulary meanings!`);
+      }
+    };
+
+    repairCorruptedVocabs();
   }, []);
 
   // 今日の復習期日語彙（重要度順に選出）
@@ -267,7 +305,7 @@ export const App: React.FC = () => {
   const handleAddToVocab = (phrase: string, meaning: string, sentence?: string, note?: string) => {
     const lookup = {
       phrase,
-      meaning,
+      meaning: !isInvalidVocabMeaning(meaning) ? meaning.trim() : '',
       part_of_speech: 'word/phrase',
       explanation: note || '',
       context_sentence: sentence || '',
@@ -278,8 +316,25 @@ export const App: React.FC = () => {
     triggerAutoSync(updatedVocabs, stories);
   };
 
-  const handleLapseVocab = (phrase: string, meaning = '要復習') => {
-    handleAddToVocab(phrase, meaning, readingStory?.storyContent);
+  const handleLapseVocab = async (phrase: string, meaning = '') => {
+    let finalMeaning = meaning;
+    if (isInvalidVocabMeaning(finalMeaning)) {
+      const existing = vocabs.find(v => v.phrase.toLowerCase() === phrase.toLowerCase().trim());
+      if (existing && !isInvalidVocabMeaning(existing.meaning)) {
+        finalMeaning = existing.meaning;
+      }
+    }
+    if (isInvalidVocabMeaning(finalMeaning)) {
+      try {
+        const tr = await translateWithGoogleFree(phrase, settings.geminiApiKey);
+        if (tr?.translatedText && tr.translatedText.trim() !== phrase.trim()) {
+          finalMeaning = tr.translatedText.trim();
+        }
+      } catch (e) {
+        console.warn('Auto translate for lapse vocab failed:', e);
+      }
+    }
+    handleAddToVocab(phrase, finalMeaning || '', readingStory?.storyContent);
   };
 
   // 訳せなかった文を保存
