@@ -6,6 +6,8 @@ export interface VocabLookupResult {
   context_sentence?: string;
 }
 
+export type CardState = 'new' | 'learning' | 'review' | 'relearning';
+
 export interface VocabItem {
   id: string;
   phrase: string;
@@ -22,6 +24,11 @@ export interface VocabItem {
   sourceStoryId?: string;     // どのストーリー由来か
   importance?: number;        // 重要度スコア: 1〜5 (5が最重要・日常英会話必須)
   easeFactor?: number;        // Anki Ease Factor (初期値 2.5, 最小 1.3)
+  
+  // 本家Anki Learning/Relearning ステップ永続化フィールド
+  cardState?: CardState;      // 'new' | 'learning' | 'review' | 'relearning'
+  learningStep?: number;      // 0 (Step 1: 1分), 1 (Step 2: 10分)
+  dueTimestamp?: number | null; // 当日内再出題のミリ秒タイムスタンプ
 }
 
 export type VocabFilterStatus = 'all' | 'due' | 'learning' | 'mastered';

@@ -185,7 +185,7 @@ export const App: React.FC = () => {
 
   const dueCount = useMemo(() => {
     const today = getTodayDateString();
-    return vocabs.filter(v => v.nextReviewDate <= today).length;
+    return vocabs.filter(v => v.nextReviewDate <= today || v.cardState === 'learning' || v.cardState === 'relearning').length;
   }, [vocabs]);
 
   const savedVocabPhrases = useMemo(() => {

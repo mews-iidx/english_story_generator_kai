@@ -1,4 +1,4 @@
-import { VocabItem } from '../types/vocab';
+import { VocabItem, CardState } from '../types/vocab';
 import { Story } from '../types/story';
 import { ExpressionErrorItem } from '../types/expressionError';
 
@@ -20,7 +20,7 @@ export function addDaysToDate(days: number): string {
 
 /**
  * 間隔日数を人間が読みやすいラベルに変換 (Ankiスタイルの表示)
- * 例: 1 -> "1日", 6 -> "6日", 45 -> "1.5ヶ月", 400 -> "1.1年"
+ * 例: 0 -> "今日", 1 -> "1日", 6 -> "6日", 45 -> "1.5ヶ月", 400 -> "1.1年"
  */
 export function formatIntervalDays(days: number): string {
   if (days <= 0) return '今日';
@@ -41,10 +41,13 @@ export interface AnkiSRSResult {
   lapseCount: number;
   nextReviewDate: string;
   lastReviewedAt: string;
+  cardState: CardState;
+  learningStep: number;
+  dueTimestamp: number | null;
 }
 
 /**
- * 本家Anki (SuperMemo SM-2) アルゴリズムによるSRS間隔計算
+ * 本家Anki (SuperMemo SM-2 / Learning Steps 1m 10m) アルゴリズムによるSRS状態遷移計算
  */
 export function calculateAnkiSRS(
   item: Partial<VocabItem> | undefined,
@@ -55,53 +58,197 @@ export function calculateAnkiSRS(
   const currentInterval = item?.intervalDays ?? 0;
   const currentReps = item?.repetitionCount ?? 0;
   const currentLapses = item?.lapseCount ?? 0;
+  
+  // 状態の自動判別（新規 vs 復習 vs 学習中）
+  const currentState: CardState = item?.cardState ?? (currentReps === 0 ? 'new' : 'review');
+  const currentStep = item?.learningStep ?? 0;
 
   let newEF = currentEF;
-  let newInterval = 1;
+  let newInterval = currentInterval;
   let newReps = currentReps;
   let newLapses = currentLapses;
+  let newState: CardState = currentState;
+  let newStep = 0;
+  let newDueTimestamp: number | null = null;
+  let newNextReviewDate = item?.nextReviewDate || getTodayDateString();
 
-  switch (rating) {
-    case 'again': {
-      newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.20) * 100) / 100);
-      newInterval = 1;
-      newReps = 0;
-      newLapses = currentLapses + 1;
-      break;
-    }
-    case 'hard': {
-      newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.15) * 100) / 100);
-      newReps = currentReps + 1;
-      if (currentReps === 0 || currentInterval <= 1) {
-        newInterval = 1;
-      } else {
-        newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * HARD_FACTOR));
+  if (currentState === 'new' || currentState === 'learning') {
+    // ----------------------------------------------------
+    // 1. 新規・学習中ステップ (1分 ➔ 10分)
+    // ----------------------------------------------------
+    if (currentStep === 0) {
+      // Step 1 (1分ステップ)
+      switch (rating) {
+        case 'again':
+          newState = 'learning';
+          newStep = 0;
+          newDueTimestamp = Date.now() + 1 * 60 * 1000; // 1分後
+          newNextReviewDate = getTodayDateString();
+          newInterval = 0;
+          newReps = 0;
+          break;
+        case 'hard':
+          newState = 'learning';
+          newStep = 0;
+          newDueTimestamp = Date.now() + 6 * 60 * 1000; // 6分後 (中間)
+          newNextReviewDate = getTodayDateString();
+          newInterval = 0;
+          newReps = 0;
+          break;
+        case 'good':
+          // 次のステップ(10分)へ進む（※今日中にもう一度出題！）
+          newState = 'learning';
+          newStep = 1;
+          newDueTimestamp = Date.now() + 10 * 60 * 1000; // 10分後
+          newNextReviewDate = getTodayDateString();
+          newInterval = 0;
+          newReps = 0;
+          break;
+        case 'easy':
+          // 即座に4日後へ卒業
+          newState = 'review';
+          newStep = 0;
+          newDueTimestamp = null;
+          newReps = 1;
+          newInterval = 4;
+          newNextReviewDate = addDaysToDate(4);
+          newEF = Math.round((currentEF + 0.15) * 100) / 100;
+          break;
       }
-      break;
-    }
-    case 'good': {
-      newEF = currentEF;
-      newReps = currentReps + 1;
-      if (currentReps === 0) {
-        newInterval = 1;
-      } else if (currentReps === 1) {
-        newInterval = 6;
-      } else {
-        newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * currentEF));
+    } else {
+      // Step 2 (10分ステップ)
+      switch (rating) {
+        case 'again':
+          // Step 1 (1分) へ逆戻り
+          newState = 'learning';
+          newStep = 0;
+          newDueTimestamp = Date.now() + 1 * 60 * 1000;
+          newNextReviewDate = getTodayDateString();
+          newInterval = 0;
+          newReps = 0;
+          break;
+        case 'hard':
+          // 10分ステップをやり直し
+          newState = 'learning';
+          newStep = 1;
+          newDueTimestamp = Date.now() + 10 * 60 * 1000;
+          newNextReviewDate = getTodayDateString();
+          newInterval = 0;
+          newReps = 0;
+          break;
+        case 'good':
+          // 晴れて明日（1日後）へ卒業！
+          newState = 'review';
+          newStep = 0;
+          newDueTimestamp = null;
+          newReps = 1;
+          newInterval = 1;
+          newNextReviewDate = addDaysToDate(1);
+          break;
+        case 'easy':
+          // 4日後へ卒業
+          newState = 'review';
+          newStep = 0;
+          newDueTimestamp = null;
+          newReps = 1;
+          newInterval = 4;
+          newNextReviewDate = addDaysToDate(4);
+          newEF = Math.round((currentEF + 0.15) * 100) / 100;
+          break;
       }
-      break;
     }
-    case 'easy': {
-      newEF = Math.round((currentEF + 0.15) * 100) / 100;
-      newReps = currentReps + 1;
-      if (currentReps === 0) {
+  } else if (currentState === 'relearning') {
+    // ----------------------------------------------------
+    // 2. 忘却後の再学習ステップ (10分ステップ)
+    // ----------------------------------------------------
+    switch (rating) {
+      case 'again':
+        newState = 'relearning';
+        newStep = 0;
+        newDueTimestamp = Date.now() + 1 * 60 * 1000; // 1分後
+        newNextReviewDate = getTodayDateString();
+        newInterval = 0;
+        break;
+      case 'hard':
+        newState = 'relearning';
+        newStep = 0;
+        newDueTimestamp = Date.now() + 10 * 60 * 1000; // 10分後
+        newNextReviewDate = getTodayDateString();
+        newInterval = 0;
+        break;
+      case 'good':
+        // 再卒業（1日後へ）
+        newState = 'review';
+        newStep = 0;
+        newDueTimestamp = null;
+        newReps = currentReps + 1;
+        newInterval = 1;
+        newNextReviewDate = addDaysToDate(1);
+        break;
+      case 'easy':
+        // 再卒業（4日後へ）
+        newState = 'review';
+        newStep = 0;
+        newDueTimestamp = null;
+        newReps = currentReps + 1;
         newInterval = 4;
-      } else if (currentReps === 1) {
-        newInterval = Math.round(6 * newEF * EASY_BONUS);
-      } else {
-        newInterval = Math.max(currentInterval + 2, Math.round(currentInterval * newEF * EASY_BONUS));
-      }
-      break;
+        newNextReviewDate = addDaysToDate(4);
+        newEF = Math.round((currentEF + 0.15) * 100) / 100;
+        break;
+    }
+  } else {
+    // ----------------------------------------------------
+    // 3. 復習フェーズ (Review Phase: 1日以上定着済みのカード)
+    // ----------------------------------------------------
+    switch (rating) {
+      case 'again':
+        // 忘却 (Lapse) ➔ 再学習キューへ転落（今日10分後再出題）
+        newState = 'relearning';
+        newStep = 0;
+        newDueTimestamp = Date.now() + 10 * 60 * 1000; // 10分後
+        newNextReviewDate = getTodayDateString();
+        newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.20) * 100) / 100);
+        newInterval = 1;
+        newReps = 0;
+        newLapses = currentLapses + 1;
+        break;
+      case 'hard':
+        // 間隔 1.2倍
+        newState = 'review';
+        newStep = 0;
+        newDueTimestamp = null;
+        newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.15) * 100) / 100);
+        newReps = currentReps + 1;
+        newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * HARD_FACTOR));
+        newNextReviewDate = addDaysToDate(newInterval);
+        break;
+      case 'good':
+        // 間隔 EF倍
+        newState = 'review';
+        newStep = 0;
+        newDueTimestamp = null;
+        newReps = currentReps + 1;
+        if (currentInterval <= 1) {
+          newInterval = 6;
+        } else {
+          newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * currentEF));
+        }
+        newNextReviewDate = addDaysToDate(newInterval);
+        break;
+      case 'easy':
+        // 間隔 EF * 1.3倍
+        newState = 'review';
+        newStep = 0;
+        newDueTimestamp = null;
+        newEF = Math.round((currentEF + 0.15) * 100) / 100;
+        newReps = currentReps + 1;
+        if (currentInterval <= 1) {
+          newInterval = Math.round(6 * newEF * EASY_BONUS);
+        } else {
+          newInterval = Math.max(currentInterval + 2, Math.round(currentInterval * newEF * EASY_BONUS));
+        }
+        newNextReviewDate = addDaysToDate(newInterval);
+        break;
     }
   }
 
@@ -110,8 +257,11 @@ export function calculateAnkiSRS(
     intervalDays: newInterval,
     repetitionCount: newReps,
     lapseCount: newLapses,
-    nextReviewDate: addDaysToDate(newInterval),
+    nextReviewDate: newNextReviewDate,
     lastReviewedAt: now,
+    cardState: newState,
+    learningStep: newStep,
+    dueTimestamp: newDueTimestamp,
   };
 }
 
@@ -124,13 +274,46 @@ export function getNextReviewIntervals(item: Partial<VocabItem> | undefined): {
   good: string;
   easy: string;
 } {
-  const isNewOrLapse = (item?.repetitionCount ?? 0) === 0;
-  
+  const state: CardState = item?.cardState ?? ((item?.repetitionCount ?? 0) === 0 ? 'new' : 'review');
+  const step = item?.learningStep ?? 0;
+
+  if (state === 'new' || state === 'learning') {
+    if (step === 0) {
+      return {
+        again: '< 1分',
+        hard: '< 6分',
+        good: '< 10分',
+        easy: '4日',
+      };
+    } else {
+      return {
+        again: '< 1分',
+        hard: '< 10分',
+        good: '1日',
+        easy: '4日',
+      };
+    }
+  }
+
+  if (state === 'relearning') {
+    return {
+      again: '< 1分',
+      hard: '< 10分',
+      good: '1日',
+      easy: '4日',
+    };
+  }
+
+  // Review
+  const hardRes = calculateAnkiSRS(item, 'hard');
+  const goodRes = calculateAnkiSRS(item, 'good');
+  const easyRes = calculateAnkiSRS(item, 'easy');
+
   return {
-    again: '< 1分',
-    hard: isNewOrLapse ? '< 10分' : formatIntervalDays(calculateAnkiSRS(item, 'hard').intervalDays),
-    good: formatIntervalDays(calculateAnkiSRS(item, 'good').intervalDays),
-    easy: formatIntervalDays(calculateAnkiSRS(item, 'easy').intervalDays),
+    again: '< 10分',
+    hard: formatIntervalDays(hardRes.intervalDays),
+    good: formatIntervalDays(goodRes.intervalDays),
+    easy: formatIntervalDays(easyRes.intervalDays),
   };
 }
 
@@ -146,6 +329,9 @@ export function calculateLapseSRS(existing?: VocabItem) {
     nextReviewDate: res.nextReviewDate,
     lastReviewedAt: res.lastReviewedAt,
     easeFactor: res.easeFactor,
+    cardState: res.cardState,
+    learningStep: res.learningStep,
+    dueTimestamp: res.dueTimestamp,
   };
 }
 
@@ -157,6 +343,9 @@ export function calculateSuccessSRS(item: VocabItem) {
     nextReviewDate: res.nextReviewDate,
     lastReviewedAt: res.lastReviewedAt,
     easeFactor: res.easeFactor,
+    cardState: res.cardState,
+    learningStep: res.learningStep,
+    dueTimestamp: res.dueTimestamp,
   };
 }
 

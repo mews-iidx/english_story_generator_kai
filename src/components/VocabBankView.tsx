@@ -51,7 +51,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
         if (!matchesSearch) return false;
 
         if (statusFilter === 'due') {
-          return v.nextReviewDate <= today;
+          return v.nextReviewDate <= today || v.cardState === 'learning' || v.cardState === 'relearning';
         }
         if (statusFilter === 'mastered') {
           return v.repetitionCount >= 4;
@@ -92,7 +92,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
     });
   }, [difficultSentences, searchTerm]);
 
-  const dueCount = vocabs.filter(v => v.nextReviewDate <= today).length;
+  const dueCount = vocabs.filter(v => v.nextReviewDate <= today || v.cardState === 'learning' || v.cardState === 'relearning').length;
   const masteredCount = vocabs.filter(v => v.repetitionCount >= 4).length;
   const learningCount = vocabs.filter(v => v.repetitionCount < 4).length;
   const unrankedCount = vocabs.filter(v => v.importance === undefined || v.importance === null).length;
@@ -309,7 +309,17 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
                               {isUnranked ? '未判定' : `★${currentImportance}`}
                             </span>
 
-                            {isDue && (
+                            {vocab.cardState === 'learning' && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                                ⚡ 学習中 ({vocab.learningStep === 1 ? '10分' : '1分'})
+                              </span>
+                            )}
+                            {vocab.cardState === 'relearning' && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                                🔄 再学習中 (10分)
+                              </span>
+                            )}
+                            {isDue && !vocab.cardState && (
                               <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
                                 復習期日
                               </span>
