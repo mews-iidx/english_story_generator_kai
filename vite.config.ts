@@ -9,11 +9,11 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'vite.svg'],
+      includeAssets: ['favicon.png', 'apple-touch-icon.png'],
       manifest: {
-        name: 'StoryKai - 英語読解＆語彙定着',
-        short_name: 'StoryKai',
-        description: 'Geminiと忘却曲線で学ぶ、パーソナライズ英語リーダー',
+        name: 'CompileEng - リアルタイム英語コンパイル',
+        short_name: 'CompileEng',
+        description: 'リアルタイム英語コンパイル＆Input統合ステーション',
         theme_color: '#020617',
         background_color: '#020617',
         display: 'standalone',

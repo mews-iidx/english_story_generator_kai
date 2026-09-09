@@ -351,7 +351,7 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
     };
   }
 
-  const systemInstruction = `あなたは親しみやすく優秀な英語パーソナルメンター「StoryKai AI」です。
+  const systemInstruction = `あなたは親しみやすく優秀な英語パーソナルメンター「CompileEng AI」です。
 ユーザーは英語のリアルタイムコンパイル（頭から瞬時に意味を理解する力）と日常英会話リスニング・スピーキングの上達を目指しています。
 ユーザーの質問（「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など）に、分かりやすく温かいトーンで答えてください。
 

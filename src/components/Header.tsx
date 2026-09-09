@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Sparkles, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot } from 'lucide-react';
+import { BookOpen, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot } from 'lucide-react';
 
 export type NavTab = 'bookshelf' | 'create' | 'chat' | 'quiz' | 'vocab' | 'settings';
 
@@ -54,15 +54,15 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setActiveTab('bookshelf')}
             className="flex items-center space-x-2 cursor-pointer group"
           >
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
-              <Sparkles className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-cyan-500/20 group-hover:scale-105 transition-transform border border-cyan-400/30">
+              <Zap className="w-4 h-4 text-white fill-white" />
             </div>
             <div className="flex items-baseline space-x-1.5">
-              <span className="font-extrabold text-base sm:text-lg tracking-tight bg-gradient-to-r from-blue-400 via-sky-300 to-indigo-400 bg-clip-text text-transparent">
-                StoryKai
+              <span className="font-extrabold text-base sm:text-lg tracking-tight bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-400 bg-clip-text text-transparent">
+                CompileEng
               </span>
-              <span className="text-[10px] uppercase font-bold text-blue-500/80 tracking-widest hidden sm:inline">
-                Reader & Listen
+              <span className="text-[10px] uppercase font-bold text-cyan-500/80 tracking-widest hidden sm:inline">
+                Realtime Input
               </span>
             </div>
           </div>

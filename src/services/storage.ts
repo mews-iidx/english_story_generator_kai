@@ -368,7 +368,7 @@ export function loadChatMessages(): ChatMessage[] {
         {
           id: 'welcome_msg',
           sender: 'assistant',
-          text: 'こんにちは！AI英語メンターのStoryKaiです。✨\n「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など、疑問に思ったことを何でも質問してください。回答からワンタップで語彙帳やAnkiに登録できます！',
+          text: 'こんにちは！AI英語メンターのCompileEngです。⚡\n「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など、疑問に思ったことを何でも質問してください。回答からワンタップで語彙帳やAnkiに登録できます！',
           createdAt: new Date().toISOString(),
         }
       ];
