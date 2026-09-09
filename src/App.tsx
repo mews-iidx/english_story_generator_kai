@@ -393,9 +393,16 @@ export const App: React.FC = () => {
       return;
     }
 
+    // まだランク（重要度）がついていない未判定の語彙のみを対象にする
+    const unrankedVocabs = currentVocabs.filter(v => v.importance === undefined || v.importance === null);
+    if (unrankedVocabs.length === 0) {
+      alert('すべての語彙の重要度ランク付け（★1〜★5）が完了しています！');
+      return;
+    }
+
     setIsRankingImportance(true);
     try {
-      const itemsToRank = currentVocabs.map(v => ({
+      const itemsToRank = unrankedVocabs.map(v => ({
         id: v.id,
         phrase: v.phrase,
         meaning: v.meaning,
@@ -416,7 +423,7 @@ export const App: React.FC = () => {
         const updated = loadVocabs();
         setVocabs(updated);
         triggerAutoSync(updated, stories);
-        alert(`✨ ${res.rankings.length}件の語彙の重要度ランク付けが完了しました！`);
+        alert(`✨ ${res.rankings.length}件の未判定語彙の重要度ランク付けが完了しました！`);
       } else {
         alert('重要度スコアの取得に失敗しました。');
       }

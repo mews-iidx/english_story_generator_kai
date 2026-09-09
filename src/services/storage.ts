@@ -187,7 +187,7 @@ export function recordVocabLapse(
       contextNote: lookup.explanation || '',
       exampleSentence: lookup.context_sentence || '',
       ...srs,
-      importance: 3,
+      importance: undefined,
       createdAt: new Date().toISOString(),
       sourceStoryId,
     };

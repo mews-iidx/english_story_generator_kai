@@ -90,19 +90,20 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
   const dueCount = vocabs.filter(v => v.nextReviewDate <= today).length;
   const masteredCount = vocabs.filter(v => v.repetitionCount >= 4).length;
   const learningCount = vocabs.filter(v => v.repetitionCount < 4).length;
+  const unrankedCount = vocabs.filter(v => v.importance === undefined || v.importance === null).length;
 
   const toggleExpand = (id: string) => {
     setExpandedId(prev => (prev === id ? null : id));
   };
 
-  const getImportanceLabel = (imp: number = 3) => {
+  const getImportanceLabel = (imp?: number) => {
     switch (imp) {
-      case 5: return '⭐⭐⭐⭐⭐ 日常必須・超重要';
-      case 4: return '⭐⭐⭐⭐ 重要・頻出';
-      case 3: return '⭐⭐⭐ 標準';
-      case 2: return '⭐⭐ やや専門的';
-      case 1: return '⭐ 稀・難解';
-      default: return '⭐⭐⭐ 標準';
+      case 5: return '⭐⭐⭐⭐⭐ 日常必須・超重要 (A1/A2)';
+      case 4: return '⭐⭐⭐⭐ 重要・頻出 (A2/B1)';
+      case 3: return '⭐⭐⭐ 標準 (B1)';
+      case 2: return '⭐⭐ やや専門的 (B2)';
+      case 1: return '⭐ 稀・難解 (C1+)';
+      default: return '⚪ 未判定（AI判定待ち）';
     }
   };
 
@@ -137,13 +138,13 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
             </button>
           </div>
 
-          {/* AI Rank Importance Button */}
+          {/* AI Rank Importance Button (未判定のみを対象) */}
           {activeTab === 'words' && onRankVocabImportance && (
             <button
               onClick={onRankVocabImportance}
               disabled={isRankingImportance || vocabs.length === 0}
               className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-              title="日常英会話における重要度（★1〜★5）をAIで自動判定します"
+              title="まだ重要度が判定されていない語彙のみを対象に、AIで重要度（★1〜★5）を自動判定します"
             >
               {isRankingImportance ? (
                 <>
@@ -153,7 +154,11 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
-                  <span>AIで重要度を自動ランク付け</span>
+                  <span>
+                    {unrankedCount > 0
+                      ? `未判定語彙 (${unrankedCount}件) をAIランク付け`
+                      : '全語彙ランク判定済み ✨'}
+                  </span>
                 </>
               )}
             </button>
@@ -251,6 +256,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
               {filteredVocabs.map((vocab) => {
                 const isDue = vocab.nextReviewDate <= today;
                 const isExpanded = expandedId === vocab.id;
+                const isUnranked = vocab.importance === undefined || vocab.importance === null;
                 const currentImportance = vocab.importance ?? 3;
 
                 return (
@@ -289,11 +295,13 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
 
                             {/* Importance Badge */}
                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
-                              currentImportance >= 4
+                              isUnranked
+                                ? 'bg-slate-950 text-slate-400 border-slate-800'
+                                : currentImportance >= 4
                                 ? 'bg-amber-950/60 text-amber-300 border-amber-500/40'
                                 : 'bg-slate-800 text-slate-300 border-slate-700'
                             }`}>
-                              ★{currentImportance}
+                              {isUnranked ? '未判定' : `★${currentImportance}`}
                             </span>
 
                             {isDue && (
@@ -351,7 +359,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
                         <div className="flex items-center justify-between bg-slate-900/60 p-2.5 rounded-xl border border-slate-800">
                           <span className="text-slate-300 font-medium flex items-center gap-1">
                             <span>日常会話における重要度:</span>
-                            <strong className="text-amber-400 font-bold ml-1">{getImportanceLabel(currentImportance)}</strong>
+                            <strong className="text-amber-400 font-bold ml-1">{getImportanceLabel(vocab.importance)}</strong>
                           </span>
 
                           <div className="flex items-center space-x-1">
