@@ -21,6 +21,7 @@ export interface VocabItem {
   createdAt: string;          // ISO timestamp
   sourceStoryId?: string;     // どのストーリー由来か
   importance?: number;        // 重要度スコア: 1〜5 (5が最重要・日常英会話必須)
+  easeFactor?: number;        // Anki Ease Factor (初期値 2.5, 最小 1.3)
 }
 
 export type VocabFilterStatus = 'all' | 'due' | 'learning' | 'mastered';

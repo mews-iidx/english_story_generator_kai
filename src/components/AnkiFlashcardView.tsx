@@ -3,7 +3,7 @@ import { VocabItem } from '../types/vocab';
 import { Volume2, Sparkles, CheckCircle2, RotateCcw, ArrowRight, Star, ChevronDown, ChevronUp, BookOpen } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
-import { getTodayDateString } from '../utils/srs';
+import { getTodayDateString, getNextReviewIntervals } from '../utils/srs';
 
 interface AnkiFlashcardViewProps {
   vocabs: VocabItem[];
@@ -31,6 +31,11 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
 
   const currentCard = dueQueue[currentIndex];
+
+  // 次回間隔プレビュー（Anki本家同様に各ボタンに表示）
+  const nextIntervals = useMemo(() => {
+    return getNextReviewIntervals(currentCard);
+  }, [currentCard]);
 
   useEffect(() => {
     setIsFlipped(false);
@@ -97,6 +102,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   }
 
   const importance = currentCard.importance ?? 3;
+  const easePercent = Math.round((currentCard.easeFactor ?? 2.5) * 100);
 
   return (
     <div className="max-w-xl mx-auto space-y-3">
@@ -222,16 +228,21 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           )}
         </div>
 
-        {/* Card Footer info */}
-        <div className="text-center text-[10px] text-slate-500 flex-shrink-0">
-          定着回数: {currentCard.repetitionCount}回 (間隔: {currentCard.intervalDays}日)
+        {/* Card Footer info: Repetition, Interval, and Ease Factor */}
+        <div className="text-center text-[10px] text-slate-500 flex-shrink-0 flex items-center justify-center gap-2">
+          <span>定着回数: <strong className="text-slate-400">{currentCard.repetitionCount}回</strong></span>
+          <span>•</span>
+          <span>現在間隔: <strong className="text-slate-400">{currentCard.intervalDays}日</strong></span>
+          <span>•</span>
+          <span>Ease: <strong className="text-slate-400">{easePercent}%</strong></span>
         </div>
       </div>
 
-      {/* Fixed-Height Action Buttons Area (高さ64pxで完全固定。ボタンの位置が絶対にズレない) */}
+      {/* Fixed-Height Action Buttons Area (高さ64pxで完全固定。各ボタンに次回期日を動的バッジ表示) */}
       <div className="h-[64px] flex items-center">
         {isFlipped ? (
           <div className="grid grid-cols-4 gap-2 w-full animate-fadeIn">
+            {/* 1. Again (もう一度) */}
             <button
               type="button"
               onClick={() => handleRating('again')}
@@ -239,9 +250,12 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             >
               <span className="text-sm">🔴</span>
               <span>Again</span>
-              <span className="text-[9px] text-red-400/80 font-normal">1分後</span>
+              <span className="text-[9px] text-red-300 font-semibold bg-red-900/40 px-1.5 py-0.2 rounded mt-0.5">
+                {nextIntervals.again}
+              </span>
             </button>
 
+            {/* 2. Hard (難しい) */}
             <button
               type="button"
               onClick={() => handleRating('hard')}
@@ -249,9 +263,12 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             >
               <span className="text-sm">🟠</span>
               <span>Hard</span>
-              <span className="text-[9px] text-amber-400/80 font-normal">1日後</span>
+              <span className="text-[9px] text-amber-300 font-semibold bg-amber-900/40 px-1.5 py-0.2 rounded mt-0.5">
+                {nextIntervals.hard}
+              </span>
             </button>
 
+            {/* 3. Good (普通) */}
             <button
               type="button"
               onClick={() => handleRating('good')}
@@ -259,9 +276,12 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             >
               <span className="text-sm">🟢</span>
               <span>Good</span>
-              <span className="text-[9px] text-emerald-400/80 font-normal">3〜4日後</span>
+              <span className="text-[9px] text-emerald-300 font-semibold bg-emerald-900/40 px-1.5 py-0.2 rounded mt-0.5">
+                {nextIntervals.good}
+              </span>
             </button>
 
+            {/* 4. Easy (簡単) */}
             <button
               type="button"
               onClick={() => handleRating('easy')}
@@ -269,7 +289,9 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             >
               <span className="text-sm">🔵</span>
               <span>Easy</span>
-              <span className="text-[9px] text-cyan-400/80 font-normal">7日後</span>
+              <span className="text-[9px] text-cyan-200 font-semibold bg-blue-900/40 px-1.5 py-0.2 rounded mt-0.5">
+                {nextIntervals.easy}
+              </span>
             </button>
           </div>
         ) : (

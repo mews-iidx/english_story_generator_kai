@@ -1,6 +1,11 @@
 import { VocabItem } from '../types/vocab';
 import { Story } from '../types/story';
 
+export const DEFAULT_EASE_FACTOR = 2.5; // 初期 Ease Factor (250%)
+export const MIN_EASE_FACTOR = 1.3;     // 最小 Ease Factor (130%)
+export const EASY_BONUS = 1.3;          // Easy選択時のボーナス倍率
+export const HARD_FACTOR = 1.2;         // Hard選択時の間隔倍率
+
 export function getTodayDateString(): string {
   const now = new Date();
   return now.toISOString().split('T')[0];
@@ -12,38 +17,169 @@ export function addDaysToDate(days: number): string {
   return d.toISOString().split('T')[0];
 }
 
-export function calculateLapseSRS(existing?: VocabItem): {
-  lapseCount: number;
-  repetitionCount: number;
+/**
+ * 間隔日数を人間が読みやすいラベルに変換 (Ankiスタイルの表示)
+ * 例: 1 -> "1日", 6 -> "6日", 45 -> "1.5ヶ月", 400 -> "1.1年"
+ */
+export function formatIntervalDays(days: number): string {
+  if (days <= 0) return '今日';
+  if (days === 1) return '1日';
+  if (days < 30) return `${days}日`;
+  if (days < 365) {
+    const months = (days / 30).toFixed(1).replace(/\.0$/, '');
+    return `${months}ヶ月`;
+  }
+  const years = (days / 365).toFixed(1).replace(/\.0$/, '');
+  return `${years}年`;
+}
+
+export interface AnkiSRSResult {
+  easeFactor: number;
   intervalDays: number;
+  repetitionCount: number;
+  lapseCount: number;
   nextReviewDate: string;
   lastReviewedAt: string;
-} {
+}
+
+/**
+ * 本家Anki (SuperMemo SM-2) アルゴリズムによるSRS間隔計算
+ *
+ * 1. Again (もう一度 / 忘れた):
+ *    - Ease Factor: -0.20 (下限 1.3)
+ *    - 間隔: 1日 (Lapseリセット)
+ *    - repetitionCount: 0, lapseCount: +1
+ *
+ * 2. Hard (難しい / 苦戦):
+ *    - Ease Factor: -0.15 (下限 1.3)
+ *    - 間隔: 前回間隔 * 1.2 (最低+1日) / 新規時は1日
+ *    - repetitionCount: +1
+ *
+ * 3. Good (普通 / 正解):
+ *    - Ease Factor: 変動なし
+ *    - 間隔:
+ *        repetitionCount 0 -> 1日
+ *        repetitionCount 1 -> 6日 (Anki標準のGraduating step)
+ *        repetitionCount >= 2 -> 前回間隔 * EaseFactor
+ *    - repetitionCount: +1
+ *
+ * 4. Easy (簡単 / 余裕):
+ *    - Ease Factor: +0.15
+ *    - 間隔:
+ *        repetitionCount 0 -> 4日 (Anki標準のEasy interval初期値)
+ *        repetitionCount 1 -> round(6 * EaseFactor * 1.3) (約20日)
+ *        repetitionCount >= 2 -> round(前回間隔 * EaseFactor * 1.3)
+ *    - repetitionCount: +1
+ */
+export function calculateAnkiSRS(
+  item: Partial<VocabItem> | undefined,
+  rating: 'again' | 'hard' | 'good' | 'easy'
+): AnkiSRSResult {
   const now = new Date().toISOString();
+  const currentEF = item?.easeFactor ?? DEFAULT_EASE_FACTOR;
+  const currentInterval = item?.intervalDays ?? 0;
+  const currentReps = item?.repetitionCount ?? 0;
+  const currentLapses = item?.lapseCount ?? 0;
+
+  let newEF = currentEF;
+  let newInterval = 1;
+  let newReps = currentReps;
+  let newLapses = currentLapses;
+
+  switch (rating) {
+    case 'again': {
+      newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.20) * 100) / 100);
+      newInterval = 1;
+      newReps = 0;
+      newLapses = currentLapses + 1;
+      break;
+    }
+    case 'hard': {
+      newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.15) * 100) / 100);
+      newReps = currentReps + 1;
+      if (currentReps === 0 || currentInterval <= 1) {
+        newInterval = 1;
+      } else {
+        newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * HARD_FACTOR));
+      }
+      break;
+    }
+    case 'good': {
+      newEF = currentEF;
+      newReps = currentReps + 1;
+      if (currentReps === 0) {
+        newInterval = 1;
+      } else if (currentReps === 1) {
+        newInterval = 6;
+      } else {
+        newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * currentEF));
+      }
+      break;
+    }
+    case 'easy': {
+      newEF = Math.round((currentEF + 0.15) * 100) / 100;
+      newReps = currentReps + 1;
+      if (currentReps === 0) {
+        newInterval = 4;
+      } else if (currentReps === 1) {
+        newInterval = Math.round(6 * newEF * EASY_BONUS);
+      } else {
+        newInterval = Math.max(currentInterval + 2, Math.round(currentInterval * newEF * EASY_BONUS));
+      }
+      break;
+    }
+  }
+
   return {
-    lapseCount: (existing?.lapseCount || 0) + 1,
-    repetitionCount: 0,
-    intervalDays: 1,
-    nextReviewDate: addDaysToDate(1),
+    easeFactor: newEF,
+    intervalDays: newInterval,
+    repetitionCount: newReps,
+    lapseCount: newLapses,
+    nextReviewDate: addDaysToDate(newInterval),
     lastReviewedAt: now,
   };
 }
 
-export function calculateSuccessSRS(item: VocabItem): {
-  repetitionCount: number;
-  intervalDays: number;
-  nextReviewDate: string;
-  lastReviewedAt: string;
+/**
+ * ボタン表示用に各レーティングを選んだ時の次回期日ラベルを取得
+ */
+export function getNextReviewIntervals(item: Partial<VocabItem> | undefined): {
+  again: string;
+  hard: string;
+  good: string;
+  easy: string;
 } {
-  const intervals = [1, 3, 7, 14, 30, 60, 120];
-  const nextRep = item.repetitionCount + 1;
-  const nextInterval = intervals[Math.min(nextRep, intervals.length - 1)];
-  
   return {
-    repetitionCount: nextRep,
-    intervalDays: nextInterval,
-    nextReviewDate: addDaysToDate(nextInterval),
-    lastReviewedAt: new Date().toISOString(),
+    again: formatIntervalDays(calculateAnkiSRS(item, 'again').intervalDays),
+    hard: formatIntervalDays(calculateAnkiSRS(item, 'hard').intervalDays),
+    good: formatIntervalDays(calculateAnkiSRS(item, 'good').intervalDays),
+    easy: formatIntervalDays(calculateAnkiSRS(item, 'easy').intervalDays),
+  };
+}
+
+/**
+ * 互換性のための既存関数（calculateLapseSRS / calculateSuccessSRS）
+ */
+export function calculateLapseSRS(existing?: VocabItem) {
+  const res = calculateAnkiSRS(existing, 'again');
+  return {
+    lapseCount: res.lapseCount,
+    repetitionCount: res.repetitionCount,
+    intervalDays: res.intervalDays,
+    nextReviewDate: res.nextReviewDate,
+    lastReviewedAt: res.lastReviewedAt,
+    easeFactor: res.easeFactor,
+  };
+}
+
+export function calculateSuccessSRS(item: VocabItem) {
+  const res = calculateAnkiSRS(item, 'good');
+  return {
+    repetitionCount: res.repetitionCount,
+    intervalDays: res.intervalDays,
+    nextReviewDate: res.nextReviewDate,
+    lastReviewedAt: res.lastReviewedAt,
+    easeFactor: res.easeFactor,
   };
 }
 

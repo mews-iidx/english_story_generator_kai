@@ -4,7 +4,7 @@ import { Story } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { ChatMessage } from '../types/chat';
 import { Persona, CallSession } from '../types/persona';
-import { calculateLapseSRS, calculateSuccessSRS, addDaysToDate } from '../utils/srs';
+import { calculateLapseSRS, calculateSuccessSRS, calculateAnkiSRS } from '../utils/srs';
 
 const STORAGE_KEYS = {
   SETTINGS: 'storykai_settings_v1',
@@ -266,7 +266,7 @@ export function batchUpdateVocabImportance(updates: { id: string; importance: nu
   }
 }
 
-// Anki 4段階評価 (again, hard, good, easy)
+// Anki 4段階評価 (again, hard, good, easy) - 本家Anki SM-2 SRSアルゴリズム
 export function recordAnkiRating(
   vocabId: string,
   rating: 'again' | 'hard' | 'good' | 'easy'
@@ -276,51 +276,12 @@ export function recordAnkiRating(
   if (index < 0) return null;
 
   const item = vocabs[index];
-  const now = new Date().toISOString();
-  let updated: VocabItem;
+  const srs = calculateAnkiSRS(item, rating);
 
-  if (rating === 'again') {
-    updated = {
-      ...item,
-      lapseCount: item.lapseCount + 1,
-      repetitionCount: 0,
-      intervalDays: 1,
-      nextReviewDate: addDaysToDate(1),
-      lastReviewedAt: now,
-    };
-  } else if (rating === 'hard') {
-    const nextInterval = Math.max(1, Math.round(item.intervalDays * 1.2));
-    updated = {
-      ...item,
-      repetitionCount: Math.max(1, item.repetitionCount),
-      intervalDays: nextInterval,
-      nextReviewDate: addDaysToDate(nextInterval),
-      lastReviewedAt: now,
-    };
-  } else if (rating === 'good') {
-    const intervals = [1, 3, 7, 14, 30, 60, 120];
-    const nextRep = item.repetitionCount + 1;
-    const nextInterval = intervals[Math.min(nextRep, intervals.length - 1)];
-    updated = {
-      ...item,
-      repetitionCount: nextRep,
-      intervalDays: nextInterval,
-      nextReviewDate: addDaysToDate(nextInterval),
-      lastReviewedAt: now,
-    };
-  } else {
-    // easy
-    const intervals = [3, 7, 14, 30, 60, 120, 240];
-    const nextRep = item.repetitionCount + 2;
-    const nextInterval = intervals[Math.min(nextRep, intervals.length - 1)];
-    updated = {
-      ...item,
-      repetitionCount: nextRep,
-      intervalDays: nextInterval,
-      nextReviewDate: addDaysToDate(nextInterval),
-      lastReviewedAt: now,
-    };
-  }
+  const updated: VocabItem = {
+    ...item,
+    ...srs,
+  };
 
   vocabs[index] = updated;
   saveVocabsBatch(vocabs);
