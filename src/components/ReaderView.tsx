@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Tag, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck } from 'lucide-react';
+import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Tag, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, ChevronLeft, BookmarkPlus, Zap } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
+import { translateWithGoogleFree } from '../services/translate';
 
 interface ReaderViewProps {
   currentStory: Story;
@@ -15,6 +16,7 @@ interface ReaderViewProps {
   onClearSelection: () => void;
   onMasterVocab: (vocabId: string) => void;
   onLapseVocab: (phrase: string, meaning: string) => void;
+  onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onUpdateSentenceReason?: (sentenceId: string, category: DifficultyReasonCategory, note: string) => void;
   onRecordStoryRead?: (storyId: string, wpm?: number) => void;
   onBackToBookshelf: () => void;
@@ -38,13 +40,22 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onClearSelection,
   onMasterVocab,
   onLapseVocab,
+  onSaveDifficultSentence,
   onUpdateSentenceReason,
   onRecordStoryRead,
   onBackToBookshelf,
 }) => {
   const [viewMode, setViewMode] = useState<'read' | 'listen'>('read');
+  const [listeningStyle, setListeningStyle] = useState<'step_by_step' | 'continuous'>('step_by_step');
   const [speechRate, setSpeechRate] = useState<number>(0.95);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+  // 一文ずつリスニングモードの状態
+  const [currentSentenceIdx, setCurrentSentenceIdx] = useState(0);
+  const [showSentenceEnglish, setShowSentenceEnglish] = useState(false);
+  const [showSentenceTranslation, setShowSentenceTranslation] = useState(false);
+  const [sentenceTranslationText, setSentenceTranslationText] = useState('');
+  const [isTranslatingSentence, setIsTranslatingSentence] = useState(false);
 
   const [showTranslation, setShowTranslation] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
@@ -71,6 +82,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setVocabEvaluations({});
     stopSpeech();
     setIsPlayingAudio(false);
+    setCurrentSentenceIdx(0);
+    setShowSentenceEnglish(false);
+    setShowSentenceTranslation(false);
+    setSentenceTranslationText('');
   }, [currentStory.id]);
 
   useEffect(() => {
@@ -104,9 +119,103 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     };
   }, [selectedPhrase, onClearSelection]);
 
+  // 段落リスト
   const paragraphs = useMemo(() => {
     return currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
   }, [currentStory.storyContent]);
+
+  // 一文ごとのリスト（一文リスニング用）
+  const sentenceList = useMemo(() => {
+    const result: { id: number; text: string; pIdx: number }[] = [];
+    let counter = 0;
+
+    paragraphs.forEach((p, pIdx) => {
+      const rawSentences = p.match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [p];
+      rawSentences.forEach((raw) => {
+        const trimmed = raw.trim();
+        if (trimmed.length > 0) {
+          result.push({
+            id: counter++,
+            text: trimmed,
+            pIdx,
+          });
+        }
+      });
+    });
+
+    return result;
+  }, [paragraphs]);
+
+  const currentSentence = sentenceList[currentSentenceIdx];
+
+  // 一文再生ハンドラー
+  const handlePlaySentence = useCallback((index: number) => {
+    const target = sentenceList[index];
+    if (!target) return;
+
+    stopSpeech();
+    setIsPlayingAudio(true);
+    speakText(target.text, speechRate, 'en-US', () => {
+      setIsPlayingAudio(false);
+    });
+  }, [sentenceList, speechRate]);
+
+  // 一文モードで次の文に進む
+  const handleNextSentence = () => {
+    if (currentSentenceIdx + 1 < sentenceList.length) {
+      const nextIdx = currentSentenceIdx + 1;
+      setCurrentSentenceIdx(nextIdx);
+      setShowSentenceEnglish(false);
+      setShowSentenceTranslation(false);
+      setSentenceTranslationText('');
+      handlePlaySentence(nextIdx);
+    }
+  };
+
+  // 一文モードで前の文に戻る
+  const handlePrevSentence = () => {
+    if (currentSentenceIdx > 0) {
+      const prevIdx = currentSentenceIdx - 1;
+      setCurrentSentenceIdx(prevIdx);
+      setShowSentenceEnglish(false);
+      setShowSentenceTranslation(false);
+      setSentenceTranslationText('');
+      handlePlaySentence(prevIdx);
+    }
+  };
+
+  // 一文モードの日本語訳取得＆表示
+  const handleFetchSentenceTranslation = async () => {
+    if (!currentSentence) return;
+    if (showSentenceTranslation) {
+      setShowSentenceTranslation(false);
+      return;
+    }
+
+    if (sentenceTranslationText) {
+      setShowSentenceTranslation(true);
+      return;
+    }
+
+    setIsTranslatingSentence(true);
+    try {
+      const res = await translateWithGoogleFree(currentSentence.text);
+      setSentenceTranslationText(res.translatedText);
+      setShowSentenceTranslation(true);
+    } catch (e) {
+      setSentenceTranslationText('（翻訳取得失敗）');
+      setShowSentenceTranslation(true);
+    } finally {
+      setIsTranslatingSentence(false);
+    }
+  };
+
+  // 一文モードで「訳せなかった文」として保存
+  const handleBookmarkCurrentSentence = () => {
+    if (!currentSentence || !onSaveDifficultSentence) return;
+    onSaveDifficultSentence(currentSentence.text, sentenceTranslationText || '要確認', '');
+    alert('📌 訳せなかった文リストに保存しました！');
+  };
 
   const paragraphSegments = useMemo(() => {
     return paragraphs.map((para, pIdx) => {
@@ -189,7 +298,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     });
   }, [paragraphs, currentStory, vocabs]);
 
-  // 音声再生・停止
+  // 音声再生・停止（通しモード）
   const handleToggleAudio = () => {
     if (isPlayingAudio) {
       stopSpeech();
@@ -337,7 +446,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (currentStory.contentType === 'dialogue') {
       return <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">💬 Dialogue</span>;
     }
-    return <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">📖 Story</span>;
+    return <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">📖 Story</span>;
   };
 
   return (
@@ -348,14 +457,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           onClick={onBackToBookshelf}
           className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-xl text-xs font-semibold transition-all group"
         >
-          <ArrowLeft className="w-3.5 h-3.5 text-blue-400 group-hover:-translate-x-0.5 transition-transform" />
+          <ArrowLeft className="w-3.5 h-3.5 text-cyan-400 group-hover:-translate-x-0.5 transition-transform" />
           <span>本棚に戻る</span>
         </button>
 
         {/* View Mode Toggle: Read vs Listen */}
         <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
           <button
-            onClick={() => setViewMode('read')}
+            onClick={() => {
+              setViewMode('read');
+              stopSpeech();
+              setIsPlayingAudio(false);
+            }}
             className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
               viewMode === 'read'
                 ? 'bg-blue-600 text-white shadow-sm'
@@ -366,7 +479,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <span>読むモード</span>
           </button>
           <button
-            onClick={() => setViewMode('listen')}
+            onClick={() => {
+              setViewMode('listen');
+              stopSpeech();
+              setIsPlayingAudio(false);
+              if (listeningStyle === 'step_by_step') {
+                handlePlaySentence(currentSentenceIdx);
+              }
+            }}
             className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
               viewMode === 'listen'
                 ? 'bg-purple-600 text-white shadow-sm'
@@ -380,7 +500,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
         <div className="flex items-center space-x-2 text-xs">
           {getContentTypeBadge()}
-          <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">
+          <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">
             {currentStory.cefrLevel || 'A2'}
           </span>
         </div>
@@ -388,34 +508,72 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
       {/* 2. Audio Playback & Speed Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-xl flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleToggleAudio}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold shadow-md transition-all ${
-              isPlayingAudio
-                ? 'bg-amber-600 hover:bg-amber-500 text-white'
-                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/25'
-            }`}
-          >
-            {isPlayingAudio ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
-            <span>{isPlayingAudio ? '一時停止' : '音声を再生'}</span>
-          </button>
-
-          {isPlayingAudio && (
+        {/* If in Listen mode: Sub-toggle for Step-by-Step vs Continuous */}
+        {viewMode === 'listen' ? (
+          <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
             <button
-              onClick={handleStopAudio}
-              className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
-              title="停止"
+              onClick={() => {
+                setListeningStyle('step_by_step');
+                stopSpeech();
+                setIsPlayingAudio(false);
+                handlePlaySentence(currentSentenceIdx);
+              }}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg font-bold transition-all ${
+                listeningStyle === 'step_by_step'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
             >
-              <Square className="w-4 h-4 fill-current" />
+              <Zap className="w-3 h-3 text-yellow-300" />
+              <span>⚡ 一文ずつ集中</span>
             </button>
-          )}
-        </div>
+            <button
+              onClick={() => {
+                setListeningStyle('continuous');
+                stopSpeech();
+                setIsPlayingAudio(false);
+              }}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg font-bold transition-all ${
+                listeningStyle === 'continuous'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Play className="w-3 h-3" />
+              <span>🌊 通し再生</span>
+            </button>
+          </div>
+        ) : (
+          /* Reading Mode Audio Toggle */
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleToggleAudio}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold shadow-md transition-all ${
+                isPlayingAudio
+                  ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/25'
+              }`}
+            >
+              {isPlayingAudio ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+              <span>{isPlayingAudio ? '一時停止' : '全文音声を再生'}</span>
+            </button>
 
-        {/* Speed Pills (0.8x, 1.0x, 1.2x) */}
+            {isPlayingAudio && (
+              <button
+                onClick={handleStopAudio}
+                className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
+                title="停止"
+              >
+                <Square className="w-4 h-4 fill-current" />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Speed Pills (0.8x, 1.0x, 1.1x, 1.25x) */}
         <div className="flex items-center space-x-1 text-xs">
           <span className="text-slate-400 text-[11px] mr-1 flex items-center gap-1">
-            <Gauge className="w-3.5 h-3.5 text-blue-400" /> 速度:
+            <Gauge className="w-3.5 h-3.5 text-cyan-400" /> 速度:
           </span>
           {[0.8, 0.95, 1.1, 1.25].map((rate) => {
             const label = rate === 0.8 ? '0.8x' : rate === 0.95 ? '1.0x' : rate === 1.1 ? '1.1x' : '1.25x';
@@ -430,7 +588,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   if (isPlayingAudio) {
                     stopSpeech();
                     setIsPlayingAudio(true);
-                    speakText(currentStory.storyContent, rate, 'en-US', () => setIsPlayingAudio(false));
+                    if (viewMode === 'listen' && listeningStyle === 'step_by_step') {
+                      speakText(currentSentence?.text || '', rate, 'en-US', () => setIsPlayingAudio(false));
+                    } else {
+                      speakText(currentStory.storyContent, rate, 'en-US', () => setIsPlayingAudio(false));
+                    }
                   }
                 }}
                 className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
@@ -448,39 +610,157 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
       {/* 3. Content Area: Listening Mode vs Reading Mode */}
       {viewMode === 'listen' ? (
-        /* Listening Mode (Listening Time Style: Text Hidden for pure listening focus) */
-        <div className="bg-slate-900/60 border border-purple-500/30 rounded-3xl p-6 sm:p-10 shadow-2xl space-y-6 text-center animate-fadeIn">
-          <div className="w-16 h-16 mx-auto rounded-3xl bg-purple-950/60 border border-purple-500/40 flex items-center justify-center">
-            <Headphones className={`w-8 h-8 text-purple-400 ${isPlayingAudio ? 'animate-pulse' : ''}`} />
-          </div>
+        /* Listening Mode */
+        listeningStyle === 'step_by_step' ? (
+          /* 3-A. ⚡ 一文ずつ集中モード（Step-by-Step） */
+          <div className="bg-slate-900/90 border border-purple-500/40 rounded-3xl p-5 sm:p-8 shadow-2xl space-y-5 animate-fadeIn">
+            {/* Header: Progress Counter */}
+            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-3">
+              <span className="font-bold text-purple-300 flex items-center gap-1.5">
+                <Zap className="w-4 h-4 text-yellow-400" />
+                一文集中リスニング ({currentSentenceIdx + 1} / {sentenceList.length} 文)
+              </span>
 
-          <div className="space-y-2">
-            <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-              {currentStory.title}
-            </h2>
-            <p className="text-xs sm:text-sm text-purple-300 font-medium">
-              {currentStory.titleJa}
-            </p>
-          </div>
+              {onSaveDifficultSentence && (
+                <button
+                  onClick={handleBookmarkCurrentSentence}
+                  className="flex items-center space-x-1 text-slate-400 hover:text-indigo-300 transition-colors"
+                  title="この文を訳せなかった文として保存"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="text-[11px]">訳せなかった文に保存</span>
+                </button>
+              )}
+            </div>
 
-          <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-2xl max-w-lg mx-auto text-xs text-slate-300 space-y-2">
-            <p className="font-semibold text-white">🎧 リスニングファースト特訓中</p>
-            <p className="text-slate-400 leading-relaxed">
-              まずは文字を見ずに耳だけで音を聴き、英語の語順通りに意味を掴んでみましょう。
-              聞き取れなかった・処理が追いつかなかった文があれば、下の「📖 読むモード」に切り替えてスクリプトを確認・登録できます。
-            </p>
-          </div>
+            {/* Central Listening Box */}
+            <div className="py-6 sm:py-8 text-center space-y-5 min-h-[160px] flex flex-col justify-center items-center">
+              {/* Audio Pulse Ring */}
+              <button
+                onClick={() => handlePlaySentence(currentSentenceIdx)}
+                className="relative group p-4 rounded-full bg-purple-950/80 border border-purple-500/50 hover:border-purple-400 transition-all shadow-xl shadow-purple-950/50 active:scale-95"
+                title="もう一度聴く"
+              >
+                <RotateCcw className={`w-7 h-7 text-purple-300 ${isPlayingAudio ? 'animate-spin' : 'group-hover:rotate-45'} transition-transform`} />
+                {isPlayingAudio && (
+                  <span className="absolute inset-0 rounded-full border-2 border-purple-400 animate-ping" />
+                )}
+              </button>
 
-          <div className="pt-2 flex justify-center gap-3">
-            <button
-              onClick={() => setViewMode('read')}
-              className="flex items-center space-x-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-blue-600/30 transition-all"
-            >
-              <BookOpen className="w-4 h-4" />
-              <span>スクリプト（英文）を開いて確認</span>
-            </button>
+              <div className="space-y-1">
+                <span className="text-xs text-purple-300 font-bold block">
+                  {isPlayingAudio ? '🔊 音声を再生中...' : '👆 アイコンを押してもう一度聴く'}
+                </span>
+                <p className="text-[11px] text-slate-500">
+                  英語の語順のまま頭から意味が入ってくるか確認してみましょう
+                </p>
+              </div>
+
+              {/* Reveal 1: English Sentence (ボタンを押すと下に表示) */}
+              {showSentenceEnglish && currentSentence && (
+                <div className="w-full bg-slate-950 border border-purple-500/30 p-4 rounded-2xl text-left space-y-2 animate-slideUp">
+                  <div className="flex items-center justify-between text-[11px] text-purple-400 font-bold">
+                    <span>📖 英文スクリプト:</span>
+                    <button
+                      onClick={() => speakText(currentSentence.text, speechRate)}
+                      className="text-slate-400 hover:text-purple-300 p-1"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p className="text-base sm:text-lg font-serif text-slate-100 leading-relaxed">
+                    {currentSentence.text}
+                  </p>
+                </div>
+              )}
+
+              {/* Reveal 2: Japanese Translation (さらにボタンを押すと下に表示) */}
+              {showSentenceTranslation && (
+                <div className="w-full bg-slate-950/80 border border-indigo-500/30 p-3.5 rounded-2xl text-left space-y-1 animate-slideUp">
+                  <span className="text-[11px] text-indigo-400 font-bold">🇯🇵 日本語訳:</span>
+                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                    {isTranslatingSentence ? '翻訳中...' : sentenceTranslationText}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Check Actions: Reveal English & Translation */}
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2 border-t border-slate-800">
+              {!showSentenceEnglish && (
+                <button
+                  onClick={() => setShowSentenceEnglish(true)}
+                  className="flex items-center space-x-1.5 px-4 py-2 bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-xl text-xs font-semibold transition-all"
+                >
+                  <Eye className="w-3.5 h-3.5 text-purple-400" />
+                  <span>英文を確認する</span>
+                </button>
+              )}
+
+              <button
+                onClick={handleFetchSentenceTranslation}
+                disabled={isTranslatingSentence}
+                className="flex items-center space-x-1.5 px-4 py-2 bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-xl text-xs font-semibold transition-all"
+              >
+                <Languages className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{showSentenceTranslation ? '日本語訳を隠す' : '日本語訳を確認する'}</span>
+              </button>
+            </div>
+
+            {/* Step Navigation Bar: Prev & Next Buttons */}
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                onClick={handlePrevSentence}
+                disabled={currentSentenceIdx === 0}
+                className="flex items-center justify-center space-x-2 py-3 bg-slate-950 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-200 border border-slate-800 rounded-2xl text-xs sm:text-sm font-bold transition-all"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>前の文</span>
+              </button>
+
+              <button
+                onClick={handleNextSentence}
+                disabled={currentSentenceIdx + 1 >= sentenceList.length}
+                className="flex items-center justify-center space-x-2 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-2xl text-xs sm:text-sm font-bold shadow-lg shadow-purple-600/30 transition-all active:scale-[0.98]"
+              >
+                <span>{currentSentenceIdx + 1 >= sentenceList.length ? '完了！' : '次の文へ ➔'}</span>
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          /* 3-B. 🌊 通し再生モード（Continuous Streaming） */
+          <div className="bg-slate-900/60 border border-purple-500/30 rounded-3xl p-6 sm:p-10 shadow-2xl space-y-6 text-center animate-fadeIn">
+            <div className="w-16 h-16 mx-auto rounded-3xl bg-purple-950/60 border border-purple-500/40 flex items-center justify-center">
+              <Headphones className={`w-8 h-8 text-purple-400 ${isPlayingAudio ? 'animate-pulse' : ''}`} />
+            </div>
+
+            <div className="space-y-2">
+              <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                {currentStory.title}
+              </h2>
+              <p className="text-xs sm:text-sm text-purple-300 font-medium">
+                {currentStory.titleJa}
+              </p>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-2xl max-w-lg mx-auto text-xs text-slate-300 space-y-2">
+              <p className="font-semibold text-white">🌊 通しリスニング中</p>
+              <p className="text-slate-400 leading-relaxed">
+                全文をストリーミング再生しています。全体の流れとスピード感を耳で掴みましょう。
+              </p>
+            </div>
+
+            <div className="pt-2 flex justify-center gap-3">
+              <button
+                onClick={handleToggleAudio}
+                className="flex items-center space-x-2 px-6 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-purple-600/30 transition-all"
+              >
+                {isPlayingAudio ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                <span>{isPlayingAudio ? '一時停止' : '通し再生を開始'}</span>
+              </button>
+            </div>
+          </div>
+        )
       ) : (
         /* Reading Mode: Full Interactive Text */
         <article className="bg-slate-900/60 border border-slate-800/80 rounded-3xl p-5 sm:p-9 shadow-2xl backdrop-blur-sm space-y-6 animate-fadeIn">
@@ -490,7 +770,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">
                   {currentStory.title}
                 </h1>
-                <p className="text-sm sm:text-base text-blue-400/90 font-medium">
+                <p className="text-sm sm:text-base text-cyan-300 font-medium">
                   {currentStory.titleJa}
                 </p>
               </div>
@@ -542,7 +822,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       return <span key={sIdx}>{seg.text}</span>;
                     }
 
-                    let wordStyle = 'hover:bg-blue-500/20 hover:text-blue-300';
+                    let wordStyle = 'hover:bg-blue-500/20 hover:text-cyan-300';
 
                     if (isSelected) {
                       wordStyle = 'bg-blue-600 text-white font-bold shadow-sm shadow-blue-500/40';
@@ -579,7 +859,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600'
                 }`}
               >
-                <CheckCircle2 className="w-4 h-4 text-sky-400" />
+                <CheckCircle2 className="w-4 h-4 text-cyan-400" />
                 <span>{isFinished ? '読了完了！お疲れ様でした 🎉' : '読み終わった！ (読了)'}</span>
               </button>
 
@@ -597,12 +877,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             {isFinished && calculatedWpm && (
               <div className="p-3.5 bg-blue-950/60 border border-blue-500/30 rounded-2xl flex items-center justify-between text-xs animate-fadeIn">
                 <div className="flex items-center space-x-2">
-                  <Gauge className="w-4 h-4 text-blue-400" />
+                  <Gauge className="w-4 h-4 text-cyan-400" />
                   <span className="text-slate-300">
                     今回の読書スピード: <strong className="text-white text-sm">{calculatedWpm} WPM</strong>
                   </span>
                 </div>
-                <span className="text-[11px] text-blue-300 font-medium">
+                <span className="text-[11px] text-cyan-300 font-medium">
                   {calculatedWpm >= 130 ? '🔥 リアルタイムコンパイル達成！' : '💡 頭から読む意識でスピードUP！'}
                 </span>
               </div>
@@ -677,7 +957,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             {isFinished && currentStory.targetVocabList && currentStory.targetVocabList.length > 0 && (
               <div className="p-4 bg-slate-950/90 border border-blue-500/30 rounded-2xl space-y-3 animate-fadeIn">
                 <div className="flex items-center justify-between flex-wrap gap-1">
-                  <span className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック
                   </span>
                   <span className="text-[11px] text-slate-400">
@@ -733,7 +1013,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
             {showTranslation && (
               <div className="p-4 sm:p-5 bg-slate-950/70 border border-slate-800/90 rounded-2xl space-y-2 animate-fadeIn">
-                <span className="text-xs font-bold uppercase text-blue-400 tracking-wider">全文日本語訳</span>
+                <span className="text-xs font-bold uppercase text-cyan-400 tracking-wider">全文日本語訳</span>
                 <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
                   {currentStory.japaneseTranslation}
                 </p>
