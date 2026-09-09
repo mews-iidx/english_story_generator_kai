@@ -88,10 +88,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                マイスクール本棚 📚
+                ストーリー本棚 📚
               </h2>
               <p className="text-xs sm:text-sm text-slate-400">
-                本を選んでタップすると読書・リスニングが始まります
+                生成したストーリーやポッドキャストをタップして読書・リスニング
               </p>
             </div>
           </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, ArrowRight, Star, ChevronDown, ChevronUp, BookOpen, Shuffle } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals } from '../utils/srs';
@@ -489,15 +489,10 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             </button>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setIsFlipped(true)}
-            className="w-full h-[58px] bg-slate-900 hover:bg-slate-850 active:scale-[0.99] text-slate-200 border border-slate-800 rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 group"
-          >
-            <span>答えを見る</span>
+          <div className="w-full text-center text-xs text-slate-500 py-3 flex items-center justify-center gap-2 select-none animate-fadeIn">
+            <span>👆 カードをタップして答えを表示</span>
             <kbd className="hidden sm:inline text-[10px] bg-slate-950 text-slate-400 px-2 py-0.5 rounded border border-slate-800">Space</kbd>
-            <ArrowRight className="w-4 h-4 text-cyan-400 group-hover:translate-x-1 transition-transform" />
-          </button>
+          </div>
         )}
       </div>
     </div>
