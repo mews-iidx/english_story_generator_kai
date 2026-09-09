@@ -59,6 +59,9 @@ export const App: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [initialChatInput, setInitialChatInput] = useState('');
 
+  // リーダー画面上でのオーバーレイチャット状態
+  const [isReaderChatOverlayOpen, setIsReaderChatOverlayOpen] = useState(false);
+
   // バックグラウンド生成状態
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingTheme, setGeneratingTheme] = useState('');
@@ -396,15 +399,22 @@ export const App: React.FC = () => {
     setChatMessages(loadChatMessages());
   };
 
-  // フローティングAIボタンを押した時
-  const handleOpenChatWithSelection = () => {
-    if (selectedText) {
-      setInitialChatInput(`「${selectedText}」はどういう意味・ニュアンスですか？日常会話での自然な使い方を教えてください。`);
+  // フローティングAIボタン または ボトムシート「AIに質問」を押した時
+  const handleOpenChatWithSelection = (customText?: string) => {
+    const targetText = customText || selectedText;
+    if (targetText && targetText.trim()) {
+      setInitialChatInput(`「${targetText.trim()}」はどういう意味・ニュアンスですか？日常会話での使い方も教えてください。`);
     } else {
       setInitialChatInput('');
     }
-    setReadingStory(null);
-    setActiveTab('chat');
+
+    if (readingStory) {
+      // リーダー画面では画面遷移せずオーバーレイドロワーを開く
+      setIsSheetOpen(false);
+      setIsReaderChatOverlayOpen(true);
+    } else {
+      setActiveTab('chat');
+    }
   };
 
   // AIによる詳細ニュアンス取得
@@ -544,6 +554,7 @@ export const App: React.FC = () => {
         setActiveTab={(tab) => {
           setActiveTab(tab);
           setReadingStory(null);
+          setIsReaderChatOverlayOpen(false);
         }}
         dueCount={dueCount}
         isSyncing={isSyncing}
@@ -582,7 +593,10 @@ export const App: React.FC = () => {
             onLapseVocab={handleLapseVocab}
             onUpdateSentenceReason={handleUpdateSentenceReason}
             onRecordStoryRead={handleRecordStoryRead}
-            onBackToBookshelf={() => setReadingStory(null)}
+            onBackToBookshelf={() => {
+              setReadingStory(null);
+              setIsReaderChatOverlayOpen(false);
+            }}
           />
         ) : (
           <>
@@ -594,6 +608,7 @@ export const App: React.FC = () => {
                   setReadingStory(story);
                   setSelectedText('');
                   setIsSheetOpen(false);
+                  setIsReaderChatOverlayOpen(false);
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 onDeleteStory={handleDeleteStory}
@@ -679,10 +694,31 @@ export const App: React.FC = () => {
         )}
       </main>
 
+      {/* リーダー画面上のオーバーレイAIチャットドロワー */}
+      {readingStory && isReaderChatOverlayOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end animate-fadeIn">
+          <div className="w-full max-w-lg h-full bg-slate-950 border-l border-slate-800 shadow-2xl animate-slideLeft flex flex-col">
+            <AiMentorChatView
+              apiKey={settings.geminiApiKey}
+              model={settings.geminiModel}
+              messages={chatMessages}
+              onSendMessage={handleSendChatMessage}
+              onAddToVocab={handleAddToVocab}
+              onClearChat={handleClearChat}
+              onRecordTokenUsage={handleRecordTokenUsage}
+              savedVocabPhrases={savedVocabPhrases}
+              initialInput={initialChatInput}
+              isOverlayMode={true}
+              onClose={() => setIsReaderChatOverlayOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* 右下フローティングAIメンターボタン（いつでもどこからでも質問可能） */}
       <FloatingAiAssistant
         selectedText={selectedText}
-        onClick={handleOpenChatWithSelection}
+        onClick={() => handleOpenChatWithSelection()}
       />
 
       {/* 外部AIプロンプト / JSONインポートモーダル */}
@@ -710,6 +746,7 @@ export const App: React.FC = () => {
         onAddToVocab={handleAddToVocab}
         onSaveDifficultSentence={handleSaveDifficultSentence}
         onFetchDetailedNuance={handleFetchDetailedNuance}
+        onOpenChatMentor={(text) => handleOpenChatWithSelection(text)}
       />
     </div>
   );

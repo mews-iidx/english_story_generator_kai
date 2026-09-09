@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
-import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle } from 'lucide-react';
+import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle, X, BookOpen } from 'lucide-react';
 import { chatWithAiMentor } from '../services/gemini';
 import { speakText } from '../utils/speech';
 
@@ -14,6 +14,8 @@ interface AiMentorChatViewProps {
   onRecordTokenUsage: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases: Set<string>;
   initialInput?: string;
+  onClose?: () => void;
+  isOverlayMode?: boolean;
 }
 
 export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
@@ -26,14 +28,18 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
   onRecordTokenUsage,
   savedVocabPhrases,
   initialInput = '',
+  onClose,
+  isOverlayMode = false,
 }) => {
   const [inputText, setInputText] = useState(initialInput);
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (initialInput) {
       setInputText(initialInput);
+      inputRef.current?.focus();
     }
   }, [initialInput]);
 
@@ -54,7 +60,6 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     setIsLoading(true);
 
     try {
-      // 直近数件のメッセージ履歴をフォーマット
       const historyContents = messages.slice(-6).map(m => ({
         role: (m.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
         parts: [{ text: m.text }],
@@ -87,36 +92,54 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     '日常会話でよく使う相槌のバリエーションを教えて！',
   ];
 
+  const containerClasses = isOverlayMode
+    ? 'w-full h-full flex flex-col p-3 sm:p-4 space-y-3 bg-slate-950/95 backdrop-blur-xl'
+    : 'max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 h-[calc(100vh-140px)] flex flex-col space-y-3';
+
   return (
-    <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 h-[calc(100vh-140px)] flex flex-col space-y-3">
+    <div className={containerClasses}>
       {/* 1. Header */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-md shadow-blue-500/20">
+        <div className="flex items-center space-x-3 min-w-0">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-md shadow-blue-500/20 flex-shrink-0">
             <Bot className="w-5 h-5 text-white" />
           </div>
-          <div>
-            <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-1.5">
-              <span>AI英語メンター（StoryKai Chat）</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-1.5 truncate">
+              <span>AI英語メンター</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30 flex-shrink-0">
                 即時語彙回収
               </span>
             </h2>
-            <p className="text-xs text-slate-400">
-              思った疑問を質問すると、重要な表現をワンタップでAnki・語彙帳に追加できます
+            <p className="text-xs text-slate-400 truncate">
+              {isOverlayMode ? '読書画面のまま質問・疑問を解消できます' : '質問からワンタップでAnki・語彙帳に追加できます'}
             </p>
           </div>
         </div>
 
-        <button
-          onClick={() => {
-            if (confirm('チャット履歴を消去しますか？')) onClearChat();
-          }}
-          className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors"
-          title="チャット履歴をクリア"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <div className="flex items-center space-x-1.5 flex-shrink-0">
+          <button
+            onClick={() => {
+              if (confirm('チャット履歴を消去しますか？')) onClearChat();
+            }}
+            className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors"
+            title="チャット履歴をクリア"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+
+          {isOverlayMode && onClose && (
+            <button
+              onClick={onClose}
+              className="flex items-center space-x-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/30"
+              title="読書画面に戻る"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>読書に戻る</span>
+              <X className="w-3.5 h-3.5 ml-0.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 2. Messages List */}
@@ -246,6 +269,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       {/* 4. Input Bar */}
       <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 p-2 rounded-2xl flex-shrink-0">
         <input
+          ref={inputRef}
           type="text"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}

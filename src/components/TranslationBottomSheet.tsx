@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Volume2, Sparkles, Plus, Check, BookmarkPlus, BookmarkCheck } from 'lucide-react';
+import { Volume2, Sparkles, Plus, Check, BookmarkPlus, BookmarkCheck, Bot } from 'lucide-react';
 import { speakText } from '../utils/speech';
 
 interface TranslationBottomSheetProps {
@@ -14,6 +14,7 @@ interface TranslationBottomSheetProps {
   onAddToVocab: (phrase: string, meaning: string, contextSentence?: string, note?: string) => void;
   onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onFetchDetailedNuance?: () => Promise<string>;
+  onOpenChatMentor?: (text: string) => void;
 }
 
 export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
@@ -27,6 +28,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   onAddToVocab,
   onSaveDifficultSentence,
   onFetchDetailedNuance,
+  onOpenChatMentor,
 }) => {
   const [nuanceNote, setNuanceNote] = useState<string | null>(null);
   const [isFetchingNuance, setIsFetchingNuance] = useState(false);
@@ -49,7 +51,6 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
 
   const handleSaveSentence = () => {
     if (!onSaveDifficultSentence) return;
-    // 選択されたテキストが文そのものか、コンテキスト文を保存
     const sentenceToSave = (originalText.split(' ').length > 4 || !contextSentence) ? originalText : contextSentence;
     onSaveDifficultSentence(sentenceToSave, translatedText, originalText);
   };
@@ -131,7 +132,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
               )}
             </button>
 
-            {/* 2. 訳せなかった文を保存（自己分析用） */}
+            {/* 2. 訳せなかった文を保存 */}
             {onSaveDifficultSentence && (
               <button
                 onClick={handleSaveSentence}
@@ -157,17 +158,31 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
             )}
           </div>
 
-          {/* AIニュアンスボタン */}
-          {onFetchDetailedNuance && !nuanceNote && (
-            <button
-              onClick={handleFetchNuance}
-              disabled={isFetchingNuance}
-              className="flex items-center space-x-1 px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors border border-slate-700/60"
-            >
-              <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${isFetchingNuance ? 'animate-spin' : ''}`} />
-              <span>{isFetchingNuance ? '取得中...' : 'AI解説'}</span>
-            </button>
-          )}
+          <div className="flex items-center space-x-2">
+            {/* 3. AIメンターに質問ボタン（リーダー上のチャットオーバーレイを開く） */}
+            {onOpenChatMentor && (
+              <button
+                onClick={() => onOpenChatMentor(originalText)}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition-all"
+                title="AIメンターに詳しく質問する"
+              >
+                <Bot className="w-3.5 h-3.5" />
+                <span>AIに質問</span>
+              </button>
+            )}
+
+            {/* AI簡易ニュアンスボタン */}
+            {onFetchDetailedNuance && !nuanceNote && (
+              <button
+                onClick={handleFetchNuance}
+                disabled={isFetchingNuance}
+                className="flex items-center space-x-1 px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors border border-slate-700/60"
+              >
+                <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${isFetchingNuance ? 'animate-spin' : ''}`} />
+                <span>{isFetchingNuance ? '取得中...' : 'AI簡易解説'}</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
