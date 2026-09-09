@@ -173,54 +173,80 @@ export function pickTargetVocabsForStory(
 
   const today = getTodayDateString();
 
-  // 直近2〜3話で使われた単語のセット（クールダウン用）
-  const recentlyUsedPhrases = new Set<string>();
-  recentStories.slice(0, 3).forEach(s => {
+  // 1. 直近の話（最大5話分）で使われた単語を、使用された新しさ順（0 = 最も直近）に記録
+  const recencyMap = new Map<string, number>();
+  recentStories.slice(0, 5).forEach((s, storyIdx) => {
     (s.targetVocabList || []).forEach(v => {
-      const clean = v.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-      recentlyUsedPhrases.add(clean);
+      const clean = v
+        .replace(/\s*\([^)]*\)/g, '')
+        .replace(/[:：].*$/, '')
+        .trim()
+        .toLowerCase();
+      if (!recencyMap.has(clean)) {
+        recencyMap.set(clean, storyIdx);
+      }
     });
   });
 
-  // クールダウン対象外（新鮮な単語）と対象（直近使用済み単語）に分割
-  const freshItems = vocabList.filter(v => !recentlyUsedPhrases.has(v.phrase.trim().toLowerCase()));
-  const candidatePool = freshItems.length >= count ? freshItems : vocabList;
+  // 2. 単語のスコアリング（未定着・復習期日・高重要度・高Lapseを優先）
+  const getVocabScore = (item: VocabItem): number => {
+    let score = 0;
+    const isDue = item.nextReviewDate <= today;
+    if (isDue) score += 100; // 今日の復習期日
+    if ((item.repetitionCount ?? 0) < 3) score += 50; // 未定着
+    score += (item.importance ?? 3) * 20; // 重要度 (1..5 -> 20..100)
+    score += (item.lapseCount ?? 0) * 15; // 忘れやすい単語
+    return score;
+  };
 
-  const dueItems = candidatePool.filter(v => v.nextReviewDate <= today);
-  
-  // 重要度(降順) ➔ lapseCount(降順) ➔ 最終復習日時(昇順)
-  dueItems.sort((a, b) => {
-    const impA = a.importance ?? 3;
-    const impB = b.importance ?? 3;
-    if (impB !== impA) return impB - impA;
-    if (b.lapseCount !== a.lapseCount) return b.lapseCount - a.lapseCount;
-    return new Date(a.lastReviewedAt).getTime() - new Date(b.lastReviewedAt).getTime();
+  // 全語彙をスコア降順にソート
+  const sortedVocabs = [...vocabList].sort((a, b) => {
+    const scoreA = getVocabScore(a);
+    const scoreB = getVocabScore(b);
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    return new Date(a.lastReviewedAt || 0).getTime() - new Date(b.lastReviewedAt || 0).getTime();
   });
 
-  const selectedItems: VocabItem[] = [];
+  // 3. クールダウン（直近使用済み）単語と新鮮（未使用）単語に分類
+  const freshItems: VocabItem[] = [];
+  const usedItems: { item: VocabItem; recency: number }[] = [];
 
-  for (const item of dueItems) {
-    if (selectedItems.length >= count) break;
-    selectedItems.push(item);
+  sortedVocabs.forEach(v => {
+    const key = v.phrase.trim().toLowerCase();
+    if (recencyMap.has(key)) {
+      usedItems.push({ item: v, recency: recencyMap.get(key)! });
+    } else {
+      freshItems.push(v);
+    }
+  });
+
+  // 使用済みアイテムは「最も昔に使われた順（recency大）」➔「優先度スコア高い順」でソート
+  usedItems.sort((a, b) => {
+    if (b.recency !== a.recency) return b.recency - a.recency;
+    return getVocabScore(b.item) - getVocabScore(a.item);
+  });
+
+  // 4. 候補の選定（1日2〜3話生成してもプールの上位から順に重複なく4単語ずつ消化）
+  const selected: VocabItem[] = [];
+
+  // まず新鮮な高優先度単語から順に枠を埋める (例: 1回目=上位1..4, 2回目=5..8, 3回目=9..12)
+  for (const item of freshItems) {
+    if (selected.length >= count) break;
+    selected.push(item);
   }
 
-  if (selectedItems.length < count) {
-    const remaining = candidatePool.filter(v => !selectedItems.some(s => s.id === v.id));
-    remaining.sort((a, b) => {
-      const impA = a.importance ?? 3;
-      const impB = b.importance ?? 3;
-      if (impB !== impA) return impB - impA;
-      if (b.lapseCount !== a.lapseCount) return b.lapseCount - a.lapseCount;
-      return a.repetitionCount - b.repetitionCount;
-    });
-
-    for (const item of remaining) {
-      if (selectedItems.length >= count) break;
-      selectedItems.push(item);
+  // 新鮮な単語だけでは count に満たない場合、最も昔に使われた単語から補充
+  if (selected.length < count) {
+    for (const { item } of usedItems) {
+      if (selected.length >= count) break;
+      if (!selected.some(s => s.id === item.id)) {
+        selected.push(item);
+      }
     }
   }
 
-  return selectedItems.map(item => {
+  // 5. Geminiプロンプト用フォーマットに整形して返却
+  return selected.map(item => {
     if (item.contextNote && item.contextNote.length > 0) {
       return `${item.phrase} (意味/構文: ${item.meaning} - ${item.contextNote.slice(0, 40)})`;
     }

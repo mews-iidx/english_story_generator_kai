@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
 import { ContentType } from '../types/story';
-import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, CheckCircle2, Clock, Mic, MessageSquare, BookMarked } from 'lucide-react';
+import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, Clock, Mic, MessageSquare, BookMarked } from 'lucide-react';
 
 interface StoryCreateViewProps {
   currentLevel: CefrLevel;
   onLevelChange: (level: CefrLevel) => void;
   isGenerating: boolean;
   generatingTheme?: string;
-  dueVocabs: string[];
   onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType) => void;
   onOpenImportModal: () => void;
   onNavigateToBookshelf: () => void;
@@ -19,7 +18,6 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
   onLevelChange,
   isGenerating,
   generatingTheme,
-  dueVocabs,
   onGenerateStory,
   onOpenImportModal,
   onNavigateToBookshelf,
@@ -282,20 +280,15 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-2xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
           />
 
-          {dueVocabs && dueVocabs.length > 0 && (
-            <div className="p-3 bg-slate-950/60 border border-blue-500/20 rounded-2xl space-y-1.5">
-              <span className="text-[11px] font-bold text-blue-400 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> 今回優先注入される重要語彙 ({dueVocabs.length}個):
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {dueVocabs.map((v, i) => (
-                  <span key={i} className="text-xs bg-slate-900 border border-slate-800 text-slate-200 px-2 py-0.5 rounded-lg">
-                    {v.split(' ')[0]}
-                  </span>
-                ))}
-              </div>
+          <div className="p-3.5 bg-slate-950/70 border border-blue-500/20 rounded-2xl flex items-center justify-between text-xs gap-3">
+            <div className="flex items-center space-x-2 text-slate-300">
+              <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <span>未定着の重要語彙や発話カルテの表現をAIが自動選定して物語に自然にブレンドします</span>
             </div>
-          )}
+            <span className="text-[10px] uppercase tracking-wider font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md flex-shrink-0">
+              AI自動選定
+            </span>
+          </div>
         </div>
 
         {/* Action Button: Start generation in background */}

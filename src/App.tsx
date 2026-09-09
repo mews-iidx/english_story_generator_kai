@@ -787,7 +787,6 @@ export const App: React.FC = () => {
                 onLevelChange={handleLevelChange}
                 isGenerating={isGenerating}
                 generatingTheme={generatingTheme}
-                dueVocabs={dueVocabs}
                 onGenerateStory={handleGenerateStoryInBackground}
                 onOpenImportModal={() => setIsImportModalOpen(true)}
                 onNavigateToBookshelf={() => setActiveTab('bookshelf')}
@@ -835,8 +834,8 @@ export const App: React.FC = () => {
                 model={settings.geminiModel}
                 cefrLevel={settings.cefrLevel}
                 onLevelChange={handleLevelChange}
-                dueVocabs={dueVocabs}
                 vocabs={vocabs}
+                dueVocabs={dueVocabs}
                 onAddToVocab={handleAddToVocab}
                 onRecordTokenUsage={handleRecordTokenUsage}
                 onRateAnkiCard={handleRateAnkiCard}
