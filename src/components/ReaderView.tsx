@@ -366,6 +366,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     const phrase = selectedTokens.join('').replace(/\s+/g, ' ').trim();
     if (phrase) {
+      setTappedWordsDuringStory(prev => new Set(prev).add(phrase.toLowerCase()));
       onWordOrPhraseTap(phrase, fullParaText);
     }
   };
@@ -390,7 +391,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (currentStory && currentStory.targetVocabList) {
       currentStory.targetVocabList.forEach(t => {
         const cleanTarget = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-        const wasTapped = tappedWordsDuringStory.has(cleanTarget);
+        
+        // 単語単体一致またはフレーズ包含一致
+        const wasTapped = tappedWordsDuringStory.has(cleanTarget) ||
+          Array.from(tappedWordsDuringStory).some(tapped => {
+            if (tapped.length > 2 && (cleanTarget.includes(tapped) || tapped.includes(cleanTarget))) return true;
+            return false;
+          });
         if (!wasTapped) {
           initialEvals[cleanTarget] = 'easy';
           const vocabMatch = vocabs.find(v => v.phrase.toLowerCase() === cleanTarget);

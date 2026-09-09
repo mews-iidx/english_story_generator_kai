@@ -11,6 +11,7 @@ export interface GenerateStoryParams {
   contentType?: ContentType; // story, podcast, dialogue
   userPrompt?: string;
   targetVocabs: string[];
+  targetErrorPatterns?: { corePattern: string; naturalExpression: string; explanation: string }[];
   recentSummaries: string[];
   targetWordCount?: number; // 目標単語数 (デフォルト 700語)
 }
@@ -71,13 +72,21 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   promptText += `【★最重要：本文の目標単語数】\n英語本文（story）の長さは【約 ${targetWordCount} 語（words）】を目安に作成してください。しっかりと展開のある満足感の高いボリュームにしてください。\n\n`;
 
   if (targetVocabs.length > 0) {
-    promptText += `【復習対象の単語・イディオム・文法構文】\n`;
+    promptText += `【復習対象の単語・イディオム・定型句】\n`;
     targetVocabs.forEach((v, idx) => {
       promptText += `${idx + 1}. "${v}"\n`;
     });
-    promptText += `\n★重要ルール（構文・イディオムの応用出題について）：\n`;
-    promptText += `- 登録語が構文パターンや特定の一文の場合、全く同じ例文をそのまま使い回すのではなく、**その構文・イディオムの本質的なニュアンスや文法パターンを汲み取り、今回のシチュエーションに合わせた新しい応用例文**として自然に登場させてください。\n`;
-    promptText += `- 単語の場合も、前回とは異なる自然な文脈や組み合わせで登場させてください。\n\n`;
+    promptText += `\n★単語・イディオムの出題ルール：前回とは異なる自然な文脈や生き生きとしたシチュエーションで登場させてください。\n\n`;
+  }
+
+  const { targetErrorPatterns } = params;
+  if (targetErrorPatterns && targetErrorPatterns.length > 0) {
+    promptText += `【★最重要：克服すべき文法・語法パターン（本質の応用出題）】\n`;
+    promptText += `ユーザーが過去の会話で詰まったり間違えたりした文法・語法パターンです。同じ例文のコピペではなく、**その本質的な型・ニュアンスを今回のストーリーに自然に織り込み、登場人物のセリフや文章として登場させてください**：\n`;
+    targetErrorPatterns.forEach((p: any, idx: number) => {
+      promptText += `${idx + 1}. パターン: "${p.corePattern}" (自然な用例: ${p.naturalExpression} - 解説: ${p.explanation})\n`;
+    });
+    promptText += `\n`;
   }
 
   if (userPrompt && userPrompt.trim().length > 0) {
@@ -428,14 +437,23 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
   };
 }
 
+export interface DetectedExpressionError {
+  userUtterance: string;
+  naturalExpression: string;
+  corePattern: string;
+  explanation: string;
+  suggestedCause: 'vocabulary' | 'syntax_order' | 'direct_translation' | 'tense_modals' | 'preposition_colloc' | 'other';
+}
+
 export interface CallAnalysisResult {
+  extractedVocabs: ExtractedCallVocab[];
+  detectedErrors?: DetectedExpressionError[];
   recapSummary: string;
   newLikes: string[];
   newDislikes: string[];
   newTopic?: { topic: string; summary: string };
   newUserNotes: string[];
   newPromises?: string[];
-  extractedVocabs: ExtractedCallVocab[];
   tokenUsage?: { promptTokens: number; candidatesTokens: number };
 }
 

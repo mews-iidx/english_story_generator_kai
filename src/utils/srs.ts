@@ -1,5 +1,6 @@
 import { VocabItem } from '../types/vocab';
 import { Story } from '../types/story';
+import { ExpressionErrorItem } from '../types/expressionError';
 
 export const DEFAULT_EASE_FACTOR = 2.5; // 初期 Ease Factor (250%)
 export const MIN_EASE_FACTOR = 1.3;     // 最小 Ease Factor (130%)
@@ -44,32 +45,6 @@ export interface AnkiSRSResult {
 
 /**
  * 本家Anki (SuperMemo SM-2) アルゴリズムによるSRS間隔計算
- *
- * 1. Again (もう一度 / 忘れた):
- *    - Ease Factor: -0.20 (下限 1.3)
- *    - 間隔: 1日 (Lapseリセット)
- *    - repetitionCount: 0, lapseCount: +1
- *
- * 2. Hard (難しい / 苦戦):
- *    - Ease Factor: -0.15 (下限 1.3)
- *    - 間隔: 前回間隔 * 1.2 (最低+1日) / 新規時は1日
- *    - repetitionCount: +1
- *
- * 3. Good (普通 / 正解):
- *    - Ease Factor: 変動なし
- *    - 間隔:
- *        repetitionCount 0 -> 1日
- *        repetitionCount 1 -> 6日 (Anki標準のGraduating step)
- *        repetitionCount >= 2 -> 前回間隔 * EaseFactor
- *    - repetitionCount: +1
- *
- * 4. Easy (簡単 / 余裕):
- *    - Ease Factor: +0.15
- *    - 間隔:
- *        repetitionCount 0 -> 4日 (Anki標準のEasy interval初期値)
- *        repetitionCount 1 -> round(6 * EaseFactor * 1.3) (約20日)
- *        repetitionCount >= 2 -> round(前回間隔 * EaseFactor * 1.3)
- *    - repetitionCount: +1
  */
 export function calculateAnkiSRS(
   item: Partial<VocabItem> | undefined,
@@ -142,7 +117,6 @@ export function calculateAnkiSRS(
 
 /**
  * ボタン表示用に各レーティングを選んだ時の次回期日ラベルを取得
- * Anki本家同様に、Againはセッション内再出題（< 1分）、新規カードHardは（< 10分）として表示
  */
 export function getNextReviewIntervals(item: Partial<VocabItem> | undefined): {
   again: string;
@@ -188,17 +162,31 @@ export function calculateSuccessSRS(item: VocabItem) {
 
 /**
  * 今回のストーリーに注入すべき復習対象語彙（3〜5個）を選定
- * 【重要度優先ルール】:
- * 1. 日常会話における重要度 (importance 5 -> 1) が高いものを最優先
- * 2. 忘却タップ回数 (lapseCount) が多いもの
- * 3. 復習期日 (due) または未定着のもの
+ * 【改善点：連続生成時の単語重複クールダウン＆多様性確保】
  */
-export function pickTargetVocabsForStory(vocabList: VocabItem[], count: number = 4): string[] {
+export function pickTargetVocabsForStory(
+  vocabList: VocabItem[],
+  count: number = 4,
+  recentStories: Story[] = []
+): string[] {
   if (!vocabList || vocabList.length === 0) return [];
 
   const today = getTodayDateString();
 
-  const dueItems = vocabList.filter(v => v.nextReviewDate <= today);
+  // 直近2〜3話で使われた単語のセット（クールダウン用）
+  const recentlyUsedPhrases = new Set<string>();
+  recentStories.slice(0, 3).forEach(s => {
+    (s.targetVocabList || []).forEach(v => {
+      const clean = v.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+      recentlyUsedPhrases.add(clean);
+    });
+  });
+
+  // クールダウン対象外（新鮮な単語）と対象（直近使用済み単語）に分割
+  const freshItems = vocabList.filter(v => !recentlyUsedPhrases.has(v.phrase.trim().toLowerCase()));
+  const candidatePool = freshItems.length >= count ? freshItems : vocabList;
+
+  const dueItems = candidatePool.filter(v => v.nextReviewDate <= today);
   
   // 重要度(降順) ➔ lapseCount(降順) ➔ 最終復習日時(昇順)
   dueItems.sort((a, b) => {
@@ -217,7 +205,7 @@ export function pickTargetVocabsForStory(vocabList: VocabItem[], count: number =
   }
 
   if (selectedItems.length < count) {
-    const remaining = vocabList.filter(v => !selectedItems.some(s => s.id === v.id));
+    const remaining = candidatePool.filter(v => !selectedItems.some(s => s.id === v.id));
     remaining.sort((a, b) => {
       const impA = a.importance ?? 3;
       const impB = b.importance ?? 3;
@@ -238,6 +226,30 @@ export function pickTargetVocabsForStory(vocabList: VocabItem[], count: number =
     }
     return `${item.phrase} (意味: ${item.meaning})`;
   });
+}
+
+/**
+ * 偽英語・発話カルテDBから、今回のストーリーに自然に応用すべき文法・語法パターンを選定
+ */
+export function pickTargetErrorPatternsForStory(
+  errorList: ExpressionErrorItem[],
+  count: number = 2
+): { corePattern: string; naturalExpression: string; explanation: string }[] {
+  if (!errorList || errorList.length === 0) return [];
+
+  // ストーリー強化回数が少ないもの ➔ 作成日が新しい順
+  const sorted = [...errorList].sort((a, b) => {
+    if (a.storyReinforcedCount !== b.storyReinforcedCount) {
+      return a.storyReinforcedCount - b.storyReinforcedCount;
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+
+  return sorted.slice(0, count).map(e => ({
+    corePattern: e.corePattern,
+    naturalExpression: e.naturalExpression,
+    explanation: e.explanation,
+  }));
 }
 
 export function extractRecentSummaries(stories: Story[], limit: number = 4): string[] {

@@ -1,3 +1,4 @@
+import { ExpressionErrorItem } from '../types/expressionError';
 import { VocabItem, VocabLookupResult } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
 import { Story } from '../types/story';
@@ -14,6 +15,7 @@ const STORAGE_KEYS = {
   CHAT_MESSAGES: 'storykai_chat_messages_v1',
   PERSONAS: 'storykai_personas_v1',
   CALL_SESSIONS: 'storykai_call_sessions_v1',
+  EXPRESSION_ERRORS: 'storykai_expression_errors_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -150,13 +152,47 @@ export const isInvalidVocabMeaning = (m?: string): boolean => {
   );
 };
 
+/**
+ * フレーズのあいまい一致・正規化ヘルパー
+ * 例: "too tired to" と "too ... to", "look forward to" などを柔軟に同一視
+ */
+export function normalizePhraseKey(phrase: string): string {
+  return phrase
+    .toLowerCase()
+    .replace(/[~～….]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function findMatchingVocabIndex(vocabs: VocabItem[], phrase: string): number {
+  const targetNorm = normalizePhraseKey(phrase);
+  
+  // 1. 完全一致 (大文字小文字無視)
+  let idx = vocabs.findIndex(v => v.phrase.trim().toLowerCase() === phrase.trim().toLowerCase());
+  if (idx >= 0) return idx;
+
+  // 2. 正規化一致 (記号・余分な空白の無視)
+  idx = vocabs.findIndex(v => normalizePhraseKey(v.phrase) === targetNorm);
+  if (idx >= 0) return idx;
+
+  // 3. イディオムパターン一致 (例: "too ... to" に対して "too tired to" がマッチ)
+  idx = vocabs.findIndex(v => {
+    const vNorm = normalizePhraseKey(v.phrase);
+    if (vNorm.includes('too') && vNorm.includes('to') && targetNorm.startsWith('too ') && targetNorm.includes(' to')) {
+      return true;
+    }
+    return false;
+  });
+
+  return idx;
+}
+
 export function recordVocabLapse(
   lookup: VocabLookupResult,
   sourceStoryId?: string
 ): VocabItem {
   const vocabs = loadVocabs();
-  const normalizedPhrase = lookup.phrase.trim().toLowerCase();
-  const existingIndex = vocabs.findIndex(v => v.phrase.toLowerCase() === normalizedPhrase);
+  const existingIndex = findMatchingVocabIndex(vocabs, lookup.phrase);
 
   let updatedItem: VocabItem;
 
@@ -682,5 +718,77 @@ export function deleteCallSession(sessionId: string): void {
     localStorage.setItem(STORAGE_KEYS.CALL_SESSIONS, JSON.stringify(updated));
   } catch (e) {
     console.error('Failed to delete call session', e);
+  }
+}
+// ===================== EXPRESSION ERRORS (偽英語・発話カルテDB) =====================
+export function loadExpressionErrors(): ExpressionErrorItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.EXPRESSION_ERRORS);
+    if (!raw) return [];
+    const items: ExpressionErrorItem[] = JSON.parse(raw);
+    return items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  } catch (e) {
+    console.error('Failed to load expression errors', e);
+    return [];
+  }
+}
+
+export function saveExpressionError(
+  item: Omit<ExpressionErrorItem, 'id' | 'createdAt' | 'storyReinforcedCount'>
+): ExpressionErrorItem {
+  const list = loadExpressionErrors();
+  
+  // 既存の同一パターンがあれば更新
+  const existingIndex = list.findIndex(
+    e => e.corePattern.trim().toLowerCase() === item.corePattern.trim().toLowerCase() ||
+         e.userUtterance.trim().toLowerCase() === item.userUtterance.trim().toLowerCase()
+  );
+
+  let result: ExpressionErrorItem;
+  if (existingIndex >= 0) {
+    result = {
+      ...list[existingIndex],
+      naturalExpression: item.naturalExpression,
+      explanation: item.explanation,
+      causeCategory: item.causeCategory,
+      userNote: item.userNote || list[existingIndex].userNote,
+    };
+    list[existingIndex] = result;
+  } else {
+    result = {
+      ...item,
+      id: 'err_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      storyReinforcedCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    list.unshift(result);
+  }
+
+  localStorage.setItem(STORAGE_KEYS.EXPRESSION_ERRORS, JSON.stringify(list));
+  return result;
+}
+
+export function deleteExpressionError(id: string): void {
+  const list = loadExpressionErrors().filter(e => e.id !== id);
+  localStorage.setItem(STORAGE_KEYS.EXPRESSION_ERRORS, JSON.stringify(list));
+}
+
+export function incrementExpressionReinforced(corePattern: string): void {
+  const list = loadExpressionErrors();
+  let changed = false;
+  const updated = list.map(item => {
+    if (item.corePattern.includes(corePattern) || corePattern.includes(item.corePattern)) {
+      changed = true;
+      return {
+        ...item,
+        storyReinforcedCount: item.storyReinforcedCount + 1,
+        lastReinforcedAt: new Date().toISOString(),
+      };
+    }
+    return item;
+  });
+
+  if (changed) {
+    localStorage.setItem(STORAGE_KEYS.EXPRESSION_ERRORS, JSON.stringify(updated));
   }
 }

@@ -1,3 +1,4 @@
+import { ExpressionErrorItem } from '../types/expressionError';
 import React, { useState, useMemo } from 'react';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem } from '../types/sentence';
@@ -8,9 +9,11 @@ import { getTodayDateString } from '../utils/srs';
 interface VocabBankViewProps {
   vocabs: VocabItem[];
   difficultSentences?: DifficultSentenceItem[];
+  expressionErrors?: ExpressionErrorItem[];
   onMasterVocab: (vocabId: string) => void;
   onDeleteVocab: (vocabId: string) => void;
   onDeleteSentence?: (sentenceId: string) => void;
+  onDeleteExpressionError?: (errorId: string) => void;
   onUpdateImportance?: (vocabId: string, importance: number) => void;
   onRankVocabImportance?: () => Promise<void>;
   isRankingImportance?: boolean;
@@ -19,14 +22,16 @@ interface VocabBankViewProps {
 export const VocabBankView: React.FC<VocabBankViewProps> = ({
   vocabs,
   difficultSentences = [],
+  expressionErrors = [],
   onMasterVocab,
   onDeleteVocab,
   onDeleteSentence,
+  onDeleteExpressionError,
   onUpdateImportance,
   onRankVocabImportance,
   isRankingImportance,
 }) => {
-  const [activeTab, setActiveTab] = useState<'words' | 'sentences'>('words');
+  const [activeTab, setActiveTab] = useState<'words' | 'sentences' | 'errors'>('words');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'due' | 'learning' | 'mastered'>('all');
   const [sortBy, setSortBy] = useState<'importance' | 'due' | 'alpha' | 'lapses'>('importance');
@@ -520,6 +525,91 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
           )}
         </div>
       )}
+          {/* TAB 3: 発話カルテ（偽英語・弱点DB） */}
+      {activeTab === 'errors' && (
+        <div className="space-y-4">
+          <div className="bg-slate-900/80 border border-amber-500/30 rounded-2xl p-4 text-xs text-slate-300 leading-relaxed space-y-1">
+            <span className="font-bold text-amber-300 block">💡 発話カルテ ＆ ストーリー自動応用機能</span>
+            <p>
+              英会話で詰まった発話や偽英語の「本質パターン」を記録したカルテです。
+              ここに記録されたパターンは、<strong>次回以降のストーリー生成時にAIが別の自然なシチュエーション・文章として自動応用出題</strong>し、無理なく克服を促します。
+            </p>
+          </div>
+
+          {expressionErrors.length === 0 ? (
+            <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-12 text-center space-y-3">
+              <Sparkles className="w-8 h-8 text-amber-400/40 mx-auto" />
+              <p className="text-sm text-slate-400">現在記録された発話カルテはありません。</p>
+              <p className="text-xs text-slate-500">英会話セッション終了時のカルテから追加できます。</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3">
+              {expressionErrors.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-slate-900/90 border border-slate-800 hover:border-amber-500/40 rounded-2xl p-4 sm:p-5 space-y-3 shadow-xl transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 font-bold border border-red-500/30 text-[10px]">
+                          あなたの発話
+                        </span>
+                        <span className="text-slate-300 line-through decoration-red-500/60 font-medium">
+                          "{item.userUtterance}"
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 font-bold border border-emerald-500/30 text-[10px]">
+                          自然な英語
+                        </span>
+                        <span className="text-emerald-300 font-bold">
+                          "{item.naturalExpression}"
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => speakText(item.naturalExpression, 0.95)}
+                          className="p-1 text-slate-400 hover:text-emerald-300"
+                          title="発音を聞く"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {onDeleteExpressionError && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteExpressionError(item.id)}
+                        className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors"
+                        title="カルテから削除"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-amber-300">
+                        💡 本質パターン: {item.corePattern}
+                      </span>
+                      <span className="text-[10px] text-cyan-400 bg-cyan-950/50 px-2 py-0.5 rounded border border-cyan-500/20">
+                        ストーリー強化: {item.storyReinforcedCount || 0}回
+                      </span>
+                    </div>
+                    <p className="text-slate-300 text-[11px] leading-relaxed">
+                      {item.explanation}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
     </div>
   );
 };

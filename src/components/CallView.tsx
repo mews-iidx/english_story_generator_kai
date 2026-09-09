@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Persona, CallSession, CallMessage } from '../types/persona';
 import { GeminiLiveSession, CallConnectionState } from '../services/geminiLive';
-import { analyzeCallSessionAndExtractMemory, generateCustomPersona, chatWithPersona } from '../services/gemini';
+import { analyzeCallSessionAndExtractMemory, generateCustomPersona, chatWithPersona, DetectedExpressionError } from '../services/gemini';
+import { ErrorCauseCategory } from '../types/expressionError';
 import { speakText } from '../utils/speech';
 import {
   Phone,
@@ -47,6 +48,7 @@ interface CallViewProps {
   ) => void;
   onSaveCallSession: (session: CallSession) => void;
   onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
+  onSaveExpressionError?: (item: any) => any;
   onRecordTokenUsage?: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases: Set<string>;
 }
@@ -61,6 +63,7 @@ export const CallView: React.FC<CallViewProps> = ({
   onUpdatePersonaMemory,
   onSaveCallSession,
   onAddToVocab,
+  onSaveExpressionError,
   onRecordTokenUsage,
   savedVocabPhrases,
 }) => {
@@ -94,6 +97,8 @@ export const CallView: React.FC<CallViewProps> = ({
   // 通話後分析状態
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [latestSummarySession, setLatestSummarySession] = useState<CallSession | null>(null);
+  const [detectedErrors, setDetectedErrors] = useState<DetectedExpressionError[]>([]);
+  const [savedErrorIndices, setSavedErrorIndices] = useState<Set<number>>(new Set());
   const [currentSessionType, setCurrentSessionType] = useState<'voice' | 'chat'>('voice');
 
   // 新規パートナー作成モーダル
@@ -366,6 +371,8 @@ export const CallView: React.FC<CallViewProps> = ({
         ],
       };
 
+      setDetectedErrors(analysis.detectedErrors || []);
+      setSavedErrorIndices(new Set());
       onSaveCallSession(sessionRecord);
       setLatestSummarySession(sessionRecord);
     } catch (e) {
@@ -1143,17 +1150,19 @@ export const CallView: React.FC<CallViewProps> = ({
           )}
         </div>
 
-        {/* Extracted Vocabs Section */}
+        {/* Section 1: 🎴 定型句・単語のAnki登録 */}
         {session?.extractedVocabs && session.extractedVocabs.length > 0 && (
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                <BookMarked className="w-4 h-4 text-cyan-400" />
-                会話から抽出された重要表現・語彙
-              </h4>
-              <span className="text-xs text-slate-400">
-                タップして単語帳に追加
-              </span>
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <BookMarked className="w-4 h-4 text-cyan-400" />
+                  1. 定型句・単語（Ankiで覚えるもの）
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  会話に出てきた定型表現や単語です。Ankiの忘却曲線で自動復習されます。
+                </p>
+              </div>
             </div>
 
             <div className="space-y-2.5">
@@ -1202,15 +1211,124 @@ export const CallView: React.FC<CallViewProps> = ({
                       {isSaved ? (
                         <>
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>登録済</span>
+                          <span>Anki登録済</span>
                         </>
                       ) : (
                         <>
                           <Plus className="w-3.5 h-3.5" />
-                          <span>単語帳へ</span>
+                          <span>Ankiへ登録</span>
                         </>
                       )}
                     </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Section 2: 📋 発話カルテ（偽英語・組立ミスの本質分析 ＆ カルテDB保存） */}
+        {detectedErrors && detectedErrors.length > 0 && (
+          <div className="bg-slate-900/90 border border-amber-500/30 rounded-3xl p-6 space-y-4 shadow-xl">
+            <div>
+              <h4 className="text-sm font-bold text-amber-300 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                2. 発話カルテ：偽英語・構文ミスの添削 ＆ 本質分析
+              </h4>
+              <p className="text-[11px] text-slate-300 mt-0.5">
+                カルテに記録すると、<strong>次回のストーリー生成でこの文法・語法パターンを自然に応用した文章</strong>が自動生成されます。
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {detectedErrors.map((errItem, idx) => {
+                const isSaved = savedErrorIndices.has(idx);
+
+                const causeLabels: Record<ErrorCauseCategory, string> = {
+                  vocabulary: '単語・表現不足',
+                  syntax_order: '語順・文の組立',
+                  direct_translation: '日本語の直訳',
+                  tense_modals: '時制・助動詞ミス',
+                  preposition_colloc: '前置詞・コロケーション',
+                  other: 'その他',
+                };
+
+                return (
+                  <div
+                    key={idx}
+                    className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 transition-all hover:border-amber-500/40"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 font-bold border border-red-500/30 text-[10px]">
+                          あなたの発話
+                        </span>
+                        <span className="text-slate-300 line-through decoration-red-500/60 font-medium">
+                          "{errItem.userUtterance}"
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 font-bold border border-emerald-500/30 text-[10px]">
+                          自然な英語
+                        </span>
+                        <span className="text-emerald-300 font-bold">
+                          "{errItem.naturalExpression}"
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900/90 rounded-xl p-3 text-xs space-y-1.5 border border-slate-800/80">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-cyan-300">
+                          💡 本質パターン: {errItem.corePattern}
+                        </span>
+                        <span className="text-[10px] text-amber-400 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-500/20">
+                          {(causeLabels as any)[errItem.suggestedCause] || '構文・語順'}
+                        </span>
+                      </div>
+                      <p className="text-slate-300 text-[11px] leading-relaxed">
+                        {errItem.explanation}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-end">
+                      <button
+                        type="button"
+                        disabled={isSaved}
+                        onClick={() => {
+                          if (onSaveExpressionError) {
+                            onSaveExpressionError({
+                              userUtterance: errItem.userUtterance,
+                              naturalExpression: errItem.naturalExpression,
+                              corePattern: errItem.corePattern,
+                              explanation: errItem.explanation,
+                              causeCategory: errItem.suggestedCause,
+                              personaName: persona?.name,
+                              sourceSessionId: session?.id,
+                            });
+                            setSavedErrorIndices(prev => new Set(prev).add(idx));
+                          }
+                        }}
+                        className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                          isSaved
+                            ? 'bg-slate-800 text-slate-500 cursor-default'
+                            : 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/30'
+                        }`}
+                      >
+                        {isSaved ? (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>カルテに記録済</span>
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>カルテに記録（次回ストーリーで克服）</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 );
               })}

@@ -1,3 +1,4 @@
+import { ExpressionErrorItem } from './types/expressionError';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Header, NavTab } from './components/Header';
 import { HistoryView } from './components/HistoryView';
@@ -49,13 +50,17 @@ import {
   updatePersonaMemory,
   loadCallSessions,
   saveCallSession,
+  loadExpressionErrors,
+  saveExpressionError,
+  deleteExpressionError,
+  incrementExpressionReinforced,
   addTokenUsage,
   resetAllData,
 } from './services/storage';
 
 import { generateStoryWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
-import { pickTargetVocabsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
+import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
 
 export const App: React.FC = () => {
@@ -70,6 +75,7 @@ export const App: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [callSessions, setCallSessions] = useState<CallSession[]>([]);
+  const [expressionErrors, setExpressionErrors] = useState<ExpressionErrorItem[]>([]);
   const [initialChatInput, setInitialChatInput] = useState('');
 
   // リーダー画面上でのオーバーレイチャット状態
@@ -246,6 +252,13 @@ export const App: React.FC = () => {
     try {
       const currentStoryList = loadStories();
       const recentSummaries = extractRecentSummaries(currentStoryList, 5);
+      const currentVocabs = loadVocabs();
+      const errorList = loadExpressionErrors();
+
+      // 単語のクールダウン付き選定（直近話の重複防止）
+      const selectedDueVocabs = pickTargetVocabsForStory(currentVocabs, 4, currentStoryList);
+      // 偽英語・発話カルテからの本質パターン選定
+      const targetErrorPatterns = pickTargetErrorPatternsForStory(errorList, 2);
 
       const res = await generateStoryWithGemini({
         apiKey: settings.geminiApiKey,
@@ -253,9 +266,15 @@ export const App: React.FC = () => {
         cefrLevel: settings.cefrLevel,
         contentType,
         userPrompt,
-        targetVocabs: dueVocabs,
+        targetVocabs: selectedDueVocabs,
+        targetErrorPatterns,
         recentSummaries,
         targetWordCount: wordCount,
+      });
+
+      // ストーリーで応用強化されたパターンのカウントアップ
+      targetErrorPatterns.forEach(p => {
+        incrementExpressionReinforced(p.corePattern);
       });
 
       const newStory = res.story;
@@ -372,6 +391,17 @@ export const App: React.FC = () => {
   const handleDeleteDifficultSentence = (id: string) => {
     removeSentenceFromStorage(id);
     setDifficultSentences(loadDifficultSentences());
+  };
+
+  const handleSaveExpressionError = (item: any) => {
+    const saved = saveExpressionError(item);
+    setExpressionErrors(loadExpressionErrors());
+    return saved;
+  };
+
+  const handleDeleteExpressionError = (errorId: string) => {
+    deleteExpressionError(errorId);
+    setExpressionErrors(loadExpressionErrors());
   };
 
   // 語彙重要度の手動更新
@@ -647,6 +677,7 @@ export const App: React.FC = () => {
     setChatMessages(loadChatMessages());
     setPersonas(loadPersonas());
     setCallSessions(loadCallSessions());
+    setExpressionErrors(loadExpressionErrors());
     setSettings(loadSettings());
   };
 
@@ -762,6 +793,7 @@ export const App: React.FC = () => {
                 onUpdatePersonaMemory={handleUpdatePersonaMemory}
                 onSaveCallSession={handleSaveCallSession}
                 onAddToVocab={handleAddToVocab}
+                onSaveExpressionError={handleSaveExpressionError}
                 onRecordTokenUsage={handleRecordTokenUsage}
                 savedVocabPhrases={savedVocabPhrases}
               />
@@ -802,9 +834,11 @@ export const App: React.FC = () => {
               <VocabBankView
                 vocabs={vocabs}
                 difficultSentences={difficultSentences}
+                expressionErrors={expressionErrors}
                 onMasterVocab={handleMasterVocab}
                 onDeleteVocab={handleDeleteVocab}
                 onDeleteSentence={handleDeleteDifficultSentence}
+                onDeleteExpressionError={handleDeleteExpressionError}
                 onUpdateImportance={handleUpdateVocabImportance}
                 onRankVocabImportance={handleRankVocabImportance}
                 isRankingImportance={isRankingImportance}
