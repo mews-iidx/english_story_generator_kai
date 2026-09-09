@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, ArrowRight, Star } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, RotateCcw, ArrowRight, Star, ChevronDown, ChevronUp, BookOpen } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
@@ -22,18 +22,19 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     if (due.length > 0) {
       return due.sort((a, b) => (b.importance ?? 3) - (a.importance ?? 3) || b.lapseCount - a.lapseCount);
     }
-    // 期日到来がない場合は未定着のものを出題
     return vocabs.filter(v => v.repetitionCount < 4).sort((a, b) => (b.importance ?? 3) - (a.importance ?? 3));
   }, [vocabs, today]);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
+  const [showExample, setShowExample] = useState(false);
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
 
   const currentCard = dueQueue[currentIndex];
 
   useEffect(() => {
     setIsFlipped(false);
+    setShowExample(false);
     if (currentCard) {
       speakText(currentCard.phrase, 0.95);
     }
@@ -55,12 +56,14 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     }
 
     setIsFlipped(false);
+    setShowExample(false);
     setCurrentIndex(prev => prev + 1);
   };
 
   const handleRestart = () => {
     setCurrentIndex(0);
     setIsFlipped(false);
+    setShowExample(false);
     setSessionReviewedCount(0);
   };
 
@@ -96,10 +99,10 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const importance = currentCard.importance ?? 3;
 
   return (
-    <div className="max-w-xl mx-auto space-y-4">
+    <div className="max-w-xl mx-auto space-y-3">
       {/* Progress Counter */}
       <div className="flex items-center justify-between text-xs px-2 text-slate-400">
-        <span className="flex items-center gap-1.5 font-semibold text-blue-400">
+        <span className="flex items-center gap-1.5 font-semibold text-cyan-400">
           <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
           Anki 一問一答（忘却曲線SRS）
         </span>
@@ -108,17 +111,17 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         </span>
       </div>
 
-      {/* Main Flashcard */}
+      {/* Main Flashcard: Fixed height footprint so buttons NEVER jump */}
       <div
         onClick={() => setIsFlipped(!isFlipped)}
-        className={`bg-slate-900/90 border rounded-3xl p-6 sm:p-9 shadow-2xl min-h-[300px] flex flex-col justify-between cursor-pointer select-none transition-all duration-300 hover:border-blue-500/50 ${
+        className={`bg-slate-900/95 border rounded-3xl p-5 sm:p-7 shadow-2xl h-[270px] sm:h-[290px] flex flex-col justify-between cursor-pointer select-none transition-all duration-200 hover:border-cyan-500/50 relative overflow-hidden ${
           isFlipped
-            ? 'border-blue-500/60 bg-gradient-to-br from-slate-900 via-blue-950/40 to-slate-900'
-            : 'border-slate-800 hover:shadow-blue-500/10'
+            ? 'border-cyan-500/60 bg-gradient-to-br from-slate-900 via-blue-950/40 to-slate-900'
+            : 'border-slate-800 hover:shadow-cyan-500/10'
         }`}
       >
         {/* Card Header: Meta badges */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-shrink-0">
           <div className="flex items-center space-x-2">
             <span className="text-[10px] uppercase font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
               {currentCard.partOfSpeech || '語彙'}
@@ -134,120 +137,152 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               e.stopPropagation();
               speakText(currentCard.phrase);
             }}
-            className="p-2 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
+            className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
             title="発音を再生"
           >
             <Volume2 className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Card Front & Back Content */}
-        <div className="text-center py-6 space-y-4">
-          {/* Front: Phrase */}
+        {/* Card Center Content */}
+        <div className="flex-1 flex flex-col items-center justify-center text-center px-2 min-h-0 overflow-y-auto">
+          {/* Phrase */}
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             {currentCard.phrase}
           </h2>
 
-          {/* Back: Meaning & Details */}
+          {/* Back: Meaning & Collapsible Example */}
           {isFlipped ? (
-            <div className="space-y-4 animate-fadeIn">
-              <p className="text-lg sm:text-xl font-bold text-sky-400">
+            <div className="mt-3 space-y-2 animate-fadeIn w-full">
+              <p className="text-lg sm:text-xl font-bold text-cyan-300">
                 {currentCard.meaning}
               </p>
 
-              {currentCard.exampleSentence && (
-                <div className="bg-slate-950/70 border border-slate-800 p-3 rounded-2xl text-xs text-slate-300 text-left space-y-1">
-                  <div className="flex items-center justify-between text-[11px] text-blue-400 font-bold">
-                    <span>📖 例文:</span>
+              {/* Collapsible Example Accordion (デフォルト折りたたみ) */}
+              {(currentCard.exampleSentence || currentCard.contextNote) && (
+                <div className="pt-1">
+                  {!showExample ? (
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        speakText(currentCard.exampleSentence);
+                        setShowExample(true);
                       }}
-                      className="p-1 text-slate-400 hover:text-blue-300"
+                      className="inline-flex items-center space-x-1 px-3 py-1 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 border border-slate-800 rounded-full text-[11px] font-semibold transition-all"
                     >
-                      <Volume2 className="w-3 h-3" />
+                      <BookOpen className="w-3 h-3" />
+                      <span>例文・解説を表示</span>
+                      <ChevronDown className="w-3 h-3 ml-0.5" />
                     </button>
-                  </div>
-                  <p className="font-serif leading-relaxed">
-                    "{currentCard.exampleSentence}"
-                  </p>
+                  ) : (
+                    <div 
+                      onClick={(e) => e.stopPropagation()} 
+                      className="bg-slate-950/90 border border-slate-800 p-2.5 rounded-xl text-xs text-slate-300 text-left space-y-1.5 animate-fadeIn max-h-[90px] overflow-y-auto"
+                    >
+                      <div className="flex items-center justify-between text-[10px] text-cyan-400 font-bold">
+                        <span>📖 例文:</span>
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => speakText(currentCard.exampleSentence || '')}
+                            className="p-0.5 text-slate-400 hover:text-cyan-300"
+                            title="例文を再生"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowExample(false)}
+                            className="p-0.5 text-slate-400 hover:text-white"
+                            title="閉じる"
+                          >
+                            <ChevronUp className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                      {currentCard.exampleSentence && (
+                        <p className="font-serif leading-tight text-[11px]">
+                          "{currentCard.exampleSentence}"
+                        </p>
+                      )}
+                      {currentCard.contextNote && (
+                        <p className="text-[10px] text-slate-400">
+                          💡 {currentCard.contextNote}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-
-              {currentCard.contextNote && (
-                <p className="text-[11px] text-slate-400 bg-slate-950/40 p-2 rounded-xl text-left">
-                  💡 {currentCard.contextNote}
-                </p>
               )}
             </div>
           ) : (
-            <div className="pt-8 text-xs text-slate-500 flex items-center justify-center gap-1.5 animate-pulse">
+            <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-1.5 animate-pulse">
               <span>👆 カードをタップして答えを表示</span>
             </div>
           )}
         </div>
 
         {/* Card Footer info */}
-        <div className="text-center text-[10px] text-slate-500">
+        <div className="text-center text-[10px] text-slate-500 flex-shrink-0">
           定着回数: {currentCard.repetitionCount}回 (間隔: {currentCard.intervalDays}日)
         </div>
       </div>
 
-      {/* 4-step Rating Action Buttons (裏面表示時) */}
-      {isFlipped ? (
-        <div className="grid grid-cols-4 gap-2 pt-1 animate-slideUp">
-          <button
-            type="button"
-            onClick={() => handleRating('again')}
-            className="flex flex-col items-center justify-center p-2.5 bg-red-950/60 hover:bg-red-900/80 text-red-400 border border-red-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-red-950/30"
-          >
-            <span className="text-sm sm:text-base">🔴</span>
-            <span>Again</span>
-            <span className="text-[9px] text-red-400/80 font-normal mt-0.5">1分後</span>
-          </button>
+      {/* Fixed-Height Action Buttons Area (高さ64pxで完全固定。ボタンの位置が絶対にズレない) */}
+      <div className="h-[64px] flex items-center">
+        {isFlipped ? (
+          <div className="grid grid-cols-4 gap-2 w-full animate-fadeIn">
+            <button
+              type="button"
+              onClick={() => handleRating('again')}
+              className="flex flex-col items-center justify-center h-[58px] bg-red-950/60 hover:bg-red-900/80 active:scale-95 text-red-400 border border-red-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-red-950/30"
+            >
+              <span className="text-sm">🔴</span>
+              <span>Again</span>
+              <span className="text-[9px] text-red-400/80 font-normal">1分後</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleRating('hard')}
-            className="flex flex-col items-center justify-center p-2.5 bg-amber-950/60 hover:bg-amber-900/80 text-amber-400 border border-amber-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-amber-950/30"
-          >
-            <span className="text-sm sm:text-base">🟠</span>
-            <span>Hard</span>
-            <span className="text-[9px] text-amber-400/80 font-normal mt-0.5">1日後</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => handleRating('hard')}
+              className="flex flex-col items-center justify-center h-[58px] bg-amber-950/60 hover:bg-amber-900/80 active:scale-95 text-amber-400 border border-amber-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-amber-950/30"
+            >
+              <span className="text-sm">🟠</span>
+              <span>Hard</span>
+              <span className="text-[9px] text-amber-400/80 font-normal">1日後</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleRating('good')}
-            className="flex flex-col items-center justify-center p-2.5 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-400 border border-emerald-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-950/30"
-          >
-            <span className="text-sm sm:text-base">🟢</span>
-            <span>Good</span>
-            <span className="text-[9px] text-emerald-400/80 font-normal mt-0.5">3〜4日後</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => handleRating('good')}
+              className="flex flex-col items-center justify-center h-[58px] bg-emerald-950/60 hover:bg-emerald-900/80 active:scale-95 text-emerald-400 border border-emerald-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-950/30"
+            >
+              <span className="text-sm">🟢</span>
+              <span>Good</span>
+              <span className="text-[9px] text-emerald-400/80 font-normal">3〜4日後</span>
+            </button>
 
+            <button
+              type="button"
+              onClick={() => handleRating('easy')}
+              className="flex flex-col items-center justify-center h-[58px] bg-blue-950/60 hover:bg-blue-900/80 active:scale-95 text-cyan-300 border border-cyan-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-blue-950/30"
+            >
+              <span className="text-sm">🔵</span>
+              <span>Easy</span>
+              <span className="text-[9px] text-cyan-400/80 font-normal">7日後</span>
+            </button>
+          </div>
+        ) : (
           <button
             type="button"
-            onClick={() => handleRating('easy')}
-            className="flex flex-col items-center justify-center p-2.5 bg-blue-950/60 hover:bg-blue-900/80 text-blue-300 border border-blue-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-blue-950/30"
+            onClick={() => setIsFlipped(true)}
+            className="w-full h-[58px] bg-slate-900 hover:bg-slate-850 active:scale-[0.99] text-slate-200 border border-slate-800 rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2"
           >
-            <span className="text-sm sm:text-base">🔵</span>
-            <span>Easy</span>
-            <span className="text-[9px] text-blue-400/80 font-normal mt-0.5">7日後</span>
+            <span>答えを見る</span>
+            <ArrowRight className="w-4 h-4 text-cyan-400" />
           </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setIsFlipped(true)}
-          className="w-full py-3 bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2"
-        >
-          <span>答えを見る</span>
-          <ArrowRight className="w-4 h-4 text-blue-400" />
-        </button>
-      )}
+        )}
+      </div>
     </div>
   );
 };
