@@ -7,6 +7,7 @@ import { QuizView } from './components/QuizView';
 import { VocabBankView } from './components/VocabBankView';
 import { AiMentorChatView } from './components/AiMentorChatView';
 import { SettingsView } from './components/SettingsView';
+import { CallView } from './components/CallView';
 import { FloatingAiAssistant } from './components/FloatingAiAssistant';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
 import { ImportStoryModal } from './components/ImportStoryModal';
@@ -15,6 +16,7 @@ import { Story, ContentType } from './types/story';
 import { VocabItem } from './types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from './types/sentence';
 import { ChatMessage, ChatSuggestedVocab } from './types/chat';
+import { Persona, CallSession } from './types/persona';
 import { AppSettings, DEFAULT_SETTINGS, CefrLevel } from './types/settings';
 
 import {
@@ -40,6 +42,13 @@ import {
   loadChatMessages,
   saveChatMessage,
   clearChatMessages,
+  loadPersonas,
+  savePersona,
+  deletePersona as removePersonaFromStorage,
+  resetPersonas,
+  updatePersonaMemory,
+  loadCallSessions,
+  saveCallSession,
   addTokenUsage,
   resetAllData,
 } from './services/storage';
@@ -59,6 +68,8 @@ export const App: React.FC = () => {
   const [vocabs, setVocabs] = useState<VocabItem[]>([]);
   const [difficultSentences, setDifficultSentences] = useState<DifficultSentenceItem[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [callSessions, setCallSessions] = useState<CallSession[]>([]);
   const [initialChatInput, setInitialChatInput] = useState('');
 
   // リーダー画面上でのオーバーレイチャット状態
@@ -113,12 +124,16 @@ export const App: React.FC = () => {
     const v = loadVocabs();
     const ds = loadDifficultSentences();
     const cm = loadChatMessages();
+    const p = loadPersonas();
+    const cs = loadCallSessions();
 
     setSettings(s);
     setStories(st);
     setVocabs(v);
     setDifficultSentences(ds);
     setChatMessages(cm);
+    setPersonas(p);
+    setCallSessions(cs);
 
     // 意味が「要復習」や空欄になっている語彙の自動翻訳修復
     const repairCorruptedVocabs = async () => {
@@ -461,6 +476,42 @@ export const App: React.FC = () => {
     setChatMessages(loadChatMessages());
   };
 
+  // Language Exchange ペルソナ操作ハンドラー
+  const handleSavePersona = (persona: Persona) => {
+    savePersona(persona);
+    setPersonas(loadPersonas());
+  };
+
+  const handleDeletePersona = (personaId: string) => {
+    removePersonaFromStorage(personaId);
+    setPersonas(loadPersonas());
+  };
+
+  const handleResetPersonas = () => {
+    const p = resetPersonas();
+    setPersonas(p);
+  };
+
+  const handleUpdatePersonaMemory = (
+    personaId: string,
+    memoryUpdates: {
+      newLikes?: string[];
+      newDislikes?: string[];
+      newTopic?: { topic: string; summary: string };
+      newUserNotes?: string[];
+      newPromises?: string[];
+    },
+    lastSpokenAt?: string
+  ) => {
+    updatePersonaMemory(personaId, memoryUpdates, lastSpokenAt);
+    setPersonas(loadPersonas());
+  };
+
+  const handleSaveCallSession = (session: CallSession) => {
+    saveCallSession(session);
+    setCallSessions(loadCallSessions());
+  };
+
   // フローティングAIボタン または ボトムシート「AIに質問」を押した時
   const handleOpenChatWithSelection = (customText?: string) => {
     const targetText = customText || selectedText;
@@ -594,6 +645,8 @@ export const App: React.FC = () => {
     setVocabs(loadVocabs());
     setDifficultSentences(loadDifficultSentences());
     setChatMessages(loadChatMessages());
+    setPersonas(loadPersonas());
+    setCallSessions(loadCallSessions());
     setSettings(loadSettings());
   };
 
@@ -603,6 +656,8 @@ export const App: React.FC = () => {
     setVocabs([]);
     setDifficultSentences([]);
     setChatMessages([]);
+    setPersonas(resetPersonas());
+    setCallSessions([]);
     setReadingStory(null);
     setSelectedText('');
     setIsSheetOpen(false);
@@ -694,7 +749,25 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* 3. AI Mentor Chat Tab */}
+            {/* 3. Live AI English Call Tab */}
+            {activeTab === 'call' && (
+              <CallView
+                apiKey={settings.geminiApiKey}
+                model={settings.geminiModel}
+                personas={personas}
+                callSessions={callSessions}
+                onSavePersona={handleSavePersona}
+                onDeletePersona={handleDeletePersona}
+                onResetPersonas={handleResetPersonas}
+                onUpdatePersonaMemory={handleUpdatePersonaMemory}
+                onSaveCallSession={handleSaveCallSession}
+                onAddToVocab={handleAddToVocab}
+                onRecordTokenUsage={handleRecordTokenUsage}
+                savedVocabPhrases={savedVocabPhrases}
+              />
+            )}
+
+            {/* 4. AI Mentor Chat Tab */}
             {activeTab === 'chat' && (
               <AiMentorChatView
                 apiKey={settings.geminiApiKey}

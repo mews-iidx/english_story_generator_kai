@@ -3,6 +3,7 @@ import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/senten
 import { Story } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { ChatMessage } from '../types/chat';
+import { Persona, CallSession } from '../types/persona';
 import { calculateLapseSRS, calculateSuccessSRS, addDaysToDate } from '../utils/srs';
 
 const STORAGE_KEYS = {
@@ -11,6 +12,8 @@ const STORAGE_KEYS = {
   VOCABS: 'storykai_vocabs_v1',
   DIFFICULT_SENTENCES: 'storykai_difficult_sentences_v1',
   CHAT_MESSAGES: 'storykai_chat_messages_v1',
+  PERSONAS: 'storykai_personas_v1',
+  CALL_SESSIONS: 'storykai_call_sessions_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -463,13 +466,15 @@ export interface ExportData {
 }
 
 export function exportAllData(): string {
-  const data: ExportData = {
-    version: '1.2.0',
+  const data: ExportData & { personas?: Persona[]; callSessions?: CallSession[] } = {
+    version: '1.3.0',
     exportedAt: new Date().toISOString(),
     stories: loadStories(),
     vocabs: loadVocabs(),
     difficultSentences: loadDifficultSentences(),
     chatMessages: loadChatMessages(),
+    personas: loadPersonas(),
+    callSessions: loadCallSessions(),
     settings: {
       cefrLevel: loadSettings().cefrLevel,
       geminiModel: loadSettings().geminiModel,
@@ -480,7 +485,7 @@ export function exportAllData(): string {
 
 export function importAllData(jsonStr: string): { success: boolean; storyCount: number; vocabCount: number; sentenceCount: number } {
   try {
-    const data: ExportData = JSON.parse(jsonStr);
+    const data: ExportData & { personas?: Persona[]; callSessions?: CallSession[] } = JSON.parse(jsonStr);
     if (data.stories && Array.isArray(data.stories)) {
       localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(data.stories));
     }
@@ -493,6 +498,12 @@ export function importAllData(jsonStr: string): { success: boolean; storyCount: 
     if (data.chatMessages && Array.isArray(data.chatMessages)) {
       localStorage.setItem(STORAGE_KEYS.CHAT_MESSAGES, JSON.stringify(data.chatMessages));
     }
+    if (data.personas && Array.isArray(data.personas)) {
+      localStorage.setItem(STORAGE_KEYS.PERSONAS, JSON.stringify(data.personas));
+    }
+    if (data.callSessions && Array.isArray(data.callSessions)) {
+      localStorage.setItem(STORAGE_KEYS.CALL_SESSIONS, JSON.stringify(data.callSessions));
+    }
     return {
       success: true,
       storyCount: data.stories?.length || 0,
@@ -502,5 +513,213 @@ export function importAllData(jsonStr: string): { success: boolean; storyCount: 
   } catch (e) {
     console.error('Import failed', e);
     throw new Error('Invalid JSON format for data import');
+  }
+}
+
+// ===================== PERSONAS =====================
+export const DEFAULT_PRESET_PERSONAS: Persona[] = [
+  {
+    id: 'persona_sarah',
+    name: 'Sarah',
+    avatarEmoji: '☕',
+    nationality: 'アメリカ (カリフォルニア)',
+    nativeLanguage: '英語',
+    age: 24,
+    occupation: 'カフェ店員 / イラストレーター',
+    personality: '明るくフレンドリー、好奇心旺盛。初心者にも優しく短文でゆっくり話してくれる。',
+    interests: ['カフェ巡り', 'インディー音楽', '猫', 'コメディドラマ'],
+    cefrLevel: 'A2',
+    voiceName: 'Aoede',
+    memory: {
+      likes: ['シティポップ', '猫', 'アールグレイティー', 'フレンズ (ドラマ)'],
+      dislikes: ['アメコミ・ヒーロー映画 (Avengers等)', '辛い食べ物'],
+      recentTopics: [],
+      userNotes: [],
+      promisesOrFutureTasks: [],
+    },
+    totalConversations: 0,
+    isPreset: true,
+    createdAt: '2026-09-01T00:00:00.000Z',
+  },
+  {
+    id: 'persona_liam',
+    name: 'Liam',
+    avatarEmoji: '🎸',
+    nationality: 'イギリス (ロンドン)',
+    nativeLanguage: '英語',
+    age: 29,
+    occupation: 'グラフィックデザイナー',
+    personality: '落ち着いたトーン、少しユーモアや皮肉を交える自然な英国英語。カルチャー好き。',
+    interests: ['UKロック', '写真', 'プレミアリーグ(サッカー)', 'クラフトビール'],
+    cefrLevel: 'B1',
+    voiceName: 'Puck',
+    memory: {
+      likes: ['オアシス (バンド)', 'アーセナルFC', 'パブ巡り', 'フィルムカメラ'],
+      dislikes: ['早起き', '過度な甘い物', '雨の日の満員電車'],
+      recentTopics: [],
+      userNotes: [],
+      promisesOrFutureTasks: [],
+    },
+    totalConversations: 0,
+    isPreset: true,
+    createdAt: '2026-09-01T00:00:00.000Z',
+  },
+  {
+    id: 'persona_minho',
+    name: 'Minho (ミンホ)',
+    avatarEmoji: '🎧',
+    nationality: '韓国出身 / ニューヨーク在住',
+    nativeLanguage: '韓国語 / 英語 (バイリンガル)',
+    age: 26,
+    occupation: '大学院生 (コンピュータサイエンス)',
+    personality: '親切で温かい。英語学習の苦労を知っている良き理解者。日本語やアニメにも詳しい。',
+    interests: ['アニメ', 'プログラミング', '筋トレ', 'ストリートファッション'],
+    cefrLevel: 'A2',
+    voiceName: 'Fenrir',
+    memory: {
+      likes: ['呪術廻戦', 'プログラミング (TypeScript/Python)', 'サムギョプサル'],
+      dislikes: ['ホラー映画', 'バグのデバッグ'],
+      recentTopics: [],
+      userNotes: [],
+      promisesOrFutureTasks: [],
+    },
+    totalConversations: 0,
+    isPreset: true,
+    createdAt: '2026-09-01T00:00:00.000Z',
+  },
+];
+
+export function loadPersonas(): Persona[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PERSONAS);
+    if (!raw) {
+      savePersonasBatch(DEFAULT_PRESET_PERSONAS);
+      return DEFAULT_PRESET_PERSONAS;
+    }
+    const parsed: Persona[] = JSON.parse(raw);
+    if (!parsed || parsed.length === 0) {
+      savePersonasBatch(DEFAULT_PRESET_PERSONAS);
+      return DEFAULT_PRESET_PERSONAS;
+    }
+    return parsed;
+  } catch (e) {
+    console.error('Failed to load personas', e);
+    return DEFAULT_PRESET_PERSONAS;
+  }
+}
+
+export function savePersonasBatch(personas: Persona[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PERSONAS, JSON.stringify(personas));
+  } catch (e) {
+    console.error('Failed to save personas batch', e);
+  }
+}
+
+export function savePersona(persona: Persona): void {
+  const current = loadPersonas();
+  const index = current.findIndex(p => p.id === persona.id);
+  let updated: Persona[];
+  if (index >= 0) {
+    updated = [...current];
+    updated[index] = persona;
+  } else {
+    updated = [persona, ...current];
+  }
+  savePersonasBatch(updated);
+}
+
+export function deletePersona(personaId: string): void {
+  const current = loadPersonas();
+  const updated = current.filter(p => p.id !== personaId);
+  savePersonasBatch(updated);
+}
+
+export function resetPersonas(): Persona[] {
+  savePersonasBatch(DEFAULT_PRESET_PERSONAS);
+  return DEFAULT_PRESET_PERSONAS;
+}
+
+export function updatePersonaMemory(
+  personaId: string,
+  memoryUpdates: {
+    newLikes?: string[];
+    newDislikes?: string[];
+    newTopic?: { topic: string; summary: string };
+    newUserNotes?: string[];
+    newPromises?: string[];
+  },
+  lastSpokenAt: string = new Date().toISOString()
+): Persona | null {
+  const current = loadPersonas();
+  const index = current.findIndex(p => p.id === personaId);
+  if (index < 0) return null;
+
+  const target = current[index];
+  const oldMemory = target.memory || { likes: [], dislikes: [], recentTopics: [], userNotes: [] };
+
+  const uniqueLikes = Array.from(new Set([...oldMemory.likes, ...(memoryUpdates.newLikes || [])]));
+  const uniqueDislikes = Array.from(new Set([...oldMemory.dislikes, ...(memoryUpdates.newDislikes || [])]));
+  const uniqueUserNotes = Array.from(new Set([...oldMemory.userNotes, ...(memoryUpdates.newUserNotes || [])]));
+  
+  let recentTopics = [...(oldMemory.recentTopics || [])];
+  if (memoryUpdates.newTopic && memoryUpdates.newTopic.topic) {
+    recentTopics.unshift({
+      date: new Date().toISOString().split('T')[0],
+      topic: memoryUpdates.newTopic.topic,
+      summary: memoryUpdates.newTopic.summary,
+    });
+    recentTopics = recentTopics.slice(0, 10);
+  }
+
+  const updatedPersona: Persona = {
+    ...target,
+    lastSpokenAt,
+    totalConversations: (target.totalConversations || 0) + 1,
+    memory: {
+      likes: uniqueLikes,
+      dislikes: uniqueDislikes,
+      recentTopics,
+      userNotes: uniqueUserNotes,
+      promisesOrFutureTasks: memoryUpdates.newPromises || oldMemory.promisesOrFutureTasks || [],
+    },
+  };
+
+  current[index] = updatedPersona;
+  savePersonasBatch(current);
+  return updatedPersona;
+}
+
+// ===================== CALL SESSIONS =====================
+export function loadCallSessions(): CallSession[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.CALL_SESSIONS);
+    if (!raw) return [];
+    const sessions: CallSession[] = JSON.parse(raw);
+    return sessions.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  } catch (e) {
+    console.error('Failed to load call sessions', e);
+    return [];
+  }
+}
+
+export function saveCallSession(session: CallSession): void {
+  try {
+    const sessions = loadCallSessions();
+    const filtered = sessions.filter(s => s.id !== session.id);
+    const updated = [session, ...filtered].slice(0, 50);
+    localStorage.setItem(STORAGE_KEYS.CALL_SESSIONS, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to save call session', e);
+  }
+}
+
+export function deleteCallSession(sessionId: string): void {
+  try {
+    const sessions = loadCallSessions();
+    const updated = sessions.filter(s => s.id !== sessionId);
+    localStorage.setItem(STORAGE_KEYS.CALL_SESSIONS, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to delete call session', e);
   }
 }

@@ -2,6 +2,7 @@ import { Story, ContentType } from '../types/story';
 import { CefrLevel } from '../types/settings';
 import { parseRobustStoryJson } from '../utils/jsonParser';
 import { ChatSuggestedVocab } from '../types/chat';
+import { Persona, CallMessage, ExtractedCallVocab } from '../types/persona';
 
 export interface GenerateStoryParams {
   apiKey: string;
@@ -425,4 +426,219 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
     replyText: 'AIメンターの応答取得に失敗しました。もう一度お試しください。',
     suggestedVocabs: [],
   };
+}
+
+export interface CallAnalysisResult {
+  recapSummary: string;
+  newLikes: string[];
+  newDislikes: string[];
+  newTopic?: { topic: string; summary: string };
+  newUserNotes: string[];
+  newPromises?: string[];
+  extractedVocabs: ExtractedCallVocab[];
+  tokenUsage?: { promptTokens: number; candidatesTokens: number };
+}
+
+/**
+ * 通話終了後の会話ログ分析・新出語彙抽出・ペルソナ記憶更新
+ */
+export async function analyzeCallSessionAndExtractMemory(params: {
+  messages: CallMessage[];
+  personaName?: string;
+  apiKey: string;
+  model?: string;
+}): Promise<CallAnalysisResult> {
+  const { messages, personaName = 'AI Partner', apiKey, model = 'gemini-3.7-flash' } = params;
+
+  if (!apiKey || messages.length === 0) {
+    return {
+      recapSummary: '会話ログがありません',
+      newLikes: [],
+      newDislikes: [],
+      newUserNotes: [],
+      extractedVocabs: [],
+    };
+  }
+
+  const prompt = `あなたは英語教育・対話分析の専門AIです。
+以下の英語通話（ユーザーと「${personaName}」の会話ログ）を分析し、JSON形式で結果を出力してください。
+
+【会話ログ】
+${messages.map(m => `${m.role === 'user' ? 'User' : personaName}: ${m.text}`).join('\n')}
+
+【分析タスク】
+1. recapSummary: 今回の会話内容の簡潔な要約（日本語で1〜2文）。
+2. newLikes: 会話の中で「${personaName}」が好き・興味があると新しく言及した事物・趣味（日本語の文字列配列）。なければ空配列。
+3. newDislikes: 会話の中で「${personaName}」が嫌い・苦手・興味がないと新しく言及した事物（日本語の文字列配列）。なければ空配列。
+4. newTopic: 今回話したメインのトピック名（日本語で簡潔に）とその要約。
+5. newUserNotes: 会話の中でユーザーに関して新しく判明した情報（例: 「ユーザーは来月京都に行く予定」「カフェラテが好き」など）。なければ空配列。
+6. newPromises: 次回までに何かを見る・やる・話す等の約束や宿題があれば抽出。
+7. extractedVocabs: 会話中に出てきた【ユーザーが覚えるべき実用英単語・イディオム・表現（2〜5個）】。
+   - phrase: 英語表現
+   - meaning: 自然な日本語訳
+   - contextSentence: 会話内で使われた（または代表的な）例文
+   - nuanceNote: 使い方やニュアンスのワンポイント解説
+
+【出力フォーマット（必ず以下のJSON形式のみを出力）】
+{
+  "recapSummary": "...",
+  "newLikes": ["..."],
+  "newDislikes": ["..."],
+  "newTopic": { "topic": "...", "summary": "..." },
+  "newUserNotes": ["..."],
+  "newPromises": ["..."],
+  "extractedVocabs": [
+    {
+      "phrase": "...",
+      "meaning": "...",
+      "contextSentence": "...",
+      "nuanceNote": "..."
+    }
+  ]
+}`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+
+        const cleanJson = rawText.replace(/^```json\s*/, '').replace(/```\s*$/, '').trim();
+        const parsed = JSON.parse(cleanJson);
+
+        return {
+          recapSummary: parsed.recapSummary || '英会話セッション完了',
+          newLikes: parsed.newLikes || [],
+          newDislikes: parsed.newDislikes || [],
+          newTopic: parsed.newTopic,
+          newUserNotes: parsed.newUserNotes || [],
+          newPromises: parsed.newPromises || [],
+          extractedVocabs: parsed.extractedVocabs || [],
+          tokenUsage: {
+            promptTokens: usage?.promptTokenCount || 0,
+            candidatesTokens: usage?.candidatesTokenCount || 0,
+          },
+        };
+      }
+    } catch (e) {
+      console.warn('Call analysis error with model ' + currentModel, e);
+    }
+  }
+
+  return {
+    recapSummary: '英会話セッション完了',
+    newLikes: [],
+    newDislikes: [],
+    newUserNotes: [],
+    extractedVocabs: [],
+  };
+}
+
+/**
+ * ユーザー指定またはランダムなLanguage Exchangeペルソナを自動生成
+ */
+export async function generateCustomPersona(params: {
+  apiKey: string;
+  userPrompt?: string;
+  model?: string;
+}): Promise<{ persona: Persona; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
+  const { apiKey, userPrompt, model = 'gemini-3.7-flash' } = params;
+
+  const prompt = `あなたは英語学習者向けのLanguage Exchange（言語交換パートナー）キャラクターを創造するクリエイティブAIです。
+${userPrompt ? `ユーザーからの要望: 「${userPrompt}」` : '自然で魅力的なネイティブまたは流暢な英語話者の友達キャラクターを1人生成してください。'}
+
+以下のJSONフォーマットで出力してください:
+{
+  "name": "英語名（例: Chloe, Alex, Leo）",
+  "avatarEmoji": "キャラを表す絵文字（例: 🏄, 🎨, 📚, ☕）",
+  "nationality": "出身国・都市（例: オーストラリア (シドニー)）",
+  "nativeLanguage": "英語",
+  "age": 25,
+  "occupation": "職業（例: サーフショップ店員 / Webデザイナー）",
+  "personality": "性格や口調の特徴（日本語で1文。例: 明るくサバサバしていて、アウトドアの話題が好き。初心者にも親身。）",
+  "interests": ["サーフィン", "キャンプ", "アコースティックギター", "タコス"],
+  "cefrLevel": "A2" または "B1",
+  "voiceName": "Aoede" または "Puck" または "Fenrir" または "Charon" または "Kore",
+  "memory": {
+    "likes": ["海", "アコースティック音楽", "朝の散歩"],
+    "dislikes": ["寒さ", "都会の満員電車"],
+    "recentTopics": [],
+    "userNotes": [],
+    "promisesOrFutureTasks": []
+  }
+}`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.8,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+
+        const cleanJson = rawText.replace(/^```json\s*/, '').replace(/```\s*$/, '').trim();
+        const parsed = JSON.parse(cleanJson);
+
+        const newPersona: Persona = {
+          id: 'persona_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          name: parsed.name || 'Alex',
+          avatarEmoji: parsed.avatarEmoji || '✨',
+          nationality: parsed.nationality || 'アメリカ',
+          nativeLanguage: parsed.nativeLanguage || '英語',
+          age: parsed.age || 25,
+          occupation: parsed.occupation || 'Freelancer',
+          personality: parsed.personality || 'フレンドリーで親身',
+          interests: parsed.interests || ['旅行', '映画'],
+          cefrLevel: parsed.cefrLevel || 'A2',
+          voiceName: parsed.voiceName || 'Aoede',
+          memory: parsed.memory || { likes: [], dislikes: [], recentTopics: [], userNotes: [] },
+          totalConversations: 0,
+          isPreset: false,
+          createdAt: new Date().toISOString(),
+        };
+
+        return {
+          persona: newPersona,
+          tokenUsage: {
+            promptTokens: usage?.promptTokenCount || 0,
+            candidatesTokens: usage?.candidatesTokenCount || 0,
+          },
+        };
+      }
+    } catch (e) {
+      console.warn('Persona generation error with model ' + currentModel, e);
+    }
+  }
+
+  throw new Error('ペルソナの生成に失敗しました');
 }

@@ -1,7 +1,7 @@
 import React from 'react';
-import { BookOpen, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot } from 'lucide-react';
+import { BookOpen, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot, Phone } from 'lucide-react';
 
-export type NavTab = 'bookshelf' | 'create' | 'chat' | 'quiz' | 'vocab' | 'settings';
+export type NavTab = 'bookshelf' | 'create' | 'call' | 'chat' | 'quiz' | 'vocab' | 'settings';
 
 interface HeaderProps {
   activeTab: NavTab;
@@ -38,6 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   const tabs: TabItem[] = [
     { id: 'bookshelf', label: '本棚', icon: BookOpen },
     { id: 'create', label: '作成', icon: PlusCircle },
+    { id: 'call', label: '英会話', icon: Phone },
     { id: 'chat', label: 'AI相談', icon: Bot },
     { id: 'quiz', label: 'Anki', icon: Zap },
     { id: 'vocab', label: '語彙帳', icon: BookMarked, badge: dueCount > 0 ? dueCount : undefined },
