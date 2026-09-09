@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, ArrowRight, Star, ChevronDown, ChevronUp, BookOpen, RefreshCw } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, RotateCcw, ArrowRight, Star, ChevronDown, ChevronUp, BookOpen, Shuffle } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals } from '../utils/srs';
@@ -10,19 +10,31 @@ interface AnkiFlashcardViewProps {
   onRateCard: (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => void;
 }
 
+// Fisher-Yates シャッフル関数
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   vocabs,
   onRateCard,
 }) => {
   const today = getTodayDateString();
 
-  // 今日の復習対象ユニーク単語リストの算出
+  // 今日の復習対象単語リスト（シャッフルして初期化）
   const initialDueItems = useMemo(() => {
     const due = vocabs.filter(v => v.nextReviewDate <= today);
-    if (due.length > 0) {
-      return due.sort((a, b) => (b.importance ?? 3) - (a.importance ?? 3) || b.lapseCount - a.lapseCount);
-    }
-    return vocabs.filter(v => v.repetitionCount < 4).sort((a, b) => (b.importance ?? 3) - (a.importance ?? 3));
+    const targetPool = due.length > 0
+      ? due
+      : vocabs.filter(v => v.repetitionCount < 4);
+
+    if (targetPool.length === 0) return [];
+    return shuffleArray(targetPool);
   }, [vocabs, today]);
 
   // セッション全体で取り組む対象カード（親のvocabs更新でリセットされないよう保持）
@@ -63,7 +75,8 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     }
   }, [currentCard?.id]);
 
-  const handleRating = (rating: 'again' | 'hard' | 'good' | 'easy') => {
+  // レーティング評価処理（Anki SM-2 ラーニングステップ再現）
+  const handleRating = useCallback((rating: 'again' | 'hard' | 'good' | 'easy') => {
     if (!currentCard) return;
 
     const cardId = currentCard.id;
@@ -73,11 +86,12 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setSessionReviewedCount(prev => prev + 1);
 
     // 2. 本家Ankiのラーニング判定
+    // repetitionCount === 0 (新規またはAgain後のLapse) の場合、Again(<1分)またはHard(<10分)でセッション内再出題
     const isNewOrLapse = (currentCard.repetitionCount ?? 0) === 0;
     const shouldRelearn = rating === 'again' || (rating === 'hard' && isNewOrLapse);
 
     if (shouldRelearn) {
-      // 再学習（リトライ）：卒業せず、キューの少し後ろ（3〜4枚後または末尾）に再挿入
+      // 再学習（リトライ）：卒業せず、指定間隔（Againはすぐ、Hardは後）に再挿入
       setRelearningIds(prev => new Set(prev).add(cardId));
       
       setQueue(prevQueue => {
@@ -86,13 +100,30 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           // カードが1枚だけの場合はそのまま再出題
           return [currentCard];
         }
-        const insertOffset = rest.length >= 3 ? 3 : rest.length;
+
+        let insertIndex = 0;
+        if (rating === 'again') {
+          // 🔴 Again (< 1分): すぐ（1〜3枚後）に出題（ランダムジッター付き）
+          const minOffset = Math.min(rest.length, 1);
+          const maxOffset = Math.min(rest.length, 3);
+          insertIndex = minOffset + Math.floor(Math.random() * (maxOffset - minOffset + 1));
+        } else {
+          // 🟠 Hard (< 10分): 後（残りの60%〜90%の位置、または5〜8枚後）に出題
+          if (rest.length <= 3) {
+            insertIndex = rest.length; // 末尾
+          } else {
+            const minOffset = Math.min(rest.length, Math.max(3, Math.floor(rest.length * 0.6)));
+            const maxOffset = Math.min(rest.length, Math.max(minOffset, Math.floor(rest.length * 0.85) + 1));
+            insertIndex = minOffset + Math.floor(Math.random() * (maxOffset - minOffset + 1));
+          }
+        }
+
         const nextQ = [...rest];
-        nextQ.splice(insertOffset, 0, currentCard);
+        nextQ.splice(insertIndex, 0, currentCard);
         return nextQ;
       });
     } else {
-      // 卒業（合格）：キューから除外、卒業セットに追加
+      // 🟢 卒業（合格）：キューから除外、卒業セットに追加
       setGraduatedIds(prev => new Set(prev).add(cardId));
       setRelearningIds(prev => {
         const updated = new Set(prev);
@@ -116,16 +147,63 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
     setIsFlipped(false);
     setShowExample(false);
-  };
+  }, [currentCard, onRateCard]);
 
+  // 残りキューのシャッフル
+  const handleShuffleRemaining = useCallback(() => {
+    setQueue(prev => {
+      if (prev.length <= 1) return prev;
+      // 現在表示中のカード(prev[0])は維持し、残りのカード(prev.slice(1))をシャッフル
+      return [prev[0], ...shuffleArray(prev.slice(1))];
+    });
+  }, []);
+
+  // キーボードショートカット (Space, 1, 2, 3, 4)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // フォーム入力中は無効化
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (!isFlipped) {
+          setIsFlipped(true);
+        } else {
+          handleRating('good');
+        }
+      } else if (isFlipped) {
+        if (e.key === '1') {
+          e.preventDefault();
+          handleRating('again');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          handleRating('hard');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          handleRating('good');
+        } else if (e.key === '4') {
+          e.preventDefault();
+          handleRating('easy');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFlipped, handleRating]);
+
+  // もう一度復習する（セッション再初期化）
   const handleRestart = useCallback(() => {
     const due = vocabs.filter(v => v.nextReviewDate <= today);
-    const target = due.length > 0
-      ? due.sort((a, b) => (b.importance ?? 3) - (a.importance ?? 3) || b.lapseCount - a.lapseCount)
-      : vocabs.filter(v => v.repetitionCount < 4).sort((a, b) => (b.importance ?? 3) - (a.importance ?? 3));
+    const targetPool = due.length > 0
+      ? due
+      : vocabs.filter(v => v.repetitionCount < 4);
 
-    setSessionInitialCards(target);
-    setQueue(target);
+    const shuffled = shuffleArray(targetPool);
+    setSessionInitialCards(shuffled);
+    setQueue(shuffled);
     setIsFlipped(false);
     setShowExample(false);
     setSessionReviewedCount(0);
@@ -164,7 +242,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/30 transition-all"
           >
             <RotateCcw className="w-4 h-4" />
-            <span>もう一度復習する</span>
+            <span>もう一度復習する（シャッフル）</span>
           </button>
         </div>
       </div>
@@ -174,31 +252,44 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const importance = currentCard.importance ?? 3;
   const easePercent = Math.round((currentCard.easeFactor ?? 2.5) * 100);
   
-  // 正確な残り枚数（未卒業のユニーク単語数）
-  const totalCards = sessionInitialCards.length || initialDueItems.length;
-  const remainingCards = Math.max(0, totalCards - graduatedIds.size);
+  // カウンタ計算（Anki本家標準の3色）
   const inRelearnCount = relearningIds.size;
+  const graduatedCount = graduatedIds.size;
+  const freshDueCount = Math.max(0, queue.filter(item => !relearningIds.has(item.id)).length);
 
   return (
     <div className="max-w-xl mx-auto space-y-3">
-      {/* Progress Header: チラつきのない安定したAnkiカウンタ */}
-      <div className="flex items-center justify-between text-xs px-2 text-slate-400">
-        <span className="flex items-center gap-1.5 font-semibold text-cyan-400">
+      {/* Progress Header: Ankiステータスカウンタ ＆ シャッフル */}
+      <div className="flex items-center justify-between text-xs px-2 text-slate-400 flex-wrap gap-2">
+        <div className="flex items-center gap-1.5 font-semibold text-cyan-400">
           <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-          Anki 一問一答（忘却曲線SRS）
-        </span>
+          <span>Anki 一問一答（忘却曲線SRS）</span>
+        </div>
 
-        {/* 右側カウンタ：固定レイアウトでチラつきゼロ */}
-        <div className="flex items-center gap-2 text-[11px] font-medium">
-          {inRelearnCount > 0 && (
-            <span className="flex items-center gap-1 text-red-400 bg-red-950/60 border border-red-500/30 px-2 py-0.5 rounded-md font-semibold">
-              <RefreshCw className="w-3 h-3 animate-spin text-red-400" />
-              再学習: {inRelearnCount}語
-            </span>
+        {/* 右側カウンタ：Anki標準の3色バッジ (青:未着手 / 赤:再学習 / 緑:卒業) + シャッフル */}
+        <div className="flex items-center gap-2 text-[11px] font-medium flex-wrap">
+          {queue.length > 1 && (
+            <button
+              onClick={handleShuffleRemaining}
+              className="flex items-center space-x-1 px-2.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 border border-slate-800 rounded-lg transition-colors shadow-sm"
+              title="残りの出題順をランダムシャッフル"
+            >
+              <Shuffle className="w-3 h-3 text-cyan-400" />
+              <span>シャッフル</span>
+            </button>
           )}
-          <span className="bg-slate-950 px-2.5 py-0.5 rounded-md border border-slate-800">
-            残り: <strong className="text-white font-bold">{remainingCards}</strong> / {totalCards} 語
-          </span>
+
+          <div className="flex items-center bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800 space-x-2.5 shadow-sm">
+            <span className="text-blue-400 font-bold" title="今日の未着手カード">
+              🔵 {freshDueCount}
+            </span>
+            <span className="text-red-400 font-bold" title="再学習（リトライ中）のカード">
+              🔴 {inRelearnCount}
+            </span>
+            <span className="text-emerald-400 font-bold" title="本日卒業（習得完了）のカード">
+              🟢 {graduatedCount}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -218,15 +309,21 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               {currentCard.partOfSpeech || '語彙'}
             </span>
             <span className="text-[10px] font-bold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/30 flex items-center gap-0.5">
-              <Star className="w-3 h-3 fill-current" />★{importance}
+              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+              重要度 {importance}
             </span>
+            {relearningIds.has(currentCard.id) && (
+              <span className="text-[10px] font-bold text-red-300 bg-red-950/80 px-2 py-0.5 rounded-md border border-red-500/40 animate-pulse">
+                ⚡ 再学習中
+              </span>
+            )}
           </div>
 
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              speakText(currentCard.phrase);
+              speakText(currentCard.phrase, 0.95);
             }}
             className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
             title="発音を再生"
@@ -308,7 +405,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             </div>
           ) : (
             <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-1.5 animate-pulse">
-              <span>👆 カードをタップして答えを表示</span>
+              <span>👆 カードまたは Spaceキー で答えを表示</span>
             </div>
           )}
         </div>
@@ -323,31 +420,37 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         </div>
       </div>
 
-      {/* Fixed-Height Action Buttons Area (高さ64pxで完全固定。各ボタンに次回期日を動的バッジ表示) */}
+      {/* Fixed-Height Action Buttons Area (高さ64pxで完全固定。各ボタンに次回期日を動的バッジ表示 ＆ キーボードショートカットガイド) */}
       <div className="h-[64px] flex items-center">
         {isFlipped ? (
           <div className="grid grid-cols-4 gap-2 w-full animate-fadeIn">
-            {/* 1. Again (もう一度: セッション内で再出題) */}
+            {/* 1. Again (もう一度: すぐ再出題 <1分) */}
             <button
               type="button"
               onClick={() => handleRating('again')}
-              className="flex flex-col items-center justify-center h-[58px] bg-red-950/60 hover:bg-red-900/80 active:scale-95 text-red-400 border border-red-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-red-950/30"
+              className="flex flex-col items-center justify-center h-[58px] bg-red-950/60 hover:bg-red-900/80 active:scale-95 text-red-400 border border-red-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-red-950/30 group"
             >
-              <span className="text-sm">🔴</span>
-              <span>Again</span>
+              <div className="flex items-center gap-1">
+                <span className="text-sm">🔴</span>
+                <span>Again</span>
+                <kbd className="hidden sm:inline text-[9px] bg-red-950 px-1 rounded text-red-400 border border-red-800">1</kbd>
+              </div>
               <span className="text-[9px] text-red-300 font-semibold bg-red-900/40 px-1.5 py-0.2 rounded mt-0.5">
                 {nextIntervals.again}
               </span>
             </button>
 
-            {/* 2. Hard (難しい) */}
+            {/* 2. Hard (難しい: 後で再出題 <10分 / 復習カードは1.2x) */}
             <button
               type="button"
               onClick={() => handleRating('hard')}
-              className="flex flex-col items-center justify-center h-[58px] bg-amber-950/60 hover:bg-amber-900/80 active:scale-95 text-amber-400 border border-amber-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-amber-950/30"
+              className="flex flex-col items-center justify-center h-[58px] bg-amber-950/60 hover:bg-amber-900/80 active:scale-95 text-amber-400 border border-amber-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-amber-950/30 group"
             >
-              <span className="text-sm">🟠</span>
-              <span>Hard</span>
+              <div className="flex items-center gap-1">
+                <span className="text-sm">🟠</span>
+                <span>Hard</span>
+                <kbd className="hidden sm:inline text-[9px] bg-amber-950 px-1 rounded text-amber-400 border border-amber-800">2</kbd>
+              </div>
               <span className="text-[9px] text-amber-300 font-semibold bg-amber-900/40 px-1.5 py-0.2 rounded mt-0.5">
                 {nextIntervals.hard}
               </span>
@@ -357,10 +460,13 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             <button
               type="button"
               onClick={() => handleRating('good')}
-              className="flex flex-col items-center justify-center h-[58px] bg-emerald-950/60 hover:bg-emerald-900/80 active:scale-95 text-emerald-400 border border-emerald-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-950/30"
+              className="flex flex-col items-center justify-center h-[58px] bg-emerald-950/60 hover:bg-emerald-900/80 active:scale-95 text-emerald-400 border border-emerald-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-950/30 group"
             >
-              <span className="text-sm">🟢</span>
-              <span>Good</span>
+              <div className="flex items-center gap-1">
+                <span className="text-sm">🟢</span>
+                <span>Good</span>
+                <kbd className="hidden sm:inline text-[9px] bg-emerald-950 px-1 rounded text-emerald-400 border border-emerald-800">3/Space</kbd>
+              </div>
               <span className="text-[9px] text-emerald-300 font-semibold bg-emerald-900/40 px-1.5 py-0.2 rounded mt-0.5">
                 {nextIntervals.good}
               </span>
@@ -370,10 +476,13 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             <button
               type="button"
               onClick={() => handleRating('easy')}
-              className="flex flex-col items-center justify-center h-[58px] bg-blue-950/60 hover:bg-blue-900/80 active:scale-95 text-cyan-300 border border-cyan-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-blue-950/30"
+              className="flex flex-col items-center justify-center h-[58px] bg-blue-950/60 hover:bg-blue-900/80 active:scale-95 text-cyan-300 border border-cyan-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-blue-950/30 group"
             >
-              <span className="text-sm">🔵</span>
-              <span>Easy</span>
+              <div className="flex items-center gap-1">
+                <span className="text-sm">🔵</span>
+                <span>Easy</span>
+                <kbd className="hidden sm:inline text-[9px] bg-blue-950 px-1 rounded text-cyan-300 border border-cyan-800">4</kbd>
+              </div>
               <span className="text-[9px] text-cyan-200 font-semibold bg-blue-900/40 px-1.5 py-0.2 rounded mt-0.5">
                 {nextIntervals.easy}
               </span>
@@ -383,10 +492,11 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           <button
             type="button"
             onClick={() => setIsFlipped(true)}
-            className="w-full h-[58px] bg-slate-900 hover:bg-slate-850 active:scale-[0.99] text-slate-200 border border-slate-800 rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2"
+            className="w-full h-[58px] bg-slate-900 hover:bg-slate-850 active:scale-[0.99] text-slate-200 border border-slate-800 rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 group"
           >
             <span>答えを見る</span>
-            <ArrowRight className="w-4 h-4 text-cyan-400" />
+            <kbd className="hidden sm:inline text-[10px] bg-slate-950 text-slate-400 px-2 py-0.5 rounded border border-slate-800">Space</kbd>
+            <ArrowRight className="w-4 h-4 text-cyan-400 group-hover:translate-x-1 transition-transform" />
           </button>
         )}
       </div>
