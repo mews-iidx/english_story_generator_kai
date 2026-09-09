@@ -142,6 +142,7 @@ export function calculateAnkiSRS(
 
 /**
  * ボタン表示用に各レーティングを選んだ時の次回期日ラベルを取得
+ * Anki本家同様に、Againはセッション内再出題（< 1分）、新規カードHardは（< 10分）として表示
  */
 export function getNextReviewIntervals(item: Partial<VocabItem> | undefined): {
   again: string;
@@ -149,9 +150,11 @@ export function getNextReviewIntervals(item: Partial<VocabItem> | undefined): {
   good: string;
   easy: string;
 } {
+  const isNewOrLapse = (item?.repetitionCount ?? 0) === 0;
+  
   return {
-    again: formatIntervalDays(calculateAnkiSRS(item, 'again').intervalDays),
-    hard: formatIntervalDays(calculateAnkiSRS(item, 'hard').intervalDays),
+    again: '< 1分',
+    hard: isNewOrLapse ? '< 10分' : formatIntervalDays(calculateAnkiSRS(item, 'hard').intervalDays),
     good: formatIntervalDays(calculateAnkiSRS(item, 'good').intervalDays),
     easy: formatIntervalDays(calculateAnkiSRS(item, 'easy').intervalDays),
   };
