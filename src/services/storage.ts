@@ -303,6 +303,17 @@ export function batchUpdateVocabImportance(updates: { id: string; importance: nu
 }
 
 // Anki 4段階評価 (again, hard, good, easy) - 本家Anki SM-2 SRSアルゴリズム
+export function saveSingleVocab(item: VocabItem): void {
+  const vocabs = loadVocabs();
+  const index = vocabs.findIndex(v => v.id === item.id);
+  if (index >= 0) {
+    vocabs[index] = item;
+  } else {
+    vocabs.unshift(item);
+  }
+  saveVocabsBatch(vocabs);
+}
+
 export function recordAnkiRating(
   vocabId: string,
   rating: 'again' | 'hard' | 'good' | 'easy'

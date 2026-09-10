@@ -18,6 +18,7 @@ interface QuizViewProps {
   onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
   onRecordTokenUsage: (promptTokens: number, candidatesTokens: number) => void;
   onRateAnkiCard?: (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => void;
+  onRevertAnkiCard?: (previousCard: VocabItem) => void;
 }
 
 export const QuizView: React.FC<QuizViewProps> = ({
@@ -30,6 +31,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
   onAddToVocab,
   onRecordTokenUsage,
   onRateAnkiCard,
+  onRevertAnkiCard,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'anki' | 'ai_quiz'>('anki');
   const [mode, setMode] = useState<QuizMode>('en_to_ja');
@@ -228,6 +230,9 @@ export const QuizView: React.FC<QuizViewProps> = ({
           vocabs={vocabs}
           onRateCard={(id, rating) => {
             if (onRateAnkiCard) onRateAnkiCard(id, rating);
+          }}
+          onRevertCard={(prevCard) => {
+            if (onRevertAnkiCard) onRevertAnkiCard(prevCard);
           }}
         />
       )}

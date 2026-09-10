@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Zap, Filter, Layers, ArrowRight } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Zap, Filter, Layers, ArrowRight, Undo2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
@@ -67,9 +67,19 @@ const FILTER_OPTIONS: FilterOption[] = [
   },
 ];
 
+interface HistorySnapshot {
+  ratedCard: VocabItem;               // 評価直前のカードデータ（ストレージ復元用）
+  previousReviewQueue: VocabItem[];   // 評価前の復習キュー
+  previousLearningPool: VocabItem[];  // 評価前の学習プール
+  previousGraduatedIds: Set<string>;  // 評価前の卒業ID
+  previousReviewedCount: number;      // 評価前の解答数
+  activeCardBefore: VocabItem;        // 画面に表示されていたカード
+}
+
 interface AnkiFlashcardViewProps {
   vocabs: VocabItem[];
   onRateCard: (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => void;
+  onRevertCard?: (previousCard: VocabItem) => void;
 }
 
 // Fisher-Yates シャッフル関数
@@ -82,9 +92,36 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
+// 出題カードの決定ヘルパー（ユーザーがボタンを押した時のみ呼び出す）
+function pickNextCard(learning: VocabItem[], reviews: VocabItem[]): VocabItem | null {
+  const now = Date.now();
+  // 1. 期日(1分/10分)が到来している学習中カードがあれば最優先
+  const dueLearning = learning
+    .filter(c => !c.dueTimestamp || c.dueTimestamp <= now)
+    .sort((a, b) => (a.dueTimestamp || 0) - (b.dueTimestamp || 0));
+
+  if (dueLearning.length > 0) {
+    return dueLearning[0];
+  }
+
+  // 2. 通常の復習キュー（青・緑）から出題
+  if (reviews.length > 0) {
+    return reviews[0];
+  }
+
+  // 3. 復習キューが空の場合は、残りの学習中カードを最短期日順に出題（待たせない）
+  if (learning.length > 0) {
+    const sorted = [...learning].sort((a, b) => (a.dueTimestamp || 0) - (b.dueTimestamp || 0));
+    return sorted[0];
+  }
+
+  return null;
+}
+
 export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   vocabs,
   onRateCard,
+  onRevertCard,
 }) => {
   const today = getTodayDateString();
 
@@ -139,6 +176,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   // -------------------------------------------------------------
   const [reviewQueue, setReviewQueue] = useState<VocabItem[]>([]);
   const [learningPool, setLearningPool] = useState<VocabItem[]>([]);
+  const [activeCard, setActiveCard] = useState<VocabItem | null>(null);
   const [totalSessionCardsCount, setTotalSessionCardsCount] = useState<number>(0);
 
   const [isFlipped, setIsFlipped] = useState(false);
@@ -146,14 +184,8 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
   const [graduatedIds, setGraduatedIds] = useState<Set<string>>(new Set());
 
-  // 1秒ごとのタイマー更新（待機中カードの期限判定用）
-  const [nowTime, setNowTime] = useState(Date.now());
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setNowTime(Date.now());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // 操作取り消し（Undo）履歴スタック
+  const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
 
   // セッション初期化ヘルパー
   const initSession = useCallback((targetVocabs: VocabItem[]) => {
@@ -169,11 +201,15 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
     }
 
+    const firstCard = pickNextCard(learningCards, initialReviews);
+
     setReviewQueue(initialReviews);
     setLearningPool(learningCards);
+    setActiveCard(firstCard);
     setTotalSessionCardsCount(initialReviews.length + learningCards.length);
     setGraduatedIds(new Set());
     setSessionReviewedCount(0);
+    setHistoryStack([]);
     setIsFlipped(false);
     setShowExample(false);
   }, [today]);
@@ -197,111 +233,121 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     initSession(targetVocabs);
   }, [vocabs, initSession]);
 
-  // -------------------------------------------------------------
-  // 出題カードの決定（本家Ankiのインテリジェント・インターリーブ）:
-  // 1. learningPool 内で期日(1分/10分)が到来したカードがあれば最優先で出題
-  // 2. なければ通常の reviewQueue (青/緑) から順次出題
-  // 3. reviewQueue が空の場合は、まだ時間が来ていない学習中カードを前倒し出題
-  // -------------------------------------------------------------
-  const currentCard = useMemo(() => {
-    // 1. 期日が到来した学習中カード
-    const readyLearningCards = learningPool
-      .filter(c => !c.dueTimestamp || c.dueTimestamp <= nowTime)
-      .sort((a, b) => (a.dueTimestamp || 0) - (b.dueTimestamp || 0));
-
-    if (readyLearningCards.length > 0) {
-      return readyLearningCards[0];
-    }
-
-    // 2. 通常の復習キュー（青・緑）
-    if (reviewQueue.length > 0) {
-      return reviewQueue[0];
-    }
-
-    // 3. 復習キューが空になった場合、残りの学習中カードを最短期日順に出題
-    if (learningPool.length > 0) {
-      const sortedLearning = [...learningPool].sort((a, b) => (a.dueTimestamp || 0) - (b.dueTimestamp || 0));
-      return sortedLearning[0];
-    }
-
-    // 4. すべて完了
-    return null;
-  }, [learningPool, reviewQueue, nowTime]);
-
   // 次回間隔プレビュー（Anki本家同様に各ボタンに表示）
   const nextIntervals = useMemo(() => {
-    return getNextReviewIntervals(currentCard ?? undefined);
-  }, [currentCard]);
+    return getNextReviewIntervals(activeCard ?? undefined);
+  }, [activeCard]);
 
   // 新しいカードになった時の読み上げ
   useEffect(() => {
     setIsFlipped(false);
     setShowExample(false);
-    if (currentCard) {
-      speakText(currentCard.phrase, 0.95);
+    if (activeCard) {
+      speakText(activeCard.phrase, 0.95);
     }
-  }, [currentCard?.id]);
+  }, [activeCard?.id]);
 
   // レーティング評価処理（Anki SM-2 & Learning Steps 1m/10m 完全準拠）
   const handleRating = useCallback((rating: 'again' | 'hard' | 'good' | 'easy') => {
-    if (!currentCard) return;
+    if (!activeCard) return;
 
-    const cardId = currentCard.id;
+    const cardId = activeCard.id;
+
+    // Undo 用のスナップショットを保存
+    const snapshot: HistorySnapshot = {
+      ratedCard: activeCard,
+      previousReviewQueue: [...reviewQueue],
+      previousLearningPool: [...learningPool],
+      previousGraduatedIds: new Set(graduatedIds),
+      previousReviewedCount: sessionReviewedCount,
+      activeCardBefore: activeCard,
+    };
+    setHistoryStack(prev => [...prev, snapshot]);
 
     // 1. 永続ストレージへの記録
     onRateCard(cardId, rating);
     setSessionReviewedCount(prev => prev + 1);
 
     // 2. 次状態の算出
-    const nextSRS = calculateAnkiSRS(currentCard, rating);
+    const nextSRS = calculateAnkiSRS(activeCard, rating);
     const updatedCard: VocabItem = {
-      ...currentCard,
+      ...activeCard,
       ...nextSRS,
     };
 
     const isStillLearning = nextSRS.cardState === 'learning' || nextSRS.cardState === 'relearning';
 
+    // 次のキュー状態を計算
+    let nextReviews = reviewQueue.filter(c => c.id !== cardId);
+    let nextLearning: VocabItem[];
+
     if (isStillLearning) {
-      // 🔴 学習中 / 再学習中:
-      // reviewQueue から除外（もしあれば）し、learningPool にタイマー付きで配置
-      setReviewQueue(prev => prev.filter(c => c.id !== cardId));
-      setLearningPool(prev => {
-        const filtered = prev.filter(c => c.id !== cardId);
-        return [...filtered, updatedCard];
-      });
+      // 🔴 学習中 / 再学習中: learningPool に配置
+      nextLearning = [...learningPool.filter(c => c.id !== cardId), updatedCard];
     } else {
-      // 🟢 卒業（合格）:
-      // 両方のキューから完全に除外し、卒業セットに追加
-      setReviewQueue(prev => prev.filter(c => c.id !== cardId));
-      setLearningPool(prev => prev.filter(c => c.id !== cardId));
+      // 🟢 卒業（合格）: 両方から除外
+      nextLearning = learningPool.filter(c => c.id !== cardId);
       setGraduatedIds(prev => new Set(prev).add(cardId));
+    }
 
-      const remainingReviews = reviewQueue.filter(c => c.id !== cardId).length;
-      const remainingLearning = learningPool.filter(c => c.id !== cardId).length;
+    setReviewQueue(nextReviews);
+    setLearningPool(nextLearning);
 
-      if (remainingReviews === 0 && remainingLearning === 0) {
-        confetti({
-          particleCount: 100,
-          spread: 80,
-          origin: { y: 0.6 },
-          colors: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']
-        });
-      }
+    // ユーザーがボタンを押した「この瞬間」にだけ次のカードを選出
+    const nextCard = pickNextCard(nextLearning, nextReviews);
+    setActiveCard(nextCard);
+
+    if (!nextCard && !isStillLearning && nextReviews.length === 0 && nextLearning.length === 0) {
+      confetti({
+        particleCount: 100,
+        spread: 80,
+        origin: { y: 0.6 },
+        colors: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']
+      });
     }
 
     setIsFlipped(false);
     setShowExample(false);
-  }, [currentCard, onRateCard, reviewQueue, learningPool]);
+  }, [activeCard, onRateCard, reviewQueue, learningPool, graduatedIds, sessionReviewedCount]);
+
+  // 間違えた時の取り消し（Undo）処理
+  const handleUndo = useCallback(() => {
+    if (historyStack.length === 0) return;
+
+    const last = historyStack[historyStack.length - 1];
+    setHistoryStack(prev => prev.slice(0, -1));
+
+    // ストレージ上のカード状態を元に戻す
+    if (onRevertCard) {
+      onRevertCard(last.ratedCard);
+    }
+
+    // キュー・プール・卒業状態を完全に復元
+    setReviewQueue(last.previousReviewQueue);
+    setLearningPool(last.previousLearningPool);
+    setGraduatedIds(last.previousGraduatedIds);
+    setSessionReviewedCount(last.previousReviewedCount);
+    setActiveCard(last.activeCardBefore);
+    setIsFlipped(true); // 裏返した状態で復元し、すぐに正しい評価を選べるようにする
+    setShowExample(false);
+  }, [historyStack, onRevertCard]);
 
   // 残り復習キューのシャッフル
   const handleShuffleRemaining = useCallback(() => {
     setReviewQueue(prev => shuffleArray(prev));
   }, []);
 
-  // キーボードショートカット (Space, 1, 2, 3, 4)
+  // キーボードショートカット (Space, 1, 2, 3, 4, Ctrl+Z / z)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      // Ctrl+Z or Cmd+Z or 'z' or 'u' で Undo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndo();
         return;
       }
 
@@ -331,7 +377,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFlipped, handleRating]);
+  }, [isFlipped, handleRating, handleUndo]);
 
   // もう一度復習する（セッション再初期化）
   const handleRestart = useCallback(() => {
@@ -344,7 +390,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const graduatedCount = graduatedIds.size;
 
   // 全カード完了または対象語彙0件画面
-  if (!currentCard) {
+  if (!activeCard) {
     const currentStats = filterStats[importanceFilter];
 
     return (
@@ -421,6 +467,17 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
           {/* 次の学習ステップ提案アクション */}
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+            {historyStack.length > 0 && (
+              <button
+                onClick={handleUndo}
+                className="w-full sm:w-auto flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-xl text-xs sm:text-sm font-bold transition-all"
+                title="最後の解答を取り消して戻す (Ctrl+Z)"
+              >
+                <Undo2 className="w-4 h-4" />
+                <span>1つ戻す (Undo)</span>
+              </button>
+            )}
+
             {importanceFilter === 'ge4' && filterStats.ge3.due > 0 && (
               <button
                 onClick={() => handleSelectFilter('ge3')}
@@ -463,8 +520,8 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     );
   }
 
-  const importance = currentCard.importance ?? 3;
-  const easePercent = Math.round((currentCard.easeFactor ?? 2.5) * 100);
+  const importance = activeCard.importance ?? 3;
+  const easePercent = Math.round((activeCard.easeFactor ?? 2.5) * 100);
 
   return (
     <div className="max-w-xl mx-auto space-y-3">
@@ -511,15 +568,27 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         </div>
       </div>
 
-      {/* 2. Progress Header: Ankiステータスカウンタ ＆ シャッフル */}
+      {/* 2. Progress Header: Ankiステータスカウンタ ＆ Undo ＆ シャッフル */}
       <div className="flex items-center justify-between text-xs px-2 text-slate-400 flex-wrap gap-2">
         <div className="flex items-center gap-1.5 font-semibold text-cyan-400">
           <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
           <span>Anki 一問一答（忘却曲線SRS）</span>
         </div>
 
-        {/* 右側カウンタ：Anki標準の3色バッジ (青:未着手・復習 / 赤:再学習待機 / 緑:卒業) + シャッフル */}
         <div className="flex items-center gap-2 text-[11px] font-medium flex-wrap">
+          {/* Undo (取り消し) ボタン */}
+          {historyStack.length > 0 && (
+            <button
+              onClick={handleUndo}
+              className="flex items-center space-x-1 px-2.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border border-amber-500/30 rounded-lg transition-colors shadow-sm"
+              title="直前の解答を取り消して戻す (Ctrl+Z)"
+            >
+              <Undo2 className="w-3 h-3 text-amber-400" />
+              <span>戻す</span>
+            </button>
+          )}
+
+          {/* シャッフル */}
           {reviewQueue.length > 1 && (
             <button
               onClick={handleShuffleRemaining}
@@ -531,6 +600,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             </button>
           )}
 
+          {/* 右側カウンタ：Anki標準の3色バッジ (青:未着手・復習 / 赤:再学習待機 / 緑:卒業) */}
           <div className="flex items-center bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800 space-x-2.5 shadow-sm">
             <span className="text-blue-400 font-bold" title="未着手・期日の復習カード">
               🔵 {freshDueCount}
@@ -558,21 +628,21 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         <div className="flex items-center justify-between flex-shrink-0">
           <div className="flex items-center space-x-2">
             <span className="text-[10px] uppercase font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-              {currentCard.partOfSpeech || '語彙'}
+              {activeCard.partOfSpeech || '語彙'}
             </span>
             <span className="text-[10px] font-bold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/30 flex items-center gap-0.5">
               <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
               重要度 {importance}
             </span>
 
-            {/* ラーニング状態バッジ（タイマーではなくステップ状態を表示） */}
-            {currentCard.cardState === 'learning' && (
+            {/* ラーニング状態バッジ */}
+            {activeCard.cardState === 'learning' && (
               <span className="text-[10px] font-bold text-red-300 bg-red-950/80 px-2 py-0.5 rounded-md border border-red-500/40 flex items-center gap-1">
                 <Zap className="w-2.5 h-2.5 text-yellow-400" />
-                学習中 (Step {currentCard.learningStep === 1 ? '2: 10分' : '1: 1分'})
+                学習中 (Step {activeCard.learningStep === 1 ? '2: 10分' : '1: 1分'})
               </span>
             )}
-            {currentCard.cardState === 'relearning' && (
+            {activeCard.cardState === 'relearning' && (
               <span className="text-[10px] font-bold text-red-300 bg-red-950/80 px-2 py-0.5 rounded-md border border-red-500/40 flex items-center gap-1">
                 <RotateCcw className="w-2.5 h-2.5 text-red-400" />
                 再学習中 (10分)
@@ -585,7 +655,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                speakText(currentCard.phrase, 0.95);
+                speakText(activeCard.phrase, 0.95);
               }}
               className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
               title="発音を再生"
@@ -599,18 +669,18 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         <div className="flex-1 flex flex-col items-center justify-center text-center px-2 min-h-0 overflow-y-auto">
           {/* Phrase */}
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-            {currentCard.phrase}
+            {activeCard.phrase}
           </h2>
 
           {/* Back: Meaning & Collapsible Example */}
           {isFlipped ? (
             <div className="mt-3 space-y-2 animate-fadeIn w-full">
               <p className="text-lg sm:text-xl font-bold text-cyan-300">
-                {currentCard.meaning}
+                {activeCard.meaning}
               </p>
 
               {/* Collapsible Example Accordion (デフォルト折りたたみ) */}
-              {(currentCard.exampleSentence || currentCard.contextNote) && (
+              {(activeCard.exampleSentence || activeCard.contextNote) && (
                 <div className="pt-1">
                   {!showExample ? (
                     <button
@@ -635,7 +705,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
                         <div className="flex items-center space-x-1">
                           <button
                             type="button"
-                            onClick={() => speakText(currentCard.exampleSentence || '')}
+                            onClick={() => speakText(activeCard.exampleSentence || '')}
                             className="p-0.5 text-slate-400 hover:text-cyan-300"
                             title="例文を再生"
                           >
@@ -651,14 +721,14 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
                           </button>
                         </div>
                       </div>
-                      {currentCard.exampleSentence && (
+                      {activeCard.exampleSentence && (
                         <p className="font-serif leading-tight text-[11px]">
-                          "{currentCard.exampleSentence}"
+                          "{activeCard.exampleSentence}"
                         </p>
                       )}
-                      {currentCard.contextNote && (
+                      {activeCard.contextNote && (
                         <p className="text-[10px] text-slate-400">
-                          💡 {currentCard.contextNote}
+                          💡 {activeCard.contextNote}
                         </p>
                       )}
                     </div>
@@ -668,16 +738,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             </div>
           ) : (
             <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-1.5 animate-pulse">
-              <span>👆 カードまたは Spaceキー で答えを表示</span>
+              <span>👆 カードをタップして答えを表示</span>
             </div>
           )}
         </div>
 
         {/* Card Footer info: Repetition, Interval, and Ease Factor */}
         <div className="text-center text-[10px] text-slate-500 flex-shrink-0 flex items-center justify-center gap-2">
-          <span>定着回数: <strong className="text-slate-400">{currentCard.repetitionCount}回</strong></span>
+          <span>定着回数: <strong className="text-slate-400">{activeCard.repetitionCount}回</strong></span>
           <span>•</span>
-          <span>現在間隔: <strong className="text-slate-400">{currentCard.intervalDays}日</strong></span>
+          <span>現在間隔: <strong className="text-slate-400">{activeCard.intervalDays}日</strong></span>
           <span>•</span>
           <span>Ease: <strong className="text-slate-400">{easePercent}%</strong></span>
         </div>
@@ -703,7 +773,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               </span>
             </button>
 
-            {/* 2. Hard (難しい: 6分/10分ステップ) */}
+            {/* 2. Hard (難しい: 6分/10分ステップまたは1.2倍) */}
             <button
               type="button"
               onClick={() => handleRating('hard')}
@@ -719,7 +789,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               </span>
             </button>
 
-            {/* 3. Good (普通: 10分ステップまたは1日後卒業) */}
+            {/* 3. Good (普通: 10分ステップまたはSM-2期日) */}
             <button
               type="button"
               onClick={() => handleRating('good')}
@@ -735,7 +805,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               </span>
             </button>
 
-            {/* 4. Easy (簡単: 4日後即時卒業) */}
+            {/* 4. Easy (簡単: 4日後即時卒業またはボーナス期日) */}
             <button
               type="button"
               onClick={() => handleRating('easy')}
@@ -752,10 +822,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             </button>
           </div>
         ) : (
-          <div className="w-full text-center text-xs text-slate-500 py-3 flex items-center justify-center gap-2 select-none animate-fadeIn">
-            <span>👆 カードをタップして答えを表示</span>
-            <kbd className="hidden sm:inline text-[10px] bg-slate-950 text-slate-400 px-2 py-0.5 rounded border border-slate-800">Space</kbd>
-          </div>
+          <div className="w-full h-full" />
         )}
       </div>
     </div>

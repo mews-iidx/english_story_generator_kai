@@ -35,6 +35,7 @@ import {
   saveVocabsBatch,
   isInvalidVocabMeaning,
   recordAnkiRating,
+  saveSingleVocab,
   loadDifficultSentences,
   saveDifficultSentence,
   updateDifficultSentenceReason,
@@ -413,6 +414,14 @@ export const App: React.FC = () => {
   // Anki 4段階評価
   const handleRateAnkiCard = (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => {
     recordAnkiRating(vocabId, rating);
+    const updated = loadVocabs();
+    setVocabs(updated);
+    triggerAutoSync(updated, stories);
+  };
+
+  // Anki レーティングの取り消し (Undo)
+  const handleRevertAnkiCard = (previousCard: VocabItem) => {
+    saveSingleVocab(previousCard);
     const updated = loadVocabs();
     setVocabs(updated);
     triggerAutoSync(updated, stories);
@@ -839,6 +848,7 @@ export const App: React.FC = () => {
                 onAddToVocab={handleAddToVocab}
                 onRecordTokenUsage={handleRecordTokenUsage}
                 onRateAnkiCard={handleRateAnkiCard}
+                onRevertAnkiCard={handleRevertAnkiCard}
               />
             )}
 

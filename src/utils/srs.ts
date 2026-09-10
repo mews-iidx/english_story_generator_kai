@@ -19,6 +19,22 @@ export function addDaysToDate(days: number): string {
 }
 
 /**
+ * 本家AnkiのFuzz Factor（期日の分散・散らし）
+ * 同じ日に解いたカードが将来同じ日に一斉に集中してパンクするのを防ぐため、計算日数に±5〜10%の揺らぎを加える
+ */
+export function applyFuzz(days: number): number {
+  if (days <= 2) return days;
+  if (days <= 5) {
+    const delta = Math.floor(Math.random() * 3) - 1; // -1, 0, +1
+    return Math.max(2, days + delta);
+  }
+  // ±5% ~ ±10%
+  const fuzzMax = Math.max(1, Math.round(days * 0.08));
+  const delta = Math.floor(Math.random() * (fuzzMax * 2 + 1)) - fuzzMax;
+  return Math.max(3, days + delta);
+}
+
+/**
  * 間隔日数を人間が読みやすいラベルに変換 (Ankiスタイルの表示)
  * 例: 0 -> "今日", 1 -> "1日", 6 -> "6日", 45 -> "1.5ヶ月", 400 -> "1.1年"
  */
@@ -51,7 +67,8 @@ export interface AnkiSRSResult {
  */
 export function calculateAnkiSRS(
   item: Partial<VocabItem> | undefined,
-  rating: 'again' | 'hard' | 'good' | 'easy'
+  rating: 'again' | 'hard' | 'good' | 'easy',
+  withFuzz = true
 ): AnkiSRSResult {
   const now = new Date().toISOString();
   const currentEF = item?.easeFactor ?? DEFAULT_EASE_FACTOR;
@@ -213,39 +230,52 @@ export function calculateAnkiSRS(
         newLapses = currentLapses + 1;
         break;
       case 'hard':
-        // 間隔 1.2倍
+        // 間隔 1.2倍 (Hard Factor) & Ease Factor -15%
         newState = 'review';
         newStep = 0;
         newDueTimestamp = null;
         newEF = Math.max(MIN_EASE_FACTOR, Math.round((currentEF - 0.15) * 100) / 100);
         newReps = currentReps + 1;
-        newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * HARD_FACTOR));
+        {
+          const base = Math.max(currentInterval + 1, Math.round(currentInterval * HARD_FACTOR));
+          newInterval = withFuzz ? applyFuzz(base) : base;
+        }
         newNextReviewDate = addDaysToDate(newInterval);
         break;
       case 'good':
-        // 間隔 EF倍
+        // 1回目(Interval=1)は3日、それ以降は Interval * EF倍
         newState = 'review';
         newStep = 0;
         newDueTimestamp = null;
         newReps = currentReps + 1;
-        if (currentInterval <= 1) {
-          newInterval = 6;
-        } else {
-          newInterval = Math.max(currentInterval + 1, Math.round(currentInterval * currentEF));
+        {
+          let base: number;
+          if (currentInterval <= 1) {
+            base = 3;
+          } else if (currentInterval === 2) {
+            base = 5;
+          } else {
+            base = Math.max(currentInterval + 1, Math.round(currentInterval * currentEF));
+          }
+          newInterval = withFuzz ? applyFuzz(base) : base;
         }
         newNextReviewDate = addDaysToDate(newInterval);
         break;
       case 'easy':
-        // 間隔 EF * 1.3倍
+        // 1回目(Interval=1)は5日、それ以降は Interval * EF * 1.3倍 & Ease Factor +15%
         newState = 'review';
         newStep = 0;
         newDueTimestamp = null;
         newEF = Math.round((currentEF + 0.15) * 100) / 100;
         newReps = currentReps + 1;
-        if (currentInterval <= 1) {
-          newInterval = Math.round(6 * newEF * EASY_BONUS);
-        } else {
-          newInterval = Math.max(currentInterval + 2, Math.round(currentInterval * newEF * EASY_BONUS));
+        {
+          let base: number;
+          if (currentInterval <= 1) {
+            base = 5;
+          } else {
+            base = Math.max(currentInterval + 2, Math.round(currentInterval * newEF * EASY_BONUS));
+          }
+          newInterval = withFuzz ? applyFuzz(base) : base;
         }
         newNextReviewDate = addDaysToDate(newInterval);
         break;
@@ -304,10 +334,10 @@ export function getNextReviewIntervals(item: Partial<VocabItem> | undefined): {
     };
   }
 
-  // Review
-  const hardRes = calculateAnkiSRS(item, 'hard');
-  const goodRes = calculateAnkiSRS(item, 'good');
-  const easyRes = calculateAnkiSRS(item, 'easy');
+  // Review (withFuzz = false for consistent button preview labels)
+  const hardRes = calculateAnkiSRS(item, 'hard', false);
+  const goodRes = calculateAnkiSRS(item, 'good', false);
+  const easyRes = calculateAnkiSRS(item, 'easy', false);
 
   return {
     again: '< 10分',
