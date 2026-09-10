@@ -1,9 +1,71 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Clock, Zap } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Clock, Zap, Filter, Layers, ArrowRight } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
+
+export type AnkiImportanceFilter = 'ge4' | 'ge3' | 'all' | 'only5' | 'only4' | 'only3' | 'low';
+
+interface FilterOption {
+  id: AnkiImportanceFilter;
+  label: string;
+  badgeLabel: string;
+  description: string;
+  filterFn: (item: VocabItem) => boolean;
+}
+
+const FILTER_OPTIONS: FilterOption[] = [
+  {
+    id: 'ge4',
+    label: '★4以上 (最頻出・必須)',
+    badgeLabel: '★4以上 👑',
+    description: '日常英会話の基盤となる最頻出・必須語彙に集中',
+    filterFn: (v) => (v.importance ?? 3) >= 4,
+  },
+  {
+    id: 'ge3',
+    label: '★3以上 (標準〜重要)',
+    badgeLabel: '★3以上 ⭐',
+    description: '標準から最頻出までバランス良くマスター',
+    filterFn: (v) => (v.importance ?? 3) >= 3,
+  },
+  {
+    id: 'all',
+    label: 'すべて (全重要度)',
+    badgeLabel: 'すべて 📚',
+    description: '登録された全語彙をまとめて復習',
+    filterFn: () => true,
+  },
+  {
+    id: 'only5',
+    label: '★5 (超重要・日常必須)',
+    badgeLabel: '★5 日常必須',
+    description: '最優先で身につけるべき基礎語彙',
+    filterFn: (v) => (v.importance ?? 3) === 5,
+  },
+  {
+    id: 'only4',
+    label: '★4 (重要・頻出)',
+    badgeLabel: '★4 頻出',
+    description: '表現力と理解度を高める頻出語彙',
+    filterFn: (v) => (v.importance ?? 3) === 4,
+  },
+  {
+    id: 'only3',
+    label: '★3 (標準)',
+    badgeLabel: '★3 標準',
+    description: '一般的な日常・ストーリー語彙',
+    filterFn: (v) => (v.importance ?? 3) === 3,
+  },
+  {
+    id: 'low',
+    label: '★1〜2 (発展・難単語)',
+    badgeLabel: '★1〜2 発展 🎯',
+    description: '専門的・低頻度な語彙をまとめて集中演習',
+    filterFn: (v) => (v.importance ?? 3) <= 2,
+  },
+];
 
 interface AnkiFlashcardViewProps {
   vocabs: VocabItem[];
@@ -26,19 +88,70 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 }) => {
   const today = getTodayDateString();
 
-  // 今日の対象カード（未着手 + 再学習中）の選出
-  const initialCards = useMemo(() => {
-    // 1. 本日再学習中のカード
-    const learning = vocabs.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
-    // 2. 本日復習期日のカード (新規または復習)
-    const due = vocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
+  // 重要度フィルター設定 (localStorageで永続化、初期値は★4以上推奨)
+  const [importanceFilter, setImportanceFilter] = useState<AnkiImportanceFilter>(() => {
+    const saved = localStorage.getItem('anki_importance_filter') as AnkiImportanceFilter;
+    return saved && FILTER_OPTIONS.some(o => o.id === saved) ? saved : 'ge4';
+  });
 
-    const pool = due.length > 0 || learning.length > 0
-      ? [...learning, ...shuffleArray(due)]
-      : shuffleArray(vocabs.filter(v => v.repetitionCount < 4));
+  const activeFilterDef = useMemo(() => {
+    return FILTER_OPTIONS.find(f => f.id === importanceFilter) || FILTER_OPTIONS[0];
+  }, [importanceFilter]);
 
-    return pool;
+  // 各フィルター別の件数統計（全体件数 & 今日の復習対象件数）
+  const filterStats = useMemo(() => {
+    const stats: Record<AnkiImportanceFilter, { total: number; due: number }> = {
+      ge4: { total: 0, due: 0 },
+      ge3: { total: 0, due: 0 },
+      all: { total: 0, due: 0 },
+      only5: { total: 0, due: 0 },
+      only4: { total: 0, due: 0 },
+      only3: { total: 0, due: 0 },
+      low: { total: 0, due: 0 },
+    };
+
+    FILTER_OPTIONS.forEach(opt => {
+      const matched = vocabs.filter(opt.filterFn);
+      const dueCount = matched.filter(v =>
+        v.cardState === 'learning' ||
+        v.cardState === 'relearning' ||
+        ((!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today)
+      ).length;
+
+      stats[opt.id] = {
+        total: matched.length,
+        due: dueCount,
+      };
+    });
+
+    return stats;
   }, [vocabs, today]);
+
+  // 現在のフィルターに合致する語彙
+  const filteredVocabs = useMemo(() => {
+    return vocabs.filter(activeFilterDef.filterFn);
+  }, [vocabs, activeFilterDef]);
+
+  // 今日の対象カード（未着手 + 再学習中）の選出ヘルパー
+  const buildInitialPool = useCallback((targetVocabs: VocabItem[]) => {
+    // 1. 本日再学習中のカード
+    const learning = targetVocabs.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
+    // 2. 本日復習期日のカード (新規または復習)
+    const due = targetVocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
+
+    if (due.length > 0 || learning.length > 0) {
+      return [...learning, ...shuffleArray(due)];
+    }
+
+    // 復習期日のものがない場合は未定着カードをシャッフル
+    const unmastered = targetVocabs.filter(v => v.repetitionCount < 4);
+    if (unmastered.length > 0) {
+      return shuffleArray(unmastered);
+    }
+
+    // すべて定着済みの場合は全カードシャッフル（再度復習可能に）
+    return shuffleArray(targetVocabs);
+  }, [today]);
 
   // 動的実行キュー（未合格のカード一覧）
   const [queue, setQueue] = useState<VocabItem[]>([]);
@@ -62,12 +175,30 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   // 初回マウント時のみセッション初期化
   const isInitializedRef = useRef(false);
   useEffect(() => {
-    if (!isInitializedRef.current && initialCards.length > 0) {
-      setSessionInitialCards(initialCards);
-      setQueue(initialCards);
+    if (!isInitializedRef.current && filteredVocabs.length > 0) {
+      const pool = buildInitialPool(filteredVocabs);
+      setSessionInitialCards(pool);
+      setQueue(pool);
       isInitializedRef.current = true;
     }
-  }, [initialCards]);
+  }, [filteredVocabs, buildInitialPool]);
+
+  // フィルター変更ハンドラー
+  const handleSelectFilter = useCallback((newFilter: AnkiImportanceFilter) => {
+    setImportanceFilter(newFilter);
+    localStorage.setItem('anki_importance_filter', newFilter);
+
+    const targetDef = FILTER_OPTIONS.find(f => f.id === newFilter) || FILTER_OPTIONS[0];
+    const targetVocabs = vocabs.filter(targetDef.filterFn);
+    const pool = buildInitialPool(targetVocabs);
+
+    setSessionInitialCards(pool);
+    setQueue(pool);
+    setGraduatedIds(new Set());
+    setSessionReviewedCount(0);
+    setIsFlipped(false);
+    setShowExample(false);
+  }, [vocabs, buildInitialPool]);
 
   const currentCard = queue[0]; // 常にキューの先頭カードを出題
 
@@ -205,54 +336,136 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
   // もう一度復習する（セッション再初期化）
   const handleRestart = useCallback(() => {
-    const learning = vocabs.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
-    const due = vocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
-
-    const pool = due.length > 0 || learning.length > 0
-      ? [...learning, ...shuffleArray(due)]
-      : shuffleArray(vocabs.filter(v => v.repetitionCount < 4));
-
+    const pool = buildInitialPool(filteredVocabs);
     setSessionInitialCards(pool);
     setQueue(pool);
     setIsFlipped(false);
     setShowExample(false);
     setSessionReviewedCount(0);
     setGraduatedIds(new Set());
-  }, [vocabs, today]);
+  }, [filteredVocabs, buildInitialPool]);
 
-  // 全カード完了画面
+  // フィルター別カウンタ計算（Anki本家標準の3色）
+  const inRelearnCount = filteredVocabs.filter(v => (v.cardState === 'learning' || v.cardState === 'relearning') && !graduatedIds.has(v.id)).length;
+  const graduatedCount = graduatedIds.size;
+  const freshDueCount = filteredVocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today && !graduatedIds.has(v.id)).length;
+
+  // 全カード完了または対象語彙0件画面
   if (!currentCard || queue.length === 0) {
-    const totalDoneCount = sessionInitialCards.length || initialCards.length;
+    const totalDoneCount = sessionInitialCards.length;
+    const currentStats = filterStats[importanceFilter];
 
     return (
-      <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-5 max-w-xl mx-auto shadow-2xl animate-fadeIn">
-        <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center">
-          <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+      <div className="space-y-4 max-w-xl mx-auto">
+        {/* 重要度フィルター切替セレクター */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 shadow-lg">
+          <div className="flex items-center justify-between gap-2 mb-2 px-1">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
+              <Filter className="w-3.5 h-3.5 text-cyan-400" />
+              <span>学習する重要度を選択:</span>
+            </div>
+            <span className="text-[11px] text-slate-400">
+              {activeFilterDef.description}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+            {FILTER_OPTIONS.map((opt) => {
+              const stat = filterStats[opt.id];
+              const isSelected = importanceFilter === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => handleSelectFilter(opt.id)}
+                  className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    isSelected
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800/80'
+                  }`}
+                >
+                  <span>{opt.badgeLabel}</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                    isSelected
+                      ? 'bg-blue-900/80 text-cyan-200 border border-blue-400/40'
+                      : stat.due > 0
+                      ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
+                      : 'bg-slate-900 text-slate-500'
+                  }`}>
+                    {stat.due > 0 ? `${stat.due}要復習` : `${stat.total}語`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="space-y-1.5">
-          <h3 className="text-xl sm:text-2xl font-bold text-white">
-            今日のAnki復習セッション完了！🎉
-          </h3>
-          <p className="text-xs sm:text-sm text-slate-300">
-            {sessionReviewedCount > 0 ? (
-              <>
-                合計 <strong className="text-cyan-300">{sessionReviewedCount}回</strong> の解答で、本日の全 <strong className="text-white">{totalDoneCount}語</strong> を完全にクリアしました！
-              </>
-            ) : (
-              '現在復習が必要な語彙はありません！'
+        {/* 完了カード */}
+        <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-7 sm:p-10 text-center space-y-5 shadow-2xl animate-fadeIn">
+          <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center">
+            <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+          </div>
+
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 text-xs font-bold">
+              <span>{activeFilterDef.label}</span>
+            </div>
+
+            <h3 className="text-xl sm:text-2xl font-bold text-white">
+              {totalDoneCount > 0 ? '復習セッション完了！🎉' : '復習対象の語彙はありません'}
+            </h3>
+            
+            <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
+              {totalDoneCount > 0 ? (
+                <>
+                  合計 <strong className="text-cyan-300">{sessionReviewedCount}回</strong> の解答で、本日の全 <strong className="text-white">{totalDoneCount}語</strong> を完全にクリアしました！
+                </>
+              ) : currentStats.total > 0 ? (
+                `この重要度（${activeFilterDef.label}）の語彙は全 ${currentStats.total}語 がすべて定着済み、または本日復習期日のものはありません！`
+              ) : (
+                `この重要度レベルの単語はまだ登録されていません。`
+              )}
+            </p>
+          </div>
+
+          {/* 次の学習ステップ提案アクション */}
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+            {importanceFilter === 'ge4' && filterStats.ge3.due > 0 && (
+              <button
+                onClick={() => handleSelectFilter('ge3')}
+                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/30 transition-all"
+              >
+                <Layers className="w-4 h-4" />
+                <span>★3以上に広げて学習 (要復習: {filterStats.ge3.due}語)</span>
+                <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
+              </button>
             )}
-          </p>
-        </div>
 
-        <div className="pt-2 flex justify-center gap-3">
-          <button
-            onClick={handleRestart}
-            className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/30 transition-all"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>もう一度復習する（シャッフル）</span>
-          </button>
+            {filterStats.low.due > 0 && importanceFilter !== 'low' && (
+              <button
+                onClick={() => handleSelectFilter('low')}
+                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded-xl text-xs sm:text-sm font-bold transition-all"
+              >
+                <span>★1〜2 (発展) をまとめて演習 ({filterStats.low.due}語)</span>
+              </button>
+            )}
+
+            {importanceFilter !== 'all' && filterStats.all.due > 0 && (
+              <button
+                onClick={() => handleSelectFilter('all')}
+                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs sm:text-sm font-bold transition-all"
+              >
+                <span>全単語を復習 ({filterStats.all.due}語)</span>
+              </button>
+            )}
+
+            <button
+              onClick={handleRestart}
+              className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs sm:text-sm font-bold transition-all"
+            >
+              <RotateCcw className="w-4 h-4 text-slate-400" />
+              <span>もう一度復習（シャッフル）</span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -260,11 +473,6 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
   const importance = currentCard.importance ?? 3;
   const easePercent = Math.round((currentCard.easeFactor ?? 2.5) * 100);
-  
-  // カウンタ計算（Anki本家標準の3色）
-  const inRelearnCount = vocabs.filter(v => (v.cardState === 'learning' || v.cardState === 'relearning') && !graduatedIds.has(v.id)).length;
-  const graduatedCount = graduatedIds.size;
-  const freshDueCount = vocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today && !graduatedIds.has(v.id)).length;
 
   // ラーニング待機時間計算
   const isTimerWaiting = currentCard.dueTimestamp && currentCard.dueTimestamp > nowTime;
@@ -274,7 +482,50 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
   return (
     <div className="max-w-xl mx-auto space-y-3">
-      {/* Progress Header: Ankiステータスカウンタ ＆ シャッフル */}
+      {/* 1. 重要度（難易度）選択フィルターバー */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-2.5 sm:p-3 shadow-lg space-y-2">
+        <div className="flex items-center justify-between px-1 text-xs">
+          <div className="flex items-center gap-1.5 font-bold text-slate-300">
+            <Filter className="w-3.5 h-3.5 text-cyan-400" />
+            <span>重要度レベル切替:</span>
+          </div>
+          <span className="text-[11px] text-cyan-400 font-medium hidden sm:inline">
+            {activeFilterDef.description}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-thin">
+          {FILTER_OPTIONS.map((opt) => {
+            const stat = filterStats[opt.id];
+            const isSelected = importanceFilter === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => handleSelectFilter(opt.id)}
+                className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                  isSelected
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 hover:bg-slate-850 border border-slate-800/80'
+                }`}
+                title={opt.description}
+              >
+                <span>{opt.badgeLabel}</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  isSelected
+                    ? 'bg-blue-900/90 text-cyan-200 border border-blue-400/40'
+                    : stat.due > 0
+                    ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
+                    : 'bg-slate-900 text-slate-500'
+                }`}>
+                  {stat.due > 0 ? `${stat.due}` : `${stat.total}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 2. Progress Header: Ankiステータスカウンタ ＆ シャッフル */}
       <div className="flex items-center justify-between text-xs px-2 text-slate-400 flex-wrap gap-2">
         <div className="flex items-center gap-1.5 font-semibold text-cyan-400">
           <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
@@ -295,7 +546,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           )}
 
           <div className="flex items-center bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800 space-x-2.5 shadow-sm">
-            <span className="text-blue-400 font-bold" title="今日の未着手カード">
+            <span className="text-blue-400 font-bold" title="現在のフィルターにおける今日の未着手カード">
               🔵 {freshDueCount}
             </span>
             <span className="text-red-400 font-bold" title="再学習（1分/10分ステップ待機中）のカード">
@@ -308,7 +559,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         </div>
       </div>
 
-      {/* Main Flashcard: Fixed height footprint so buttons NEVER jump */}
+      {/* 3. Main Flashcard: Fixed height footprint so buttons NEVER jump */}
       <div
         onClick={() => setIsFlipped(!isFlipped)}
         className={`bg-slate-900/95 border rounded-3xl p-5 sm:p-7 shadow-2xl h-[270px] sm:h-[290px] flex flex-col justify-between cursor-pointer select-none transition-all duration-200 hover:border-cyan-500/50 relative overflow-hidden ${
@@ -453,7 +704,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         </div>
       </div>
 
-      {/* Fixed-Height Action Buttons Area (高さ64pxで完全固定。各ボタンに次回期日を動的バッジ表示 ＆ キーボードショートカットガイド) */}
+      {/* 4. Fixed-Height Action Buttons Area (高さ64pxで完全固定。各ボタンに次回期日を動的バッジ表示 ＆ キーボードショートカットガイド) */}
       <div className="h-[64px] flex items-center">
         {isFlipped ? (
           <div className="grid grid-cols-4 gap-2 w-full animate-fadeIn">
