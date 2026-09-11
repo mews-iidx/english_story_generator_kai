@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Story } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Sparkles, Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Tag, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, ChevronLeft, BookmarkPlus, Zap } from 'lucide-react';
+import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Tag, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, ChevronLeft, BookmarkPlus, Zap } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
@@ -14,8 +14,6 @@ interface ReaderViewProps {
   onWordOrPhraseTap: (text: string, contextSentence: string) => void;
   selectedPhrase: string;
   onClearSelection: () => void;
-  onMasterVocab: (vocabId: string) => void;
-  onLapseVocab: (phrase: string, meaning: string) => void;
   onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onUpdateSentenceReason?: (sentenceId: string, category: DifficultyReasonCategory, note: string) => void;
   onRecordStoryRead?: (storyId: string, wpm?: number) => void;
@@ -38,8 +36,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onWordOrPhraseTap,
   selectedPhrase,
   onClearSelection,
-  onMasterVocab,
-  onLapseVocab,
   onSaveDifficultSentence,
   onUpdateSentenceReason,
   onRecordStoryRead,
@@ -62,9 +58,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [startTime] = useState<number>(Date.now());
   const [calculatedWpm, setCalculatedWpm] = useState<number | null>(null);
 
-  const [tappedWordsDuringStory, setTappedWordsDuringStory] = useState<Set<string>>(new Set());
-  const [vocabEvaluations, setVocabEvaluations] = useState<Record<string, 'easy' | 'hard'>>({});
-
   // 今回の読書セッションでマークされた「訳せなかった文」の理由編集用
   const [sessionSentenceReasons, setSessionSentenceReasons] = useState<Record<string, { category: DifficultyReasonCategory; note: string }>>({});
 
@@ -78,8 +71,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setIsFinished(false);
     setShowTranslation(false);
     setSelectionRange(null);
-    setTappedWordsDuringStory(new Set());
-    setVocabEvaluations({});
     stopSpeech();
     setIsPlayingAudio(false);
     setCurrentSentenceIdx(0);
@@ -356,7 +347,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         if (s.wIdx === range.startWIdx) insideSelection = true;
         if (insideSelection) {
           selectedTokens.push(s.text);
-          setTappedWordsDuringStory(prev => new Set(prev).add(s.cleanWord.toLowerCase()));
         }
         if (s.wIdx === range.endWIdx) insideSelection = false;
       } else if (insideSelection) {
@@ -366,7 +356,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     const phrase = selectedTokens.join('').replace(/\s+/g, ' ').trim();
     if (phrase) {
-      setTappedWordsDuringStory(prev => new Set(prev).add(phrase.toLowerCase()));
       onWordOrPhraseTap(phrase, fullParaText);
     }
   };
@@ -387,68 +376,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       onRecordStoryRead(currentStory.id, wpm);
     }
 
-    const initialEvals: Record<string, 'easy' | 'hard'> = {};
-    if (currentStory && currentStory.targetVocabList) {
-      currentStory.targetVocabList.forEach(t => {
-        const cleanTarget = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-        
-        // 単語単体一致またはフレーズ包含一致
-        const wasTapped = tappedWordsDuringStory.has(cleanTarget) ||
-          Array.from(tappedWordsDuringStory).some(tapped => {
-            if (tapped.length > 2 && (cleanTarget.includes(tapped) || tapped.includes(cleanTarget))) return true;
-            return false;
-          });
-        if (!wasTapped) {
-          initialEvals[cleanTarget] = 'easy';
-          const vocabMatch = vocabs.find(v => v.phrase.toLowerCase() === cleanTarget);
-          if (vocabMatch) {
-            onMasterVocab(vocabMatch.id);
-          }
-        } else {
-          initialEvals[cleanTarget] = 'hard';
-        }
-      });
-    }
-    setVocabEvaluations(initialEvals);
-
     confetti({
       particleCount: 80,
       spread: 70,
       origin: { y: 0.7 },
       colors: ['#3b82f6', '#60a5fa', '#38bdf8', '#fbbf24', '#818cf8']
     });
-  };
-
-  const handleRateEasy = (cleanPhrase: string) => {
-    const key = cleanPhrase.toLowerCase();
-    setVocabEvaluations(prev => ({ ...prev, [key]: 'easy' }));
-    const match = vocabs.find(v => v.phrase.toLowerCase() === key);
-    if (match) {
-      onMasterVocab(match.id);
-    }
-  };
-
-  const handleRateHard = (cleanPhrase: string) => {
-    const key = cleanPhrase.toLowerCase();
-    setVocabEvaluations(prev => ({ ...prev, [key]: 'hard' }));
-    
-    // ターゲット語彙リストから日本語訳を抽出、または既存語彙から引き継ぐ
-    const targetItem = currentStory.targetVocabList?.find(t => t.toLowerCase().includes(key));
-    let meaning = '';
-    if (targetItem) {
-      const match = targetItem.match(/\(([^)]+)\)/);
-      if (match) {
-        meaning = match[1].trim();
-      }
-    }
-    if (!meaning) {
-      const existing = vocabs.find(v => v.phrase.toLowerCase() === key);
-      if (existing && existing.meaning && existing.meaning !== '要復習' && existing.meaning !== '要確認') {
-        meaning = existing.meaning;
-      }
-    }
-
-    onLapseVocab(cleanPhrase, meaning);
   };
 
   // 今回のストーリーで記録された「訳せなかった文」
@@ -977,63 +910,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </div>
             )}
 
-            {/* 読了後の語彙セルフ評価カード */}
-            {isFinished && currentStory.targetVocabList && currentStory.targetVocabList.length > 0 && (
-              <div className="p-4 bg-slate-950/90 border border-blue-500/30 rounded-2xl space-y-3 animate-fadeIn">
-                <div className="flex items-center justify-between flex-wrap gap-1">
-                  <span className="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" /> 今回の登場語彙の定着度チェック
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    単語ごとに「簡単」「難しい」を個別に調整できます
-                  </span>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                  {currentStory.targetVocabList.map((t, idx) => {
-                    const cleanPhrase = t.replace(/\s*\([^)]*\)/g, '').trim();
-                    const key = cleanPhrase.toLowerCase();
-                    const currentRating = vocabEvaluations[key] || (tappedWordsDuringStory.has(key) ? 'hard' : 'easy');
-
-                    return (
-                      <div key={idx} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs gap-2">
-                        <div className="min-w-0 flex-1">
-                          <span className="font-bold text-white block truncate">{cleanPhrase}</span>
-                          <span className="text-[10px] text-slate-400">
-                            {currentRating === 'easy' ? '🟢 スラスラ読めた（定着）' : '🔴 要復習（次回再出題）'}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center space-x-1 flex-shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleRateEasy(cleanPhrase)}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                              currentRating === 'easy'
-                                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30 border border-emerald-400'
-                                : 'bg-slate-950 text-slate-400 hover:text-emerald-400 border border-slate-800'
-                            }`}
-                          >
-                            🟢 簡単
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRateHard(cleanPhrase)}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                              currentRating === 'hard'
-                                ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30 border border-amber-400'
-                                : 'bg-slate-950 text-slate-400 hover:text-amber-400 border border-slate-800'
-                            }`}
-                          >
-                            🔴 難しい
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {showTranslation && (
               <div className="p-4 sm:p-5 bg-slate-950/70 border border-slate-800/90 rounded-2xl space-y-2 animate-fadeIn">

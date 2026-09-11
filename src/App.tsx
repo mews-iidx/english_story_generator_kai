@@ -351,27 +351,6 @@ export const App: React.FC = () => {
     triggerAutoSync(updatedVocabs, stories);
   };
 
-  const handleLapseVocab = async (phrase: string, meaning = '') => {
-    let finalMeaning = meaning;
-    if (isInvalidVocabMeaning(finalMeaning)) {
-      const existing = vocabs.find(v => v.phrase.toLowerCase() === phrase.toLowerCase().trim());
-      if (existing && !isInvalidVocabMeaning(existing.meaning)) {
-        finalMeaning = existing.meaning;
-      }
-    }
-    if (isInvalidVocabMeaning(finalMeaning)) {
-      try {
-        const tr = await translateWithGoogleFree(phrase, settings.geminiApiKey);
-        if (tr?.translatedText && tr.translatedText.trim() !== phrase.trim()) {
-          finalMeaning = tr.translatedText.trim();
-        }
-      } catch (e) {
-        console.warn('Auto translate for lapse vocab failed:', e);
-      }
-    }
-    handleAddToVocab(phrase, finalMeaning || '', readingStory?.storyContent);
-  };
-
   // 訳せなかった文を保存
   const handleSaveDifficultSentence = (sentence: string, translation: string, phrase: string) => {
     saveDifficultSentence({
@@ -760,8 +739,6 @@ export const App: React.FC = () => {
             onWordOrPhraseTap={handleWordOrPhraseTap}
             selectedPhrase={selectedText}
             onClearSelection={handleClearSelection}
-            onMasterVocab={handleMasterVocab}
-            onLapseVocab={handleLapseVocab}
             onUpdateSentenceReason={handleUpdateSentenceReason}
             onRecordStoryRead={handleRecordStoryRead}
             onBackToBookshelf={() => {
