@@ -7,6 +7,7 @@ import { Send, Volume2, Sparkles, RefreshCw, CheckCircle2, XCircle, Play, Zap } 
 import { speakText } from '../utils/speech';
 import confetti from 'canvas-confetti';
 import { AnkiFlashcardView } from './AnkiFlashcardView';
+import { getTodayDateString } from '../utils/srs';
 
 interface QuizViewProps {
   apiKey: string;
@@ -41,6 +42,11 @@ export const QuizView: React.FC<QuizViewProps> = ({
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const today = getTodayDateString();
+  const dueCount = React.useMemo(() => {
+    return vocabs.filter(v => v.nextReviewDate <= today || v.cardState === 'learning' || v.cardState === 'relearning').length;
+  }, [vocabs, today]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -190,7 +196,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
               }`}
             >
               <Zap className="w-3.5 h-3.5 text-yellow-300" />
-              <span>🔥 Anki 一問一答 ({vocabs.length})</span>
+              <span>🔥 Anki 一問一答 {dueCount > 0 ? `(${dueCount}要復習)` : `(完了)`}</span>
             </button>
 
             <button

@@ -40,8 +40,8 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'create', label: '作成', icon: PlusCircle },
     { id: 'call', label: '英会話', icon: Phone },
     { id: 'chat', label: 'AI相談', icon: Bot },
-    { id: 'quiz', label: 'Anki', icon: Zap },
-    { id: 'vocab', label: '語彙帳', icon: BookMarked, badge: dueCount > 0 ? dueCount : undefined },
+    { id: 'quiz', label: 'Anki', icon: Zap, badge: dueCount > 0 ? dueCount : undefined },
+    { id: 'vocab', label: '語彙帳', icon: BookMarked },
     { id: 'settings', label: '設定', icon: Settings },
   ];
 

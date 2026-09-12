@@ -178,6 +178,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const [learningPool, setLearningPool] = useState<VocabItem[]>([]);
   const [activeCard, setActiveCard] = useState<VocabItem | null>(null);
   const [totalSessionCardsCount, setTotalSessionCardsCount] = useState<number>(0);
+  const [isCustomStudyMode, setIsCustomStudyMode] = useState(false);
 
   const [isFlipped, setIsFlipped] = useState(false);
   const [showExample, setShowExample] = useState(false);
@@ -187,26 +188,38 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   // 操作取り消し（Undo）履歴スタック
   const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
 
-  // セッション初期化ヘルパー
-  const initSession = useCallback((targetVocabs: VocabItem[]) => {
+  // セッション初期化ヘルパー（本家Anki準拠：allowExtraStudy=false時は本日の期日/学習中カードのみ出題）
+  const initSession = useCallback((targetVocabs: VocabItem[], allowExtraStudy: boolean = false) => {
     const learningCards = targetVocabs.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
     const dueReviewCards = targetVocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
 
     let initialReviews: VocabItem[] = [];
+    let initialLearning: VocabItem[] = [];
+
     if (dueReviewCards.length > 0 || learningCards.length > 0) {
+      // 🟢 本家Anki: 今日の復習期日・学習中カードのみを出題
       initialReviews = shuffleArray(dueReviewCards);
-    } else {
-      // 本日期限のものがない場合は未定着カードをシャッフル
-      const unmastered = targetVocabs.filter(v => v.repetitionCount < 4);
+      initialLearning = learningCards;
+      setIsCustomStudyMode(false);
+    } else if (allowExtraStudy) {
+      // 🔵 ユーザーが「追加で練習する」を明示的にクリックした場合のみ、未定着カードを演習
+      const unmastered = targetVocabs.filter(v => (v.repetitionCount ?? 0) < 4);
       initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
+      initialLearning = [];
+      setIsCustomStudyMode(true);
+    } else {
+      // 🛑 本家Anki: 今日の復習分が0件なら、勝手にカードを追加せず完了画面を表示
+      initialReviews = [];
+      initialLearning = [];
+      setIsCustomStudyMode(false);
     }
 
-    const firstCard = pickNextCard(learningCards, initialReviews);
+    const firstCard = pickNextCard(initialLearning, initialReviews);
 
     setReviewQueue(initialReviews);
-    setLearningPool(learningCards);
+    setLearningPool(initialLearning);
     setActiveCard(firstCard);
-    setTotalSessionCardsCount(initialReviews.length + learningCards.length);
+    setTotalSessionCardsCount(initialReviews.length + initialLearning.length);
     setGraduatedIds(new Set());
     setSessionReviewedCount(0);
     setHistoryStack([]);
@@ -214,11 +227,11 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setShowExample(false);
   }, [today]);
 
-  // 初回マウント時のみ初期化
+  // 初回マウント時のみ初期化（期日カードのみロード）
   const isInitializedRef = useRef(false);
   useEffect(() => {
     if (!isInitializedRef.current && filteredVocabs.length > 0) {
-      initSession(filteredVocabs);
+      initSession(filteredVocabs, false);
       isInitializedRef.current = true;
     }
   }, [filteredVocabs, initSession]);
@@ -230,7 +243,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
     const targetDef = FILTER_OPTIONS.find(f => f.id === newFilter) || FILTER_OPTIONS[0];
     const targetVocabs = vocabs.filter(targetDef.filterFn);
-    initSession(targetVocabs);
+    initSession(targetVocabs, false);
   }, [vocabs, initSession]);
 
   // 次回間隔プレビュー（Anki本家同様に各ボタンに表示）
@@ -379,9 +392,9 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFlipped, handleRating, handleUndo]);
 
-  // もう一度復習する（セッション再初期化）
-  const handleRestart = useCallback(() => {
-    initSession(filteredVocabs);
+  // 追加練習（前倒し・カスタム演習：期日に関係なく未定着カードを練習）
+  const handleStartExtraStudy = useCallback(() => {
+    initSession(filteredVocabs, true);
   }, [filteredVocabs, initSession]);
 
   // 3色ステータスカウンタ（本家Anki標準）
@@ -449,7 +462,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             </div>
 
             <h3 className="text-xl sm:text-2xl font-bold text-white">
-              {totalSessionCardsCount > 0 ? '復習セッション完了！🎉' : '復習対象の語彙はありません'}
+              {totalSessionCardsCount > 0 ? '本日の復習セッション完了！🎉' : '本日の復習はすべて完了しています！🎉'}
             </h3>
             
             <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
@@ -458,7 +471,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
                   合計 <strong className="text-cyan-300">{sessionReviewedCount}回</strong> の解答で、本日の全 <strong className="text-white">{totalSessionCardsCount}語</strong> を完全にクリアしました！
                 </>
               ) : currentStats.total > 0 ? (
-                `この重要度（${activeFilterDef.label}）の語彙は全 ${currentStats.total}語 がすべて定着済み、または本日復習期日のものはありません！`
+                `この重要度（${activeFilterDef.label}）の語彙（全 ${currentStats.total}語）はすべて定着済み、または本日復習期日のものはありません！`
               ) : (
                 `この重要度レベルの単語はまだ登録されていません。`
               )}
@@ -507,13 +520,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               </button>
             )}
 
-            <button
-              onClick={handleRestart}
-              className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs sm:text-sm font-bold transition-all"
-            >
-              <RotateCcw className="w-4 h-4 text-slate-400" />
-              <span>もう一度復習（シャッフル）</span>
-            </button>
+            {filteredVocabs.length > 0 && (
+              <button
+                onClick={handleStartExtraStudy}
+                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-blue-950/80 hover:bg-blue-900/90 text-cyan-300 hover:text-white border border-cyan-500/40 rounded-xl text-xs sm:text-sm font-bold transition-all shadow-sm"
+                title="期日に関係なく未定着カードをシャッフル演習"
+              >
+                <RotateCcw className="w-4 h-4 text-cyan-400" />
+                <span>追加で練習する（カスタム演習）</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -572,7 +588,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       <div className="flex items-center justify-between text-xs px-2 text-slate-400 flex-wrap gap-2">
         <div className="flex items-center gap-1.5 font-semibold text-cyan-400">
           <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-          <span>Anki 一問一答（忘却曲線SRS）</span>
+          <span>{isCustomStudyMode ? '🎯 カスタム演習（前倒し学習）' : 'Anki 一問一答（忘却曲線SRS）'}</span>
         </div>
 
         <div className="flex items-center gap-2 text-[11px] font-medium flex-wrap">
