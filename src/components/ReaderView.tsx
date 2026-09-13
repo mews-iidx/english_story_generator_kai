@@ -1090,6 +1090,19 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           onSkipSync={handleSkipSync}
         />
       )}
+      {/* 4. Bottom Return Bar: 画面下部からスムーズに本棚へ戻る */}
+      <div className="flex items-center justify-between pt-1 pb-6 px-1">
+        <button
+          onClick={onBackToBookshelf}
+          className="flex items-center space-x-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-semibold transition-all group"
+        >
+          <ArrowLeft className="w-4 h-4 text-cyan-400 group-hover:-translate-x-0.5 transition-transform" />
+          <span>本棚に戻る</span>
+        </button>
+        <span className="text-[11px] text-slate-500 hidden sm:inline">
+          💡 スマホの戻るスワイプやブラウザバックでも本棚に戻れます
+        </span>
+      </div>
     </div>
   );
 };

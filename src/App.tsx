@@ -60,7 +60,7 @@ import {
   recordPatternStatus,
 } from './services/storage';
 
-import { generateStorySeriesWithGemini, getDetailedNuanceWithGemini, fetchContextualWordMeaning } from './services/gemini';
+import { generateStorySeriesWithGemini, fetchContextualWordMeaning } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
 import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
@@ -84,6 +84,8 @@ export const App: React.FC = () => {
   const [isReaderChatOverlayOpen, setIsReaderChatOverlayOpen] = useState(false);
   const savedReaderScrollYRef = React.useRef<number>(0);
 
+
+
   // バックグラウンド生成状態
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingTheme, setGeneratingTheme] = useState('');
@@ -99,6 +101,29 @@ export const App: React.FC = () => {
   const [contextSentence, setContextSentence] = useState('');
   const [activeTargetEmbedding, setActiveTargetEmbedding] = useState<TargetEmbedding | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+
+  // ブラウザバック / システム戻るジェスチャー対応
+  useEffect(() => {
+    const handlePopState = () => {
+      if (isReaderChatOverlayOpen) {
+        setIsReaderChatOverlayOpen(false);
+        return;
+      }
+      if (isSheetOpen) {
+        setIsSheetOpen(false);
+        setSelectedText('');
+        setActiveTargetEmbedding(null);
+        return;
+      }
+      if (readingStory) {
+        setReadingStory(null);
+        return;
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isReaderChatOverlayOpen, isSheetOpen, readingStory]);
 
   // PWA インストールプロンプト
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -208,11 +233,7 @@ export const App: React.FC = () => {
     return savedVocabPhrases.has(selectedText.trim().toLowerCase());
   }, [selectedText, savedVocabPhrases]);
 
-  const isSavedAsSentence = useMemo(() => {
-    if (!selectedText) return false;
-    const norm = selectedText.trim().toLowerCase();
-    return difficultSentences.some(s => s.sentence.toLowerCase().includes(norm) || norm.includes(s.sentence.toLowerCase()));
-  }, [selectedText, difficultSentences]);
+
 
   // トースト表示タイマー
   useEffect(() => {
@@ -565,25 +586,7 @@ export const App: React.FC = () => {
     return { meaning: res.meaning, partOfSpeech: res.partOfSpeech };
   };
 
-  // AIによる詳細ニュアンス取得
-  const handleFetchDetailedNuance = async (): Promise<string> => {
-    if (!settings.geminiApiKey) {
-      alert('Gemini APIキーを設定してください');
-      return '';
-    }
-    const res = await getDetailedNuanceWithGemini(
-      selectedText,
-      contextSentence,
-      settings.geminiApiKey,
-      settings.geminiModel
-    );
 
-    if (res.tokenUsage) {
-      handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
-    }
-
-    return res.explanation;
-  };
 
   // レベル変更（A1, A2, B1, B2, C1）
   const handleLevelChange = (lvl: CefrLevel) => {
@@ -743,9 +746,11 @@ export const App: React.FC = () => {
             onWordOrPhraseTap={handleWordOrPhraseTap}
             selectedPhrase={selectedText}
             onClearSelection={handleClearSelection}
+            onSaveDifficultSentence={handleSaveDifficultSentence}
             onUpdateSentenceReason={handleUpdateSentenceReason}
             onRecordStoryRead={handleRecordStoryRead}
             onSelectStory={(story) => {
+              window.history.pushState({ view: 'reading', storyId: story.id }, '', '');
               setReadingStory(story);
               setSelectedText('');
               setIsSheetOpen(false);
@@ -755,6 +760,9 @@ export const App: React.FC = () => {
             onBackToBookshelf={() => {
               setReadingStory(null);
               setIsReaderChatOverlayOpen(false);
+              if (window.history.state?.view === 'reading') {
+                window.history.back();
+              }
             }}
           />
         ) : (
@@ -764,6 +772,7 @@ export const App: React.FC = () => {
               <HistoryView
                 stories={stories}
                 onSelectStory={(story) => {
+                  window.history.pushState({ view: 'reading', storyId: story.id }, '', '');
                   setReadingStory(story);
                   setSelectedText('');
                   setIsSheetOpen(false);
@@ -923,10 +932,7 @@ export const App: React.FC = () => {
         targetEmbedding={activeTargetEmbedding}
         isLoading={isTranslating}
         isSavedAsVocab={isSavedAsVocab}
-        isSavedAsSentence={isSavedAsSentence}
         onAddToVocab={handleAddToVocab}
-        onSaveDifficultSentence={handleSaveDifficultSentence}
-        onFetchDetailedNuance={handleFetchDetailedNuance}
         onFetchContextualMeaning={handleFetchContextualMeaning}
         onOpenChatMentor={(text) => handleOpenChatWithSelection(text)}
         onRecordPatternFeedback={(patternId, status) => {
