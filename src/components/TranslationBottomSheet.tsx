@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Volume2, Sparkles, Plus, Check, BookmarkPlus, BookmarkCheck, Bot } from 'lucide-react';
+import { Volume2, Sparkles, Plus, Check, BookmarkPlus, BookmarkCheck, Bot, Lightbulb, AlertCircle, CheckCircle } from 'lucide-react';
 import { speakText } from '../utils/speech';
+import { TargetEmbedding } from '../types/story';
 
 interface TranslationBottomSheetProps {
   isOpen: boolean;
@@ -8,6 +9,7 @@ interface TranslationBottomSheetProps {
   originalText: string;
   translatedText: string;
   contextSentence?: string;
+  targetEmbedding?: TargetEmbedding | null;
   isLoading?: boolean;
   isSavedAsVocab?: boolean;
   isSavedAsSentence?: boolean;
@@ -15,6 +17,7 @@ interface TranslationBottomSheetProps {
   onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onFetchDetailedNuance?: () => Promise<string>;
   onOpenChatMentor?: (text: string) => void;
+  onRecordPatternFeedback?: (patternId: string, status: 'lapsed' | 'mastered') => void;
 }
 
 export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
@@ -22,6 +25,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   originalText,
   translatedText,
   contextSentence,
+  targetEmbedding,
   isLoading,
   isSavedAsVocab,
   isSavedAsSentence,
@@ -29,9 +33,12 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   onSaveDifficultSentence,
   onFetchDetailedNuance,
   onOpenChatMentor,
+  onRecordPatternFeedback,
 }) => {
   const [nuanceNote, setNuanceNote] = useState<string | null>(null);
   const [isFetchingNuance, setIsFetchingNuance] = useState(false);
+  const [activeTab, setActiveTab] = useState<'word' | 'syntax'>('word');
+  const [feedbackStatus, setFeedbackStatus] = useState<'lapsed' | 'mastered' | null>(null);
 
   if (!isOpen || !originalText) return null;
 
@@ -55,6 +62,12 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
     onSaveDifficultSentence(sentenceToSave, translatedText, originalText);
   };
 
+  const handlePatternFeedback = (status: 'lapsed' | 'mastered') => {
+    if (!targetEmbedding?.targetId || !onRecordPatternFeedback) return;
+    onRecordPatternFeedback(targetEmbedding.targetId, status);
+    setFeedbackStatus(status);
+  };
+
   return (
     <div 
       className="fixed inset-x-0 bottom-0 z-50 p-3 sm:p-4 animate-slideUp pointer-events-none"
@@ -64,48 +77,156 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
         onClick={(e) => e.stopPropagation()}
         onTouchEnd={(e) => e.stopPropagation()}
       >
-        {/* Header: English Text & Speech */}
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2.5">
-          <div className="flex items-center space-x-2.5 flex-wrap">
-            <h3 className="text-lg sm:text-xl font-bold text-sky-400 tracking-tight">
-              {originalText}
-            </h3>
-            <button
-              onClick={() => speakText(originalText)}
-              className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-lg transition-colors border border-sky-500/30"
-              title="発音を再生"
-            >
-              <Volume2 className="w-4 h-4" />
-            </button>
+        {/* Header: Tabs if target pattern is present */}
+        {targetEmbedding ? (
+          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setActiveTab('word')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                  activeTab === 'word'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 bg-slate-950'
+                }`}
+              >
+                単語・フレーズ訳
+              </button>
+              <button
+                onClick={() => setActiveTab('syntax')}
+                className={`flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                  activeTab === 'syntax'
+                    ? 'bg-amber-600 text-white shadow-sm ring-1 ring-amber-400'
+                    : 'text-amber-300 hover:text-amber-200 bg-amber-950/40 border border-amber-500/30'
+                }`}
+              >
+                <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+                <span>💡 構文: {targetEmbedding.targetName}</span>
+              </button>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              外側をタップで閉じる
+            </span>
           </div>
-          <span className="text-[11px] text-slate-500">
-            外側をタップで閉じる
-          </span>
-        </div>
-
-        {/* Translation Body */}
-        <div className="space-y-2">
-          {isLoading ? (
-            <div className="flex items-center space-x-2 text-slate-400 text-sm py-1">
-              <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-              <span>翻訳中...</span>
+        ) : (
+          <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2.5">
+            <div className="flex items-center space-x-2.5 flex-wrap">
+              <h3 className="text-lg sm:text-xl font-bold text-sky-400 tracking-tight">
+                {originalText}
+              </h3>
+              <button
+                onClick={() => speakText(originalText)}
+                className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-lg transition-colors border border-sky-500/30"
+                title="発音を再生"
+              >
+                <Volume2 className="w-4 h-4" />
+              </button>
             </div>
-          ) : (
-            <p className="text-base sm:text-lg font-semibold text-white">
-              {translatedText || '（翻訳なし）'}
-            </p>
-          )}
+            <span className="text-[11px] text-slate-500">
+              外側をタップで閉じる
+            </span>
+          </div>
+        )}
 
-          {nuanceNote && (
-            <div className="text-xs text-slate-300 bg-slate-950/60 p-3 rounded-xl border border-slate-800 space-y-1 animate-fadeIn">
-              <div className="flex items-center space-x-1.5 text-sky-400 font-semibold">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>AI解説:</span>
+        {/* Content Body: Word Mode vs Syntax Mode */}
+        {activeTab === 'syntax' && targetEmbedding ? (
+          <div className="space-y-3 bg-slate-950/70 p-3.5 rounded-xl border border-amber-500/30 animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold text-amber-400 flex items-center gap-1.5">
+                <Lightbulb className="w-4 h-4" />
+                【重要構文ターゲット】
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                {targetEmbedding.targetId}
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-base font-bold text-white">
+                {targetEmbedding.targetName}
               </div>
-              <p className="leading-relaxed">{nuanceNote}</p>
+              {targetEmbedding.focusPoint && (
+                <div className="text-xs text-amber-200/90 leading-relaxed font-medium">
+                  要点: {targetEmbedding.focusPoint}
+                </div>
+              )}
+              {targetEmbedding.textSpan && (
+                <div className="text-xs text-slate-300 italic pt-1">
+                  用例: "{targetEmbedding.textSpan}"
+                </div>
+              )}
+              {targetEmbedding.translation && (
+                <div className="text-xs text-slate-300">
+                  訳: {targetEmbedding.translation}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+
+            {/* Quick Feedback Buttons */}
+            <div className="flex items-center space-x-2 pt-1">
+              <button
+                onClick={() => handlePatternFeedback('lapsed')}
+                className={`flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  feedbackStatus === 'lapsed'
+                    ? 'bg-rose-600 text-white shadow-md'
+                    : 'bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30'
+                }`}
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>{feedbackStatus === 'lapsed' ? '🔴 要復習に記録済み' : '🔴 構文が分からなかった (要復習)'}</span>
+              </button>
+
+              <button
+                onClick={() => handlePatternFeedback('mastered')}
+                className={`flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  feedbackStatus === 'mastered'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/30'
+                }`}
+              >
+                <CheckCircle className="w-3.5 h-3.5" />
+                <span>{feedbackStatus === 'mastered' ? '🟢 習得済みに記録！' : '🟢 この構文は理解できた'}</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {targetEmbedding && (
+              <div className="flex items-center space-x-2">
+                <h3 className="text-lg sm:text-xl font-bold text-sky-400 tracking-tight">
+                  {originalText}
+                </h3>
+                <button
+                  onClick={() => speakText(originalText)}
+                  className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-lg transition-colors border border-sky-500/30"
+                  title="発音を再生"
+                >
+                  <Volume2 className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {isLoading ? (
+              <div className="flex items-center space-x-2 text-slate-400 text-sm py-1">
+                <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                <span>翻訳中...</span>
+              </div>
+            ) : (
+              <p className="text-base sm:text-lg font-semibold text-white">
+                {translatedText || '（翻訳なし）'}
+              </p>
+            )}
+
+            {nuanceNote && (
+              <div className="text-xs text-slate-300 bg-slate-950/60 p-3 rounded-xl border border-slate-800 space-y-1 animate-fadeIn">
+                <div className="flex items-center space-x-1.5 text-sky-400 font-semibold">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>AI解説:</span>
+                </div>
+                <p className="leading-relaxed">{nuanceNote}</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">

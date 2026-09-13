@@ -12,7 +12,7 @@ import { CallView } from './components/CallView';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
 import { ImportStoryModal } from './components/ImportStoryModal';
 
-import { Story, ContentType, SeriesType } from './types/story';
+import { Story, ContentType, SeriesType, TargetEmbedding } from './types/story';
 import { VocabItem } from './types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from './types/sentence';
 import { ChatMessage, ChatSuggestedVocab } from './types/chat';
@@ -58,6 +58,7 @@ import {
   resetAllData,
   getUnmasteredTargetPatterns,
   getUnmasteredTargetVocabs,
+  recordPatternStatus,
 } from './services/storage';
 
 import { generateStoryWithGemini, generateStorySeriesWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
@@ -101,6 +102,7 @@ export const App: React.FC = () => {
   const [selectedText, setSelectedText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
   const [contextSentence, setContextSentence] = useState('');
+  const [activeTargetEmbedding, setActiveTargetEmbedding] = useState<TargetEmbedding | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
 
   // PWA インストールプロンプト
@@ -766,6 +768,7 @@ export const App: React.FC = () => {
         {readingStory ? (
           <ReaderView
             currentStory={readingStory}
+            allStories={stories}
             vocabs={vocabs}
             difficultSentences={difficultSentences}
             onWordOrPhraseTap={handleWordOrPhraseTap}
@@ -773,6 +776,13 @@ export const App: React.FC = () => {
             onClearSelection={handleClearSelection}
             onUpdateSentenceReason={handleUpdateSentenceReason}
             onRecordStoryRead={handleRecordStoryRead}
+            onSelectStory={(story) => {
+              setReadingStory(story);
+              setSelectedText('');
+              setIsSheetOpen(false);
+              setIsReaderChatOverlayOpen(false);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             onBackToBookshelf={() => {
               setReadingStory(null);
               setIsReaderChatOverlayOpen(false);
@@ -938,10 +948,12 @@ export const App: React.FC = () => {
         onClose={() => {
           setIsSheetOpen(false);
           setSelectedText('');
+          setActiveTargetEmbedding(null);
         }}
         originalText={selectedText}
         translatedText={translatedText}
         contextSentence={contextSentence}
+        targetEmbedding={activeTargetEmbedding}
         isLoading={isTranslating}
         isSavedAsVocab={isSavedAsVocab}
         isSavedAsSentence={isSavedAsSentence}
@@ -949,6 +961,9 @@ export const App: React.FC = () => {
         onSaveDifficultSentence={handleSaveDifficultSentence}
         onFetchDetailedNuance={handleFetchDetailedNuance}
         onOpenChatMentor={(text) => handleOpenChatWithSelection(text)}
+        onRecordPatternFeedback={(patternId, status) => {
+          recordPatternStatus(patternId, status);
+        }}
       />
     </div>
   );
