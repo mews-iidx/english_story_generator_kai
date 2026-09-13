@@ -465,6 +465,15 @@ export function resetAllData(): void {
     localStorage.removeItem(STORAGE_KEYS.VOCABS);
     localStorage.removeItem(STORAGE_KEYS.DIFFICULT_SENTENCES);
     localStorage.removeItem(STORAGE_KEYS.CHAT_MESSAGES);
+    localStorage.removeItem(STORAGE_KEYS.PERSONAS);
+    localStorage.removeItem(STORAGE_KEYS.CALL_SESSIONS);
+    localStorage.removeItem(STORAGE_KEYS.EXPRESSION_ERRORS);
+    localStorage.removeItem(STORAGE_KEYS.MASTERY_STATE);
+    localStorage.removeItem(STORAGE_KEYS.DAILY_SNAPSHOTS);
+    localStorage.removeItem(STORAGE_KEYS.MY_GOAL);
+    localStorage.removeItem('reader_show_targets');
+    localStorage.removeItem('anki_importance_filter');
+
     const s = loadSettings();
     saveSettings({
       ...s,
@@ -488,12 +497,18 @@ export interface ExportData {
   vocabs: VocabItem[];
   difficultSentences?: DifficultSentenceItem[];
   chatMessages?: ChatMessage[];
-  settings: Partial<AppSettings>;
+  personas?: Persona[];
+  callSessions?: CallSession[];
+  expressionErrors?: ExpressionErrorItem[];
+  masteryState?: UserMasteryState;
+  dailySnapshots?: DailySnapshot[];
+  myGoal?: MyGoal | null;
+  settings?: Partial<AppSettings>;
 }
 
 export function exportAllData(): string {
-  const data: ExportData & { personas?: Persona[]; callSessions?: CallSession[] } = {
-    version: '1.3.0',
+  const data: ExportData = {
+    version: '2.0.0',
     exportedAt: new Date().toISOString(),
     stories: loadStories(),
     vocabs: loadVocabs(),
@@ -501,17 +516,25 @@ export function exportAllData(): string {
     chatMessages: loadChatMessages(),
     personas: loadPersonas(),
     callSessions: loadCallSessions(),
-    settings: {
-      cefrLevel: loadSettings().cefrLevel,
-      geminiModel: loadSettings().geminiModel,
-    },
+    expressionErrors: loadExpressionErrors(),
+    masteryState: loadMasteryState(),
+    dailySnapshots: loadDailySnapshots(),
+    myGoal: loadMyGoal(),
+    settings: loadSettings(),
   };
   return JSON.stringify(data, null, 2);
 }
 
-export function importAllData(jsonStr: string): { success: boolean; storyCount: number; vocabCount: number; sentenceCount: number } {
+export function importAllData(jsonStr: string): { 
+  success: boolean; 
+  storyCount: number; 
+  vocabCount: number; 
+  sentenceCount: number;
+  hasMastery: boolean;
+  hasSnapshots: boolean;
+} {
   try {
-    const data: ExportData & { personas?: Persona[]; callSessions?: CallSession[] } = JSON.parse(jsonStr);
+    const data: ExportData = JSON.parse(jsonStr);
     if (data.stories && Array.isArray(data.stories)) {
       localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(data.stories));
     }
@@ -530,11 +553,30 @@ export function importAllData(jsonStr: string): { success: boolean; storyCount: 
     if (data.callSessions && Array.isArray(data.callSessions)) {
       localStorage.setItem(STORAGE_KEYS.CALL_SESSIONS, JSON.stringify(data.callSessions));
     }
+    if (data.expressionErrors && Array.isArray(data.expressionErrors)) {
+      localStorage.setItem(STORAGE_KEYS.EXPRESSION_ERRORS, JSON.stringify(data.expressionErrors));
+    }
+    if (data.masteryState && typeof data.masteryState === 'object') {
+      localStorage.setItem(STORAGE_KEYS.MASTERY_STATE, JSON.stringify(data.masteryState));
+    }
+    if (data.dailySnapshots && Array.isArray(data.dailySnapshots)) {
+      localStorage.setItem(STORAGE_KEYS.DAILY_SNAPSHOTS, JSON.stringify(data.dailySnapshots));
+    }
+    if (data.myGoal) {
+      localStorage.setItem(STORAGE_KEYS.MY_GOAL, JSON.stringify(data.myGoal));
+    }
+    if (data.settings && typeof data.settings === 'object') {
+      const current = loadSettings();
+      saveSettings({ ...current, ...data.settings });
+    }
+
     return {
       success: true,
       storyCount: data.stories?.length || 0,
       vocabCount: data.vocabs?.length || 0,
       sentenceCount: data.difficultSentences?.length || 0,
+      hasMastery: !!data.masteryState,
+      hasSnapshots: !!(data.dailySnapshots && data.dailySnapshots.length > 0),
     };
   } catch (e) {
     console.error('Import failed', e);

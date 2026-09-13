@@ -80,7 +80,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       try {
         const text = evt.target?.result as string;
         const res = importAllData(text);
-        alert(`インポート成功！ (ストーリー: ${res.storyCount}件, 語彙: ${res.vocabCount}件)`);
+        const details = [
+          `ストーリー: ${res.storyCount}件`,
+          `登録語彙: ${res.vocabCount}件`,
+          `難解文: ${res.sentenceCount}件`,
+          res.hasMastery ? 'CEFR進捗状態: 復元完了' : null,
+          res.hasSnapshots ? '学習履歴・WPM推移: 復元完了' : null,
+        ].filter(Boolean).join('\n・');
+        alert(`🎉 バックアップからの復元が完了しました！\n\n・${details}`);
         onDataImported();
       } catch (err: any) {
         alert(`インポート失敗: ${err.message}`);
@@ -90,9 +97,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleResetConfirm = () => {
-    if (confirm('【警告】すべてのストーリー履歴、登録単語、トークン統計を完全にリセットしますか？\n（APIキー設定は保持されます）')) {
+    if (confirm('【警告】すべてのストーリー履歴、登録単語、CEFR進捗データ、学習履歴、トークン統計を完全にリセットしますか？\n（※APIキー等の接続設定は保持されます）')) {
       onResetAllData();
-      alert('すべてのデータを初期化しました。');
+      alert('すべてのデータを初期状態にリセットしました。');
     }
   };
 
