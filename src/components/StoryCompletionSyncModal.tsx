@@ -2,7 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
 import { CefrLevel } from '../types/settings';
 import { ExtractedStoryVocab } from '../utils/storyVocabExtractor';
-import { Check, AlertCircle, Sparkles, BookOpen, ChevronRight, X } from 'lucide-react';
+import { Check, AlertCircle, Sparkles, BookOpen, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
+
+export type SyncVocabStatus = 'mastered' | 'lapsed' | 'unseen';
 
 interface StoryCompletionSyncModalProps {
   story: Story;
@@ -26,14 +28,16 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
   onConfirmSync,
   onSkipSync,
 }) => {
-  // 単語ごとのステータス管理: true = 習得済み(mastered), false = 要復習(lapsed)
-  const [vocabStatusMap, setVocabStatusMap] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {};
+  // パッシブ抽出単語リストの展開・折りたたみ（デフォルト: 折りたたみ）
+  const [isVocabsExpanded, setIsVocabsExpanded] = useState(false);
+
+  // 単語ごとのステータス管理: 'mastered'(習得済) | 'lapsed'(要復習) | 'unseen'(未遭遇/スキップ)
+  const [vocabStatusMap, setVocabStatusMap] = useState<Record<string, SyncVocabStatus>>(() => {
+    const initial: Record<string, SyncVocabStatus> = {};
     extractedVocabs.forEach(v => {
-      // 読書中に単語帳に追加されたものは false (要復習)、それ以外は true (習得済み)
       const isLapsed = initialLapsedPhrases.has(v.phrase.toLowerCase()) || 
                        initialLapsedPhrases.has(v.matchedText.toLowerCase());
-      initial[v.id] = !isLapsed;
+      initial[v.id] = isLapsed ? 'lapsed' : 'mastered';
     });
     return initial;
   });
@@ -54,11 +58,15 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
   // 選択中レベルフィルター
   const [selectedLevelFilter, setSelectedLevelFilter] = useState<'ALL' | CefrLevel>('ALL');
 
-  const toggleVocabStatus = (id: string) => {
-    setVocabStatusMap(prev => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
+  // 単語ステータスの3段階トグル: mastered -> lapsed -> unseen -> mastered
+  const cycleVocabStatus = (id: string) => {
+    setVocabStatusMap(prev => {
+      const cur = prev[id] || 'mastered';
+      const nextStatus: SyncVocabStatus = 
+        cur === 'mastered' ? 'lapsed' : 
+        cur === 'lapsed' ? 'unseen' : 'mastered';
+      return { ...prev, [id]: nextStatus };
+    });
   };
 
   const togglePatternStatus = (targetId: string) => {
@@ -68,7 +76,8 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
     }));
   };
 
-  const setAllVocabsInView = (status: boolean) => {
+  // 表示中の一括ステータス変更
+  const setAllVocabsInView = (status: SyncVocabStatus) => {
     setVocabStatusMap(prev => {
       const next = { ...prev };
       filteredVocabs.forEach(v => {
@@ -94,21 +103,32 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
   }, [extractedVocabs]);
 
   // 集計カウント
-  const masteredVocabCount = useMemo(() => {
-    return Object.values(vocabStatusMap).filter(Boolean).length;
-  }, [vocabStatusMap]);
+  const masteredVocabs = useMemo(() => {
+    return extractedVocabs.filter(v => vocabStatusMap[v.id] === 'mastered');
+  }, [extractedVocabs, vocabStatusMap]);
 
-  const lapsedVocabCount = extractedVocabs.length - masteredVocabCount;
+  const lapsedVocabs = useMemo(() => {
+    return extractedVocabs.filter(v => vocabStatusMap[v.id] === 'lapsed');
+  }, [extractedVocabs, vocabStatusMap]);
+
+  const unseenVocabs = useMemo(() => {
+    return extractedVocabs.filter(v => vocabStatusMap[v.id] === 'unseen');
+  }, [extractedVocabs, vocabStatusMap]);
+
+  const levelBadgeColors: Record<CefrLevel, string> = {
+    A1: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+    A2: 'bg-teal-500/20 text-teal-300 border-teal-500/40',
+    B1: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+    B2: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
+    C1: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  };
 
   const handleConfirm = () => {
-    const masteredVocabs = extractedVocabs.filter(v => vocabStatusMap[v.id] !== false);
-    const lapsedVocabs = extractedVocabs.filter(v => vocabStatusMap[v.id] === false);
-
     const masteredPatternIds: string[] = [];
     const lapsedPatternIds: string[] = [];
 
     targetPatterns.forEach(p => {
-      if (patternStatusMap[p.targetId] !== false) {
+      if (patternStatusMap[p.targetId]) {
         masteredPatternIds.push(p.targetId);
       } else {
         lapsedPatternIds.push(p.targetId);
@@ -118,67 +138,52 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
     onConfirmSync(masteredVocabs, lapsedVocabs, masteredPatternIds, lapsedPatternIds);
   };
 
-  const levelBadgeColors: Record<CefrLevel, string> = {
-    A1: 'bg-emerald-950 text-emerald-300 border-emerald-500/40',
-    A2: 'bg-teal-950 text-teal-300 border-teal-500/40',
-    B1: 'bg-blue-950 text-blue-300 border-blue-500/40',
-    B2: 'bg-indigo-950 text-indigo-300 border-indigo-500/40',
-    C1: 'bg-purple-950 text-purple-300 border-purple-500/40',
-  };
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-      <div className="bg-slate-900 border border-slate-750 rounded-3xl w-full max-w-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
-        
-        {/* Header */}
-        <div className="p-5 sm:p-6 bg-gradient-to-r from-blue-900/60 via-indigo-900/40 to-slate-900 border-b border-slate-800 flex items-start justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="flex items-center space-x-2">
-              <span className="text-xl">🎉</span>
-              <h2 className="text-lg sm:text-xl font-extrabold text-white tracking-tight">
-                読了おめでとうございます！
-              </h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-200 font-bold border border-blue-400/30">
-                {calculatedWpm} WPM
-              </span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+      <div 
+        className="w-full max-w-2xl bg-slate-900 border border-slate-750 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-slate-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header Bar */}
+        <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/80 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-500/40 flex items-center justify-center text-blue-300">
+              <Sparkles className="w-5 h-5 text-amber-400" />
             </div>
-            <p className="text-xs sm:text-sm font-semibold text-slate-300 line-clamp-1">
-              『{story.titleJa || story.title}』
-            </p>
-            <p className="text-xs text-slate-400">
-              つまずかずに読めた語彙・構文をマスターDBに一括同期して習熟度を更新します。
-            </p>
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                読了チェックイン ＆ 習熟度同期
+              </h2>
+              <p className="text-xs text-slate-400">
+                読破スピード: <strong className="text-sky-300">{calculatedWpm} WPM</strong>
+              </p>
+            </div>
           </div>
 
           <button
             onClick={onSkipSync}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+            className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition-colors"
             title="スキップして閉じる"
           >
-            <X className="w-5 h-5" />
+            ✕
           </button>
         </div>
 
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 text-slate-200">
-
-          {/* Section 1: Target Grammar Patterns */}
+        {/* Modal Scrollable Body */}
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
+          {/* Section 1: Target Syntax Patterns (if any) */}
           {targetPatterns.length > 0 && (
-            <div className="space-y-3 bg-slate-950/70 border border-amber-500/25 rounded-2xl p-4">
+            <div className="space-y-2.5 bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3.5">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <Sparkles className="w-4 h-4 text-amber-400" />
-                  <span className="font-bold text-xs sm:text-sm text-slate-200">
-                    出題ターゲット構文（{targetPatterns.length}個）
-                  </span>
-                </div>
-                <span className="text-[11px] text-slate-400">
-                  タップで「習得済み」⇄「要復習」を切替
+                <span className="font-bold text-xs sm:text-sm text-purple-300 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                  今回の出題ターゲット構文（{targetPatterns.length}件）
                 </span>
+                <span className="text-[11px] text-slate-400">タップで要復習に変更</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {targetPatterns.map((pat) => {
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {targetPatterns.map(pat => {
                   const isMastered = patternStatusMap[pat.targetId] !== false;
                   return (
                     <button
@@ -227,97 +232,125 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
             </div>
           )}
 
-          {/* Section 2: Story Vocabularies */}
-          <div className="space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          {/* Section 2: Story Extracted Vocabularies (Collapsible, Default Closed) */}
+          <div className="space-y-3 bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3.5">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center space-x-2">
                 <BookOpen className="w-4 h-4 text-blue-400" />
                 <span className="font-bold text-xs sm:text-sm text-white">
-                  本文で登場した全英単語（{extractedVocabs.length}語）
+                  本文の抽出単語（{extractedVocabs.length}語）
                 </span>
               </div>
 
               <div className="flex items-center space-x-2 text-xs font-semibold">
-                <span className="text-emerald-400">🟢 習得済: {masteredVocabCount}語</span>
-                <span className="text-slate-500">/</span>
-                <span className="text-rose-400">🔴 要復習: {lapsedVocabCount}語</span>
-              </div>
-            </div>
-
-            <div className="text-[11px] text-slate-400 flex items-center justify-between flex-wrap gap-2">
-              <span>💡 気になった単語をタップすると「要復習」に切り替えられます。</span>
-              <div className="flex items-center space-x-2">
+                <span className="text-emerald-400">🟢 習得: {masteredVocabs.length}</span>
+                {lapsedVocabs.length > 0 && <span className="text-rose-400">🔴 要復習: {lapsedVocabs.length}</span>}
+                {unseenVocabs.length > 0 && <span className="text-slate-400">⚪ スキップ: {unseenVocabs.length}</span>}
                 <button
                   type="button"
-                  onClick={() => setAllVocabsInView(true)}
-                  className="text-[11px] text-emerald-400 hover:underline"
+                  onClick={() => setIsVocabsExpanded(!isVocabsExpanded)}
+                  className="flex items-center space-x-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-850 text-sky-300 border border-slate-750 rounded-lg text-xs font-bold transition-all ml-1"
                 >
-                  表示中をすべて習得済みに
-                </button>
-                <span className="text-slate-600">|</span>
-                <button
-                  type="button"
-                  onClick={() => setAllVocabsInView(false)}
-                  className="text-[11px] text-rose-400 hover:underline"
-                >
-                  表示中をすべて要復習に
+                  <span>{isVocabsExpanded ? '折りたたむ' : '確認・変更'}</span>
+                  {isVocabsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
 
-            {/* Level Filter Tabs */}
-            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 text-xs">
-              {(['ALL', 'A1', 'A2', 'B1', 'B2', 'C1'] as const).map(lvl => {
-                const count = levelCounts[lvl] || 0;
-                if (lvl !== 'ALL' && count === 0) return null;
-                const isSelected = selectedLevelFilter === lvl;
-                return (
-                  <button
-                    key={lvl}
-                    type="button"
-                    onClick={() => setSelectedLevelFilter(lvl)}
-                    className={`px-3 py-1.5 rounded-xl font-bold transition-all whitespace-nowrap ${
-                      isSelected
-                        ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
-                  >
-                    {lvl === 'ALL' ? 'すべて' : lvl} ({count})
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Vocab Chips List */}
-            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl max-h-72 overflow-y-auto">
-              <div className="flex flex-wrap gap-1.5">
-                {filteredVocabs.map(v => {
-                  const isMastered = vocabStatusMap[v.id] !== false;
-                  return (
+            {/* Collapsible Content */}
+            {isVocabsExpanded && (
+              <div className="pt-2 border-t border-slate-800 space-y-3 animate-fadeIn">
+                <div className="text-[11px] text-slate-400 flex items-center justify-between flex-wrap gap-2">
+                  <span>💡 単語タップで 🟢習得済 ➔ 🔴要復習 ➔ ⚪未遭遇(スキップ) に切り替わります。</span>
+                  <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                     <button
-                      key={v.id}
                       type="button"
-                      onClick={() => toggleVocabStatus(v.id)}
-                      title={`${v.phrase} (${v.partOfSpeech}): ${v.meaning}`}
-                      className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold transition-all border ${
-                        isMastered
-                          ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200 hover:bg-emerald-900/50'
-                          : 'bg-rose-950/60 border-rose-500/60 text-rose-200 hover:bg-rose-900/70 shadow-sm'
-                      }`}
+                      onClick={() => setAllVocabsInView('mastered')}
+                      className="text-[11px] text-emerald-400 hover:underline font-semibold"
                     >
-                      <span>{isMastered ? '✓' : '!'}</span>
-                      <span className="font-bold">{v.phrase}</span>
-                      <span className="text-[10px] text-slate-400 max-w-[90px] truncate">
-                        {v.meaning.split(',')[0]}
-                      </span>
-                      <span className={`text-[9px] px-1 py-0.2 rounded font-bold border ${levelBadgeColors[v.cefr] || 'text-slate-400'}`}>
-                        {v.cefr}
-                      </span>
+                      すべて習得済に
                     </button>
-                  );
-                })}
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setAllVocabsInView('lapsed')}
+                      className="text-[11px] text-rose-400 hover:underline font-semibold"
+                    >
+                      すべて要復習に
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setAllVocabsInView('unseen')}
+                      className="text-[11px] text-slate-400 hover:underline font-semibold"
+                    >
+                      すべてスキップに
+                    </button>
+                  </div>
+                </div>
+
+                {/* Level Filter Tabs */}
+                <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 text-xs">
+                  {(['ALL', 'A1', 'A2', 'B1', 'B2', 'C1'] as const).map(lvl => {
+                    const count = levelCounts[lvl] || 0;
+                    if (lvl !== 'ALL' && count === 0) return null;
+                    const isSelected = selectedLevelFilter === lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setSelectedLevelFilter(lvl)}
+                        className={`px-3 py-1 rounded-xl font-bold transition-all whitespace-nowrap ${
+                          isSelected
+                            ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                            : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                        }`}
+                      >
+                        {lvl === 'ALL' ? 'すべて' : lvl} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Vocab Chips List */}
+                <div className="p-3.5 bg-slate-950/90 border border-slate-800 rounded-2xl max-h-64 overflow-y-auto">
+                  <div className="flex flex-wrap gap-1.5">
+                    {filteredVocabs.map(v => {
+                      const st = vocabStatusMap[v.id] || 'mastered';
+                      
+                      let chipStyle = 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200 hover:bg-emerald-900/50';
+                      let icon = '✓';
+                      if (st === 'lapsed') {
+                        chipStyle = 'bg-rose-950/60 border-rose-500/60 text-rose-200 hover:bg-rose-900/70 shadow-sm';
+                        icon = '!';
+                      } else if (st === 'unseen') {
+                        chipStyle = 'bg-slate-900/50 border-slate-800 text-slate-500 hover:bg-slate-850 hover:text-slate-400 line-through';
+                        icon = '✕';
+                      }
+
+                      return (
+                        <button
+                          key={v.id}
+                          type="button"
+                          onClick={() => cycleVocabStatus(v.id)}
+                          title={`${v.phrase} (${v.partOfSpeech}): ${v.meaning} [クリックで状態切替: 習得 -> 要復習 -> 未遭遇]`}
+                          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold transition-all border ${chipStyle}`}
+                        >
+                          <span className="font-bold">{icon}</span>
+                          <span className="font-bold">{v.phrase}</span>
+                          <span className="text-[10px] text-slate-400 max-w-[85px] truncate">
+                            {v.meaning.split(',')[0]}
+                          </span>
+                          <span className={`text-[9px] px-1 py-0.2 rounded font-bold border ${levelBadgeColors[v.cefr] || 'text-slate-400'}`}>
+                            {v.cefr}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -338,7 +371,7 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
           >
             <Sparkles className="w-4 h-4 text-amber-300" />
             <span>
-              一括同期して完了（🟢 {masteredVocabCount}語 / 構文 {Object.values(patternStatusMap).filter(Boolean).length}個）
+              一括同期して完了（🟢 {masteredVocabs.length}語 / 構文 {Object.values(patternStatusMap).filter(Boolean).length}個）
             </span>
             <ChevronRight className="w-4 h-4" />
           </button>
