@@ -39,14 +39,16 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
 
   const today = getTodayDateString();
 
-  // 単語フィルタリング＆ソート
+  // 単語フィルタリング＆完全一致優先ソート
   const filteredVocabs = useMemo(() => {
-    return vocabs
+    const q = searchTerm.trim().toLowerCase();
+    const items = vocabs
       .filter((v) => {
         const matchesSearch =
-          v.phrase.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          v.meaning.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (v.contextNote && v.contextNote.toLowerCase().includes(searchTerm.toLowerCase()));
+          !q ||
+          v.phrase.toLowerCase().includes(q) ||
+          v.meaning.toLowerCase().includes(q) ||
+          (v.contextNote && v.contextNote.toLowerCase().includes(q));
 
         if (!matchesSearch) return false;
 
@@ -54,31 +56,48 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
           return v.nextReviewDate <= today || v.cardState === 'learning' || v.cardState === 'relearning';
         }
         if (statusFilter === 'mastered') {
-          return v.repetitionCount >= 4;
+          return (v.repetitionCount || 0) >= 4;
         }
         if (statusFilter === 'learning') {
-          return v.repetitionCount < 4;
+          return (v.repetitionCount || 0) < 4;
         }
         return true;
-      })
-      .sort((a, b) => {
-        if (sortBy === 'importance') {
-          const impA = a.importance ?? 3;
-          const impB = b.importance ?? 3;
-          if (impB !== impA) return impB - impA;
-          return b.lapseCount - a.lapseCount;
-        }
-        if (sortBy === 'due') {
-          return a.nextReviewDate.localeCompare(b.nextReviewDate);
-        }
-        if (sortBy === 'alpha') {
-          return a.phrase.localeCompare(b.phrase);
-        }
-        if (sortBy === 'lapses') {
-          return b.lapseCount - a.lapseCount;
-        }
-        return 0;
       });
+
+    if (q) {
+      return [...items].sort((a, b) => {
+        const score = (v: typeof a) => {
+          const phrase = v.phrase.toLowerCase();
+          if (phrase === q) return 1000;
+          if (phrase.startsWith(q + ' ') || phrase.startsWith(q)) return 500;
+          if (phrase.includes(q)) return 200;
+          if (v.meaning.toLowerCase().includes(q)) return 100;
+          return 10;
+        };
+        const diff = score(b) - score(a);
+        if (diff !== 0) return diff;
+        return a.phrase.localeCompare(b.phrase);
+      });
+    }
+
+    return [...items].sort((a, b) => {
+      if (sortBy === 'importance') {
+        const impA = a.importance ?? 3;
+        const impB = b.importance ?? 3;
+        if (impB !== impA) return impB - impA;
+        return (b.lapseCount || 0) - (a.lapseCount || 0);
+      }
+      if (sortBy === 'due') {
+        return a.nextReviewDate.localeCompare(b.nextReviewDate);
+      }
+      if (sortBy === 'alpha') {
+        return a.phrase.localeCompare(b.phrase);
+      }
+      if (sortBy === 'lapses') {
+        return (b.lapseCount || 0) - (a.lapseCount || 0);
+      }
+      return 0;
+    });
   }, [vocabs, searchTerm, statusFilter, sortBy, today]);
 
   // 訳せなかった文フィルタリング

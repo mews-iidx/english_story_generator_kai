@@ -9,8 +9,8 @@ import {
   recordPatternStatus,
   recordVocabMasteryStatus
 } from '../services/storage';
-import { getPatternsByLevel } from '../data/cefrPatternsMaster';
-import { getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
+import { getPatternsByLevel, CEFR_PATTERNS_MASTER } from '../data/cefrPatternsMaster';
+import { getVocabMasterByLevel, getVocabByPhrase, CEFR_VOCAB_MASTER } from '../data/cefrVocabMaster';
 import { MasteryStatus, MyGoal } from '../types/mastery';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem } from '../types/sentence';
@@ -88,14 +88,25 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     B2: { name: '中上級 (B2)', desc: '高度な構文・句動詞・自然なイディオム' },
   };
 
-  // 選択中レベルの構文リストと単語リスト
-  const currentPatterns = useMemo(() => getPatternsByLevel(selectedLevel), [selectedLevel]);
-  const currentVocabs = useMemo(() => getVocabMasterByLevel(selectedLevel), [selectedLevel]);
+  // 選択中レベルの構文リストと単語リスト（検索ワードがある場合は全レベルを対象に検索）
+  const currentPatterns = useMemo(() => {
+    if (searchQuery.trim()) {
+      return CEFR_PATTERNS_MASTER;
+    }
+    return getPatternsByLevel(selectedLevel);
+  }, [selectedLevel, searchQuery]);
 
-  // フィルタリング (カリキュラム)
+  const currentVocabs = useMemo(() => {
+    if (searchQuery.trim()) {
+      return CEFR_VOCAB_MASTER;
+    }
+    return getVocabMasterByLevel(selectedLevel);
+  }, [selectedLevel, searchQuery]);
+
+  // フィルタリング＆完全一致優先ソート (構文)
   const filteredPatterns = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return currentPatterns.filter(p => {
+    const items = currentPatterns.filter(p => {
       const st = masteryState.patterns[p.id]?.status || 'unseen';
       if (statusFilter === 'mastered' && st !== 'mastered') return false;
       if (statusFilter === 'lapsed' && st !== 'lapsed') return false;
@@ -110,11 +121,28 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       }
       return true;
     });
+
+    if (q) {
+      return [...items].sort((a, b) => {
+        const score = (p: typeof a) => {
+          const name = p.name.toLowerCase();
+          if (name === q) return 1000;
+          if (name.startsWith(q)) return 500;
+          if (name.includes(q)) return 200;
+          if (p.meaning.toLowerCase().includes(q)) return 100;
+          return 10;
+        };
+        return score(b) - score(a);
+      });
+    }
+
+    return items;
   }, [currentPatterns, masteryState, statusFilter, searchQuery]);
 
+  // フィルタリング＆完全一致優先ソート (単語)
   const filteredVocabs = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return currentVocabs.filter(v => {
+    const items = currentVocabs.filter(v => {
       const st = masteryState.vocabs[v.id]?.status || masteryState.vocabs[v.phrase.toLowerCase()]?.status || 'unseen';
       if (statusFilter === 'mastered' && st !== 'mastered') return false;
       if (statusFilter === 'lapsed' && st !== 'lapsed') return false;
@@ -127,12 +155,30 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       }
       return true;
     });
+
+    if (q) {
+      return [...items].sort((a, b) => {
+        const score = (v: typeof a) => {
+          const phrase = v.phrase.toLowerCase();
+          if (phrase === q) return 1000;
+          if (phrase.startsWith(q + ' ') || phrase.startsWith(q)) return 500;
+          if (phrase.includes(q)) return 200;
+          if (v.meaning.toLowerCase().includes(q)) return 100;
+          return 10;
+        };
+        const diff = score(b) - score(a);
+        if (diff !== 0) return diff;
+        return a.phrase.localeCompare(b.phrase);
+      });
+    }
+
+    return items;
   }, [currentVocabs, masteryState, statusFilter, searchQuery]);
 
-  // マイトロフィー単語フィルタリング
+  // マイトロフィー単語フィルタリング＆完全一致優先ソート
   const filteredSavedVocabs = useMemo(() => {
     const q = savedSearchQuery.trim().toLowerCase();
-    return savedVocabs.filter(v => {
+    const items = savedVocabs.filter(v => {
       const matchesSearch =
         !q ||
         v.phrase.toLowerCase().includes(q) ||
@@ -145,13 +191,31 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         return v.nextReviewDate <= today || v.cardState === 'learning' || v.cardState === 'relearning';
       }
       if (savedStatusFilter === 'mastered') {
-        return v.repetitionCount >= 4;
+        return (v.repetitionCount || 0) >= 4;
       }
       if (savedStatusFilter === 'learning') {
-        return v.repetitionCount < 4;
+        return (v.repetitionCount || 0) < 4;
       }
       return true;
     });
+
+    if (q) {
+      return [...items].sort((a, b) => {
+        const score = (v: typeof a) => {
+          const phrase = v.phrase.toLowerCase();
+          if (phrase === q) return 1000;
+          if (phrase.startsWith(q + ' ') || phrase.startsWith(q)) return 500;
+          if (phrase.includes(q)) return 200;
+          if (v.meaning.toLowerCase().includes(q)) return 100;
+          return 10;
+        };
+        const diff = score(b) - score(a);
+        if (diff !== 0) return diff;
+        return a.phrase.localeCompare(b.phrase);
+      });
+    }
+
+    return items;
   }, [savedVocabs, savedSearchQuery, savedStatusFilter, today]);
 
   // マイトロフィー文フィルタリング

@@ -131,7 +131,35 @@ export function loadVocabs(): VocabItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.VOCABS);
     if (!raw) return [];
-    const vocabs: VocabItem[] = JSON.parse(raw);
+    let vocabs: VocabItem[] = JSON.parse(raw);
+    let modified = false;
+
+    // 最新マスタ辞書と自動同期（過去の誤データやヘリウム等のクレンジング）
+    vocabs = vocabs.map(v => {
+      const masterItem = getVocabByPhrase(v.phrase);
+      if (masterItem && (
+        !v.meaning || 
+        v.meaning.includes('化学記号') || 
+        v.meaning.includes('helium') || 
+        v.meaning === '要復習' || 
+        v.meaning === '要確認' ||
+        v.meaning.startsWith('=')
+      )) {
+        modified = true;
+        return {
+          ...v,
+          meaning: masterItem.meaning,
+          partOfSpeech: masterItem.partOfSpeech || v.partOfSpeech,
+          level: masterItem.cefr || v.level,
+        };
+      }
+      return v;
+    });
+
+    if (modified) {
+      saveVocabsBatch(vocabs);
+    }
+
     return vocabs.sort((a, b) => new Date(b.lastReviewedAt).getTime() - new Date(a.lastReviewedAt).getTime());
   } catch (e) {
     console.error('Failed to load vocabs', e);
