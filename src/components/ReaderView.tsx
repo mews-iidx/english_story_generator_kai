@@ -616,7 +616,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         {viewMode === 'read' ? (
           <div className="space-y-4 text-base sm:text-lg leading-relaxed text-slate-200">
             {paragraphSegments.map((para) => (
-              <p key={para.pIdx} className="leading-loose font-normal">
+              <p key={para.pIdx} className="leading-relaxed font-normal">
                 {para.segments.map((seg, sIdx) => {
                   if (!seg.isWord) {
                     return <span key={sIdx}>{seg.text}</span>;
@@ -627,9 +627,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     seg.wIdx >= selectionRange.startWIdx &&
                     seg.wIdx <= selectionRange.endWIdx;
 
-                  let wordStyle = 'hover:text-sky-300 hover:bg-sky-950/40';
+                  let wordStyle = 'hover:text-sky-300 hover:underline';
                   if (isSelected) {
-                    wordStyle = 'bg-blue-600 text-white font-bold rounded shadow-sm';
+                    wordStyle = 'bg-blue-600 text-white font-bold rounded px-1 shadow-sm';
                   }
 
                   return (
@@ -637,7 +637,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       key={sIdx}
                       data-word="true"
                       onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
-                      className={`inline cursor-pointer rounded px-0.5 transition-all ${wordStyle}`}
+                      className={`inline cursor-pointer transition-all ${wordStyle}`}
                     >
                       {seg.text}
                     </span>
