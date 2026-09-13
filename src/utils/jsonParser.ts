@@ -60,6 +60,7 @@ function normalizeStoryResponse(data: any): StoryGenerationResponse {
     target_vocab_used: Array.isArray(data.target_vocab_used) ? data.target_vocab_used : (Array.isArray(data.target_vocabs) ? data.target_vocabs : []),
     genres: Array.isArray(data.genres) ? data.genres : (data.genre ? [data.genre] : ['General']),
     vocabulary_list: Array.isArray(data.vocabulary_list) ? data.vocabulary_list : undefined,
+    target_embeddings: Array.isArray(data.target_embeddings) ? data.target_embeddings : undefined,
   };
 }
 

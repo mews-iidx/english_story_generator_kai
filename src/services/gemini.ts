@@ -1,5 +1,6 @@
-import { Story, ContentType } from '../types/story';
+import { Story, ContentType, SeriesType, TargetEmbedding } from '../types/story';
 import { CefrLevel } from '../types/settings';
+import { PatternMasterItem, VocabMasterItem } from '../types/mastery';
 import { parseRobustStoryJson } from '../utils/jsonParser';
 import { ChatSuggestedVocab } from '../types/chat';
 import { Persona, CallMessage, ExtractedCallVocab } from '../types/persona';
@@ -9,8 +10,15 @@ export interface GenerateStoryParams {
   model?: string;
   cefrLevel: CefrLevel;
   contentType?: ContentType; // story, podcast, dialogue
+  seriesType?: SeriesType; // single, trilogy, omnibus
+  episodeIndex?: number; // 1, 2, 3
+  totalEpisodes?: number; // 3
+  seriesId?: string;
+  previousEpisodesSummary?: string;
   userPrompt?: string;
   targetVocabs: string[];
+  targetPatterns?: PatternMasterItem[];
+  targetVocabMaster?: VocabMasterItem[];
   targetErrorPatterns?: { corePattern: string; naturalExpression: string; explanation: string }[];
   recentSummaries: string[];
   targetWordCount?: number; // 目標単語数 (デフォルト 700語)
@@ -32,8 +40,15 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
     model = 'gemini-3.7-flash', 
     cefrLevel, 
     contentType = 'story', 
+    seriesType = 'single',
+    episodeIndex,
+    totalEpisodes,
+    seriesId,
+    previousEpisodesSummary,
     userPrompt, 
     targetVocabs, 
+    targetPatterns,
+    targetVocabMaster,
     recentSummaries, 
     targetWordCount = 700 
   } = params;
@@ -53,6 +68,32 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   let promptText = `あなたは英語学習者向けの優秀なプロの英語作家兼英語講師です。\n`;
   promptText += `${levelGuidelines[cefrLevel] || levelGuidelines.A2}\n\n`;
 
+  // 3部作・オムニバスなどのシリーズ連載指示
+  if (seriesType === 'trilogy') {
+    promptText += `【★三部作ミニ連載（3-Part Trilogy Series）: 第 ${episodeIndex || 1} 話 / 全 ${totalEpisodes || 3} 話】\n`;
+    if (episodeIndex === 1) {
+      promptText += `【第1話（前編・起）の要件】:\n`;
+      promptText += `- 物語の導入、魅力的な主人公・舞台設定、そして物語が動き出すきっかけとなる事件・謎・旅立ちを描いてください。\n`;
+      promptText += `- 次の第2話が読みたくなるようなワクワクする展開やクリフハンガーで締めくくってください。\n\n`;
+    } else if (episodeIndex === 2) {
+      promptText += `【第2話（中編・承・転）の要件】:\n`;
+      if (previousEpisodesSummary) {
+        promptText += `前話までのあらすじ:\n${previousEpisodesSummary}\n\n`;
+      }
+      promptText += `- 前話の続きから始まり、事態の急展開、予期せぬ試練や対立、新事実の発見などを描いてください。\n`;
+      promptText += `- 第3話のクライマックス直前の緊張感や最大の選択・ピンチで締めくくってください。\n\n`;
+    } else if (episodeIndex === 3) {
+      promptText += `【第3話（後編・結）の要件】:\n`;
+      if (previousEpisodesSummary) {
+        promptText += `前話までのあらすじ:\n${previousEpisodesSummary}\n\n`;
+      }
+      promptText += `- 前話の危機や伏線を回収し、最大のクライマックス、鮮やかな解決、そして心に残るエンディングを描いて完結させてください。\n\n`;
+    }
+  } else if (seriesType === 'omnibus') {
+    promptText += `【★3編オムニバス短編集（Omnibus Collection）: エピソード ${episodeIndex || 1} / 全 ${totalEpisodes || 3} 話】\n`;
+    promptText += `- 共通のテーマや雰囲気を持ちながら、1話完結のユニークで満足度の高い短編ストーリーにしてください。\n\n`;
+  }
+
   // コンテンツタイプ別の指示
   if (contentType === 'podcast') {
     promptText += `【★フォーマット：ポッドキャスト風 1人語りエッセイ（Listening Time スタイル）】\n`;
@@ -71,9 +112,25 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
 
   promptText += `【★最重要：本文の目標単語数】\n英語本文（story）の長さは【約 ${targetWordCount} 語（words）】を目安に作成してください。しっかりと展開のある満足感の高いボリュームにしてください。\n\n`;
 
-  if (targetVocabs.length > 0) {
-    promptText += `【復習対象の単語・イディオム・定型句】\n`;
-    targetVocabs.forEach((v, idx) => {
+  // 1. CEFR文法・構文パターンのターゲットバインディング指示
+  if (targetPatterns && targetPatterns.length > 0) {
+    promptText += `【★最重要：習得対象のCEFR文法・構文パターン（ターゲットバインディング）】\n`;
+    promptText += `学習者が身につけるべき重要構文です。**以下の構文パターンをストーリーの本文（セリフや地の文）の中に必ず自然な文脈で登場させてください**：\n`;
+    targetPatterns.forEach((p, idx) => {
+      promptText += `${idx + 1}. [ID: ${p.id}] "${p.name}" (要点: ${p.focusPoint}${p.meaningJa ? ` / 意味: ${p.meaningJa}` : ''})\n`;
+    });
+    promptText += `\n※登場させた構文は、後述の target_embeddings JSON 配列にそのID・使用フレーズ・訳・解説を必ず明記してください。\n\n`;
+  }
+
+  // 2. 語彙のターゲットバインディング指示
+  const combinedVocabs = Array.from(new Set([
+    ...targetVocabs,
+    ...(targetVocabMaster?.map(v => v.phrase) || [])
+  ]));
+
+  if (combinedVocabs.length > 0) {
+    promptText += `【復習対象の重要単語・イディオム・定型句】\n`;
+    combinedVocabs.forEach((v, idx) => {
       promptText += `${idx + 1}. "${v}"\n`;
     });
     promptText += `\n★単語・イディオムの出題ルール：前回とは異なる自然な文脈や生き生きとしたシチュエーションで登場させてください。\n\n`;
@@ -81,7 +138,7 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
 
   const { targetErrorPatterns } = params;
   if (targetErrorPatterns && targetErrorPatterns.length > 0) {
-    promptText += `【★最重要：克服すべき文法・語法パターン（本質の応用出題）】\n`;
+    promptText += `【★最重要：克服すべき発話文法・語法パターン（本質の応用出題）】\n`;
     promptText += `ユーザーが過去の会話で詰まったり間違えたりした文法・語法パターンです。同じ例文のコピペではなく、**その本質的な型・ニュアンスを今回のストーリーに自然に織り込み、登場人物のセリフや文章として登場させてください**：\n`;
     targetErrorPatterns.forEach((p: any, idx: number) => {
       promptText += `${idx + 1}. パターン: "${p.corePattern}" (自然な用例: ${p.naturalExpression} - 解説: ${p.explanation})\n`;
@@ -111,7 +168,17 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   promptText += `  "summary": "日本語で1〜2文の導入あらすじ（※オチや結末のネタバレは絶対に含めないでください）",\n`;
   promptText += `  "story": "英語の本文（段落ごとに \\n\\n で区切る。目標単語数 約 ${targetWordCount} 語）",\n`;
   promptText += `  "japanese_translation": "本文の自然な日本語全訳（段落ごとに \\n\\n で区切る）",\n`;
-  promptText += `  "target_vocab_used": ["本文に登場させた復習語彙のリスト"]\n`;
+  promptText += `  "target_vocab_used": ["本文に登場させた復習語彙のリスト"],\n`;
+  promptText += `  "target_embeddings": [\n`;
+  promptText += `    {\n`;
+  promptText += `      "targetId": "構文ID（例: pat_b1_001）または単語ID",\n`;
+  promptText += `      "type": "pattern または vocab",\n`;
+  promptText += `      "targetName": "too [形容詞] to [動詞]",\n`;
+  promptText += `      "textSpan": "本文中で実際に使われているフレーズ（例: too tired to drive）",\n`;
+  promptText += `      "translation": "疲れすぎて運転できなかった",\n`;
+  promptText += `      "focusPoint": "〜すぎて…できない"\n`;
+  promptText += `    }\n`;
+  promptText += `  ]\n`;
   promptText += `}\n`;
 
   const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
@@ -153,6 +220,18 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
       // 単語数の概算カウント
       const actualWords = (parsedData.story || '').trim().split(/\s+/).filter(Boolean).length;
 
+      // ターゲット埋め込みの補完
+      let embeddings: TargetEmbedding[] = parsedData.target_embeddings || [];
+      if (embeddings.length === 0 && targetPatterns && targetPatterns.length > 0) {
+        embeddings = targetPatterns.map(p => ({
+          targetId: p.id,
+          type: 'pattern' as const,
+          targetName: p.name,
+          focusPoint: p.focusPoint,
+          translation: p.meaningJa,
+        }));
+      }
+
       const storyResult: Story = {
         id: 'story_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
         title: parsedData.title || 'Untitled Story',
@@ -160,7 +239,12 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
         summary: parsedData.summary || '',
         storyContent: parsedData.story || '',
         japaneseTranslation: parsedData.japanese_translation || '',
-        targetVocabList: parsedData.target_vocab_used || targetVocabs || [],
+        targetVocabList: parsedData.target_vocab_used || combinedVocabs || [],
+        targetEmbeddings: embeddings,
+        seriesId: seriesId || (seriesType !== 'single' ? 'series_' + Date.now() : undefined),
+        episodeIndex,
+        totalEpisodes,
+        seriesType,
         userPrompt,
         cefrLevel,
         contentType,
@@ -192,6 +276,99 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   }
 
   throw lastError || new Error('ストーリー生成に失敗しました。');
+}
+
+/**
+ * 単発・三部作連載・オムニバスのバッチ生成オーケストレーター
+ */
+export async function generateStorySeriesWithGemini(
+  params: Omit<GenerateStoryParams, 'episodeIndex' | 'totalEpisodes' | 'seriesId' | 'previousEpisodesSummary'> & {
+    seriesType?: SeriesType;
+  },
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<{ stories: Story[]; totalPromptTokens: number; totalCandidatesTokens: number }> {
+  const seriesType = params.seriesType || 'single';
+
+  if (seriesType === 'single') {
+    onProgress?.(1, 1, 'ストーリーを生成中...');
+    const res = await generateStoryWithGemini({
+      ...params,
+      seriesType: 'single',
+    });
+    return {
+      stories: [res.story],
+      totalPromptTokens: res.tokenUsage?.promptTokens || 0,
+      totalCandidatesTokens: res.tokenUsage?.candidatesTokens || 0,
+    };
+  }
+
+  const seriesId = 'series_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const stories: Story[] = [];
+  let totalPromptTokens = 0;
+  let totalCandidatesTokens = 0;
+
+  if (seriesType === 'trilogy') {
+    // 3部作（前編・中編・後編を連続生成）
+    // Episode 1 (前編)
+    onProgress?.(1, 3, '第1話（前編）を執筆中...');
+    const ep1Res = await generateStoryWithGemini({
+      ...params,
+      seriesType: 'trilogy',
+      episodeIndex: 1,
+      totalEpisodes: 3,
+      seriesId,
+    });
+    stories.push(ep1Res.story);
+    totalPromptTokens += ep1Res.tokenUsage?.promptTokens || 0;
+    totalCandidatesTokens += ep1Res.tokenUsage?.candidatesTokens || 0;
+
+    // Episode 2 (中編)
+    onProgress?.(2, 3, '第2話（中編）を執筆中...');
+    const ep2Res = await generateStoryWithGemini({
+      ...params,
+      seriesType: 'trilogy',
+      episodeIndex: 2,
+      totalEpisodes: 3,
+      seriesId,
+      previousEpisodesSummary: `第1話「${ep1Res.story.titleJa || ep1Res.story.title}」: ${ep1Res.story.summary}`,
+    });
+    stories.push(ep2Res.story);
+    totalPromptTokens += ep2Res.tokenUsage?.promptTokens || 0;
+    totalCandidatesTokens += ep2Res.tokenUsage?.candidatesTokens || 0;
+
+    // Episode 3 (後編)
+    onProgress?.(3, 3, '第3話（完結編）を執筆中...');
+    const ep3Res = await generateStoryWithGemini({
+      ...params,
+      seriesType: 'trilogy',
+      episodeIndex: 3,
+      totalEpisodes: 3,
+      seriesId,
+      previousEpisodesSummary: `第1話「${ep1Res.story.titleJa}」: ${ep1Res.story.summary}\n第2話「${ep2Res.story.titleJa}」: ${ep2Res.story.summary}`,
+    });
+    stories.push(ep3Res.story);
+    totalPromptTokens += ep3Res.tokenUsage?.promptTokens || 0;
+    totalCandidatesTokens += ep3Res.tokenUsage?.candidatesTokens || 0;
+
+    return { stories, totalPromptTokens, totalCandidatesTokens };
+  }
+
+  // Omnibus (3編オムニバス)
+  for (let i = 1; i <= 3; i++) {
+    onProgress?.(i, 3, `オムニバス第 ${i} 話を執筆中...`);
+    const epRes = await generateStoryWithGemini({
+      ...params,
+      seriesType: 'omnibus',
+      episodeIndex: i,
+      totalEpisodes: 3,
+      seriesId,
+    });
+    stories.push(epRes.story);
+    totalPromptTokens += epRes.tokenUsage?.promptTokens || 0;
+    totalCandidatesTokens += epRes.tokenUsage?.candidatesTokens || 0;
+  }
+
+  return { stories, totalPromptTokens, totalCandidatesTokens };
 }
 
 export async function getDetailedNuanceWithGemini(
@@ -337,6 +514,15 @@ export interface ChatMentorParams {
     recentStoryTitle?: string;
     vocabCount?: number;
     cefrLevel?: string;
+    levelProgressSummary?: string;
+    masteryStats?: {
+      level: string;
+      patternProgress: number;
+      vocabProgress: number;
+      totalMastered: number;
+      dailyReadingWords: number;
+      estimatedDaysToTarget?: number;
+    };
   };
   apiKey: string;
   model?: string;
@@ -349,7 +535,7 @@ export interface ChatMentorResult {
 }
 
 /**
- * AI英語メンターとの対話＆登録推奨フレーズ抽出
+ * AI英語メンターとの対話＆登録推奨フレーズ抽出（習得度テレメトリ連動）
  */
 export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMentorResult> {
   const { messages, currentQuery, contextInfo, apiKey, model = 'gemini-3.7-flash' } = params;
@@ -361,11 +547,24 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
     };
   }
 
-  const systemInstruction = `あなたは親しみやすく優秀な英語パーソナルメンター「CompileEng AI」です。
+  let systemInstruction = `あなたは親しみやすく優秀な英語パーソナルメンター「CompileEng AI」です。
 ユーザーは英語のリアルタイムコンパイル（頭から瞬時に意味を理解する力）と日常英会話リスニング・スピーキングの上達を目指しています。
-ユーザーの質問（「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など）に、分かりやすく温かいトーンで答えてください。
+ユーザーの質問（「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」「学習ペースの相談」など）に、分かりやすく温かいトーンで答えてください。`;
 
-【★最重要ルール：重要フレーズの抽出】
+  if (contextInfo?.masteryStats) {
+    const s = contextInfo.masteryStats;
+    systemInstruction += `\n\n【学習者の現在の習得度テレメトリ（HUD情報）】
+- 目標/現在CEFR: ${s.level}
+- 構文習得率: ${Math.round(s.patternProgress * 100)}%
+- 重要単語習得率: ${Math.round(s.vocabProgress * 100)}%
+- 総マスター項目数: ${s.totalMastered} 項目
+- 今日の読書量: ${s.dailyReadingWords} 語
+${s.estimatedDaysToTarget ? `- 現在ペースでの目標達成予測: 約 ${s.estimatedDaysToTarget} 日` : ''}
+
+※学習ペースや達成時期について相談された場合、このデータを元に現実的で励みになる具体的なアドバイス（例: 「1日1話（約700語）の読書を続けると、あと約○日でB1レベルの構文をコンプリートできますよ！」など）を提供してください。`;
+  }
+
+  systemInstruction += `\n\n【★最重要ルール：重要フレーズの抽出】
 あなたの回答の最後に、ユーザーが語彙帳（Anki・ストーリー生成）に登録して定着させるべき「キー表現（単語・イディオム）」を1〜3個抽出してください。
 出力形式として、回答文の末尾に以下の形式でJSONタグを含めてください:
 <!--SUGGESTED_VOCABS:[{"phrase":"look forward to","meaning":"〜を楽しみに待つ"}]-->
@@ -377,7 +576,7 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
       role: 'user',
       parts: [
         {
-          text: `${currentQuery}\n\n(学習者情報: レベル ${contextInfo?.cefrLevel || 'A2'}, 語彙数: ${contextInfo?.vocabCount || 0}語)`
+          text: `${currentQuery}\n\n(学習者情報: レベル ${contextInfo?.cefrLevel || 'A2'}, 語彙数: ${contextInfo?.vocabCount || 0}語${contextInfo?.levelProgressSummary ? `, 進捗: ${contextInfo.levelProgressSummary}` : ''})`
         }
       ]
     }
@@ -432,85 +631,83 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
   }
 
   return {
-    replyText: 'AIメンターの応答取得に失敗しました。もう一度お試しください。',
+    replyText: 'AIメンターからの返答取得に失敗しました。時間をおいて再試行してください。',
     suggestedVocabs: [],
   };
 }
 
 export interface DetectedExpressionError {
-  userUtterance: string;
-  naturalExpression: string;
+  mistake: string;
+  corrected: string;
   corePattern: string;
   explanation: string;
-  suggestedCause: 'vocabulary' | 'syntax_order' | 'direct_translation' | 'tense_modals' | 'preposition_colloc' | 'other';
 }
 
 export interface CallAnalysisResult {
-  extractedVocabs: ExtractedCallVocab[];
+  memoryUpdates: {
+    likes?: string[];
+    dislikes?: string[];
+    userNotes?: string[];
+    topicSummary?: string;
+  };
   detectedErrors?: DetectedExpressionError[];
-  recapSummary: string;
-  newLikes: string[];
-  newDislikes: string[];
-  newTopic?: { topic: string; summary: string };
-  newUserNotes: string[];
-  newPromises?: string[];
-  tokenUsage?: { promptTokens: number; candidatesTokens: number };
+  tokenUsage?: {
+    promptTokens: number;
+    candidatesTokens: number;
+  };
 }
 
 /**
- * 通話終了後の会話ログ分析・新出語彙抽出・ペルソナ記憶更新
+ * 通話セッション終了時に、会話ログから
+ * 1. 相手ペルソナが記憶すべきユーザー情報・話題要約
+ * 2. ユーザーが犯した「偽英語・不自然な表現・文法ミス」と「その本質構文パターン」
+ * をGeminiで一括解析・抽出する
  */
 export async function analyzeCallSessionAndExtractMemory(params: {
-  messages: CallMessage[];
-  personaName?: string;
   apiKey: string;
   model?: string;
+  persona: Persona;
+  messages: CallMessage[];
+  extractedVocabs?: ExtractedCallVocab[];
 }): Promise<CallAnalysisResult> {
-  const { messages, personaName = 'AI Partner', apiKey, model = 'gemini-3.7-flash' } = params;
+  const { apiKey, model = 'gemini-3.7-flash', persona, messages } = params;
 
-  if (!apiKey || messages.length === 0) {
-    return {
-      recapSummary: '会話ログがありません',
-      newLikes: [],
-      newDislikes: [],
-      newUserNotes: [],
-      extractedVocabs: [],
-    };
+  if (!apiKey || messages.length < 2) {
+    return { memoryUpdates: {} };
   }
 
-  const prompt = `あなたは英語教育・対話分析の専門AIです。
-以下の英語通話（ユーザーと「${personaName}」の会話ログ）を分析し、JSON形式で結果を出力してください。
+  const conversationText = messages
+    .map(m => `${m.role === 'user' ? 'User' : persona.name}: ${m.text}`)
+    .join('\n');
+
+  const prompt = `あなたは卓越した言語交換AIエージェントおよび英語指導のプロです。
+以下の「ユーザーとネイティブキャラクター(${persona.name})の英会話通話ログ」を分析し、2つのタスクを行ってください。
 
 【会話ログ】
-${messages.map(m => `${m.role === 'user' ? 'User' : personaName}: ${m.text}`).join('\n')}
+${conversationText}
 
-【分析タスク】
-1. recapSummary: 今回の会話内容の簡潔な要約（日本語で1〜2文）。
-2. newLikes: 会話の中で「${personaName}」が好き・興味があると新しく言及した事物・趣味（日本語の文字列配列）。なければ空配列。
-3. newDislikes: 会話の中で「${personaName}」が嫌い・苦手・興味がないと新しく言及した事物（日本語の文字列配列）。なければ空配列。
-4. newTopic: 今回話したメインのトピック名（日本語で簡潔に）とその要約。
-5. newUserNotes: 会話の中でユーザーに関して新しく判明した情報（例: 「ユーザーは来月京都に行く予定」「カフェラテが好き」など）。なければ空配列。
-6. newPromises: 次回までに何かを見る・やる・話す等の約束や宿題があれば抽出。
-7. extractedVocabs: 会話中に出てきた【ユーザーが覚えるべき実用英単語・イディオム・表現（2〜5個）】。
-   - phrase: 英語表現
-   - meaning: 自然な日本語訳
-   - contextSentence: 会話内で使われた（または代表的な）例文
-   - nuanceNote: 使い方やニュアンスのワンポイント解説
+---
+【タスク1: ペルソナの記憶更新 (Memory Update)】
+会話を通じて${persona.name}が新たに知ったユーザーの好み(likes)、苦手なもの(dislikes)、ユーザーに関する重要メモ(userNotes)、および今回の会話トピックの1文要約(topicSummary)を抽出してください。新規情報がない項目は空配列にしてください。
 
-【出力フォーマット（必ず以下のJSON形式のみを出力）】
+【タスク2: 発話カルテ・文法語法パターンの抽出 (Expression Error Analysis)】
+ユーザーの発言の中に、不自然な英語、文法ミス、和製英語、意図が伝わりにくい表現があれば最大3個まで抽出してください。
+特に重要なのは「corePattern（本質の構文・語法パターン）」です。単なる単語のミスではなく、「too ~ to ...」「prevent A from -ing」「look forward to -ing」「I wish I had ...」などの文法・語法の抽象的な型を抽出してください。
+
+以下のJSONフォーマットのみを出力してください:
 {
-  "recapSummary": "...",
-  "newLikes": ["..."],
-  "newDislikes": ["..."],
-  "newTopic": { "topic": "...", "summary": "..." },
-  "newUserNotes": ["..."],
-  "newPromises": ["..."],
-  "extractedVocabs": [
+  "memoryUpdates": {
+    "likes": ["新しく分かったユーザーの好きなこと・もの"],
+    "dislikes": ["新しく分かったユーザーの嫌いなこと・苦手なもの"],
+    "userNotes": ["ユーザーの職業、家族、計画など記憶すべき事実"],
+    "topicSummary": "今回の会話の簡潔なまとめ（日本語1文）"
+  },
+  "detectedErrors": [
     {
-      "phrase": "...",
-      "meaning": "...",
-      "contextSentence": "...",
-      "nuanceNote": "..."
+      "mistake": "ユーザーが実際に言った不自然な文・間違い",
+      "corrected": "ネイティブならこう言う自然な表現",
+      "corePattern": "抽象化された文法・語法パターン（例: look forward to + ~ing）",
+      "explanation": "なぜ不自然なのか、どう使い分けるのかの簡潔な日本語解説（1〜2文）"
     }
   ]
 }`;
@@ -541,13 +738,8 @@ ${messages.map(m => `${m.role === 'user' ? 'User' : personaName}: ${m.text}`).jo
         const parsed = JSON.parse(cleanJson);
 
         return {
-          recapSummary: parsed.recapSummary || '英会話セッション完了',
-          newLikes: parsed.newLikes || [],
-          newDislikes: parsed.newDislikes || [],
-          newTopic: parsed.newTopic,
-          newUserNotes: parsed.newUserNotes || [],
-          newPromises: parsed.newPromises || [],
-          extractedVocabs: parsed.extractedVocabs || [],
+          memoryUpdates: parsed.memoryUpdates || {},
+          detectedErrors: parsed.detectedErrors || [],
           tokenUsage: {
             promptTokens: usage?.promptTokenCount || 0,
             candidatesTokens: usage?.candidatesTokenCount || 0,
@@ -555,28 +747,26 @@ ${messages.map(m => `${m.role === 'user' ? 'User' : personaName}: ${m.text}`).jo
         };
       }
     } catch (e) {
-      console.warn('Call analysis error with model ' + currentModel, e);
+      console.warn('Analysis error with model ' + currentModel, e);
     }
   }
 
-  return {
-    recapSummary: '英会話セッション完了',
-    newLikes: [],
-    newDislikes: [],
-    newUserNotes: [],
-    extractedVocabs: [],
-  };
+  return { memoryUpdates: {} };
 }
 
 /**
- * ユーザー指定またはランダムなLanguage Exchangeペルソナを自動生成
+ * ユーザーの希望（「カフェの店員」「同年代のオーストラリア人サーファー」等）から
+ * 完全なペルソナプロフィールを自動生成する
  */
 export async function generateCustomPersona(params: {
   apiKey: string;
-  userPrompt?: string;
   model?: string;
-}): Promise<{ persona: Persona; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
-  const { apiKey, userPrompt, model = 'gemini-3.7-flash' } = params;
+  userPrompt?: string;
+}): Promise<{
+  persona: Persona;
+  tokenUsage?: { promptTokens: number; candidatesTokens: number };
+}> {
+  const { apiKey, model = 'gemini-3.7-flash', userPrompt } = params;
 
   const prompt = `あなたは英語学習者向けのLanguage Exchange（言語交換パートナー）キャラクターを創造するクリエイティブAIです。
 ${userPrompt ? `ユーザーからの要望: 「${userPrompt}」` : '自然で魅力的なネイティブまたは流暢な英語話者の友達キャラクターを1人生成してください。'}
@@ -663,7 +853,6 @@ ${userPrompt ? `ユーザーからの要望: 「${userPrompt}」` : '自然で�
 
 /**
  * ペルソナとのテキストチャット対話関数
- * 音声通話（Gemini Live）と同じペルソナ情報・動的記憶を共有してチャットを行う
  */
 export async function chatWithPersona(params: {
   apiKey: string;
@@ -716,10 +905,7 @@ export async function chatWithPersona(params: {
 - If the user asks for explanations or types in Japanese, explain warmly in Japanese and then encourage them with a natural English response.`;
   }
 
-  // Format contents for Gemini API (Multi-turn format)
   const contents: any[] = [];
-
-  // Recent history (up to last 10 messages)
   const recentHistory = history.slice(-10);
   for (const msg of recentHistory) {
     contents.push({
@@ -728,7 +914,6 @@ export async function chatWithPersona(params: {
     });
   }
 
-  // Current user message
   contents.push({
     role: 'user',
     parts: [{ text: userText }],

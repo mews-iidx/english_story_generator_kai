@@ -12,7 +12,7 @@ import { CallView } from './components/CallView';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
 import { ImportStoryModal } from './components/ImportStoryModal';
 
-import { Story, ContentType } from './types/story';
+import { Story, ContentType, SeriesType } from './types/story';
 import { VocabItem } from './types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from './types/sentence';
 import { ChatMessage, ChatSuggestedVocab } from './types/chat';
@@ -56,9 +56,11 @@ import {
   incrementExpressionReinforced,
   addTokenUsage,
   resetAllData,
+  getUnmasteredTargetPatterns,
+  getUnmasteredTargetVocabs,
 } from './services/storage';
 
-import { generateStoryWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
+import { generateStoryWithGemini, generateStorySeriesWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
 import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
@@ -85,6 +87,7 @@ export const App: React.FC = () => {
   // バックグラウンド生成状態
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingTheme, setGeneratingTheme] = useState('');
+  const [generatingProgress, setGeneratingProgress] = useState<{ current: number; total: number; message: string } | undefined>(undefined);
   const [notificationToast, setNotificationToast] = useState<string | null>(null);
 
   // AI重要度ランク付け状態
@@ -239,7 +242,12 @@ export const App: React.FC = () => {
   };
 
   // バックグラウンド非同期ストーリー/スクリプト生成ハンドラー
-  const handleGenerateStoryInBackground = async (userPrompt?: string, wordCount = 700, contentType: ContentType = 'podcast') => {
+  const handleGenerateStoryInBackground = async (
+    userPrompt?: string,
+    wordCount = 700,
+    contentType: ContentType = 'podcast',
+    seriesType: SeriesType = 'single'
+  ) => {
     if (!settings.geminiApiKey) {
       alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
       setActiveTab('settings');
@@ -248,6 +256,7 @@ export const App: React.FC = () => {
 
     setIsGenerating(true);
     setGeneratingTheme(userPrompt || '');
+    setGeneratingProgress({ current: 1, total: seriesType === 'single' ? 1 : 3, message: '執筆準備中...' });
     setActiveTab('bookshelf');
 
     try {
@@ -261,34 +270,56 @@ export const App: React.FC = () => {
       // 偽英語・発話カルテからの本質パターン選定
       const targetErrorPatterns = pickTargetErrorPatternsForStory(errorList, 2);
 
-      const res = await generateStoryWithGemini({
-        apiKey: settings.geminiApiKey,
-        model: settings.geminiModel,
-        cefrLevel: settings.cefrLevel,
-        contentType,
-        userPrompt,
-        targetVocabs: selectedDueVocabs,
-        targetErrorPatterns,
-        recentSummaries,
-        targetWordCount: wordCount,
-      });
+      // CEFRマスターDBからの未習得構文・単語の自動選定
+      const levelKey = (settings.cefrLevel === 'C1' ? 'B2' : settings.cefrLevel) as 'A1' | 'A2' | 'B1' | 'B2';
+      const targetPatterns = getUnmasteredTargetPatterns(levelKey, 3);
+      const targetVocabMaster = getUnmasteredTargetVocabs(levelKey, 4);
+
+      const res = await generateStorySeriesWithGemini(
+        {
+          apiKey: settings.geminiApiKey,
+          model: settings.geminiModel,
+          cefrLevel: settings.cefrLevel,
+          contentType,
+          seriesType,
+          userPrompt,
+          targetVocabs: selectedDueVocabs,
+          targetPatterns,
+          targetVocabMaster,
+          targetErrorPatterns,
+          recentSummaries,
+          targetWordCount: wordCount,
+        },
+        (current, total, message) => {
+          setGeneratingProgress({ current, total, message });
+        }
+      );
 
       // ストーリーで応用強化されたパターンのカウントアップ
       targetErrorPatterns.forEach(p => {
         incrementExpressionReinforced(p.corePattern);
       });
 
-      const newStory = res.story;
-
-      if (res.tokenUsage) {
-        handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
+      if (res.totalPromptTokens || res.totalCandidatesTokens) {
+        handleRecordTokenUsage(res.totalPromptTokens, res.totalCandidatesTokens);
       }
 
-      saveStory(newStory);
-      const updatedStories = [newStory, ...loadStories().filter(s => s.id !== newStory.id)];
+      // 生成されたストーリーを保存
+      res.stories.forEach(story => {
+        saveStory(story);
+      });
+
+      const updatedStories = loadStories();
       setStories(updatedStories);
 
-      setNotificationToast(`🎉 新しいエピソード『${newStory.title}』が本棚に追加されました！`);
+      if (seriesType === 'trilogy') {
+        setNotificationToast(`🎉 3部作ミニ連載『${res.stories[0]?.titleJa || res.stories[0]?.title}』（全3話）が本棚に追加されました！`);
+      } else if (seriesType === 'omnibus') {
+        setNotificationToast(`🎉 3編オムニバスが本棚に追加されました！`);
+      } else {
+        const first = res.stories[0];
+        setNotificationToast(`🎉 新しいエピソード『${first?.titleJa || first?.title}』が本棚に追加されました！`);
+      }
 
       triggerAutoSync(vocabs, updatedStories);
     } catch (err: any) {
@@ -297,6 +328,7 @@ export const App: React.FC = () => {
     } finally {
       setIsGenerating(false);
       setGeneratingTheme('');
+      setGeneratingProgress(undefined);
     }
   };
 
@@ -773,6 +805,7 @@ export const App: React.FC = () => {
                 onLevelChange={handleLevelChange}
                 isGenerating={isGenerating}
                 generatingTheme={generatingTheme}
+                generatingProgress={generatingProgress}
                 onGenerateStory={handleGenerateStoryInBackground}
                 onOpenImportModal={() => setIsImportModalOpen(true)}
                 onNavigateToBookshelf={() => setActiveTab('bookshelf')}

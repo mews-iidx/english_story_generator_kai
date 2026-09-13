@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
-import { ContentType } from '../types/story';
-import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, Clock, Mic, MessageSquare, BookMarked } from 'lucide-react';
+import { ContentType, SeriesType } from '../types/story';
+import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, Clock, Mic, MessageSquare, BookMarked, Film, Library, CheckCircle2 } from 'lucide-react';
+import { getUnmasteredTargetPatterns, getUnmasteredTargetVocabs, loadMasteryState } from '../services/storage';
 
 interface StoryCreateViewProps {
   currentLevel: CefrLevel;
   onLevelChange: (level: CefrLevel) => void;
   isGenerating: boolean;
   generatingTheme?: string;
-  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType) => void;
+  generatingProgress?: { current: number; total: number; message: string };
+  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType, seriesType?: SeriesType) => void;
   onOpenImportModal: () => void;
   onNavigateToBookshelf: () => void;
 }
@@ -18,13 +20,20 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
   onLevelChange,
   isGenerating,
   generatingTheme,
+  generatingProgress,
   onGenerateStory,
   onOpenImportModal,
   onNavigateToBookshelf,
 }) => {
   const [contentType, setContentType] = useState<ContentType>('podcast');
+  const [seriesType, setSeriesType] = useState<SeriesType>('single');
   const [promptInput, setPromptInput] = useState('');
   const [wordCount, setWordCount] = useState<number>(700);
+
+  // 未習得構文・単語のプレビュー数
+  const levelKey = (currentLevel === 'C1' ? 'B2' : currentLevel) as 'A1' | 'A2' | 'B1' | 'B2';
+  const targetPatterns = getUnmasteredTargetPatterns(levelKey, 3);
+  const targetVocabs = getUnmasteredTargetVocabs(levelKey, 4);
 
   const changeWordCount = (delta: number) => {
     setWordCount(prev => Math.max(100, Math.min(2500, (prev || 700) + delta)));
@@ -32,7 +41,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
 
   const handleStartGeneration = () => {
     if (isGenerating) return;
-    onGenerateStory(promptInput, wordCount, contentType);
+    onGenerateStory(promptInput, wordCount, contentType, seriesType);
   };
 
   const levelDescriptions: Record<CefrLevel, { name: string; desc: string }> = {
@@ -42,6 +51,28 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
     B2: { name: '中上級 (B2)', desc: '自然なイディオムや句動詞を含む豊かな表現' },
     C1: { name: '上級 (C1)', desc: '高度で洗練された語彙と多彩な表現' },
   };
+
+  const seriesOptions: { id: SeriesType; label: string; icon: React.ComponentType<{ className?: string }>; desc: string; badge?: string }[] = [
+    {
+      id: 'single',
+      label: '📖 単発ストーリー',
+      icon: BookMarked,
+      desc: '1話完結のポッドキャスト・短編ストーリー',
+    },
+    {
+      id: 'trilogy',
+      label: '🎬 3部作 ミニ連載',
+      icon: Film,
+      desc: '前編・中編・後編が連続する没入型ミニシリーズ（3話一括生成）',
+      badge: '人気・多読推進',
+    },
+    {
+      id: 'omnibus',
+      label: '📚 3編オムニバス',
+      icon: Library,
+      desc: '同じターゲット構文を異なるシチュエーションで味わう3短編（3話一括生成）',
+    },
+  ];
 
   const contentTypes: { id: ContentType; label: string; icon: React.ComponentType<{ className?: string }>; desc: string; badge?: string }[] = [
     {
@@ -79,7 +110,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
                 物語・スクリプト作成スタジオ ✨
               </h2>
               <p className="text-xs sm:text-sm text-slate-400">
-                あなたの弱点語彙を自然に組み込んだポッドキャストや物語を生成します
+                あなたのCEFR未習得構文・重要語彙を自然に組み込んだストーリーを生成します
               </p>
             </div>
           </div>
@@ -104,10 +135,11 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
               </div>
               <div>
                 <h3 className="text-sm sm:text-base font-bold text-white">
-                  AIがバックグラウンドで執筆中...
+                  {generatingProgress ? generatingProgress.message : 'AIがバックグラウンドで執筆中...'}
                 </h3>
                 <p className="text-xs text-slate-300">
-                  {generatingTheme ? `テーマ: 「${generatingTheme}」` : 'テーマ: おまかせ・弱点語彙注入'}（完成すると自動で本棚に追加されます）
+                  {generatingProgress ? `進行状況: [${generatingProgress.current}/${generatingProgress.total}] ` : ''}
+                  {generatingTheme ? `テーマ: 「${generatingTheme}」` : 'テーマ: おまかせ・弱点構文注入'}（完成すると自動で本棚に追加されます）
                 </p>
               </div>
             </div>
@@ -123,26 +155,67 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
         </div>
       )}
 
-      {/* 2. Generation Form */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-xl space-y-6">
-        {/* Step 1: Content Type Selection */}
+      {/* 2. Main Config Card */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-6">
+        {/* Step 1: Series Type (Single / Trilogy / Omnibus) */}
         <div className="space-y-3">
           <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
+            <Film className="w-4 h-4 text-blue-400" />
+            <span>1. 連載・作品タイプを選択:</span>
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {seriesOptions.map((opt) => {
+              const isSelected = seriesType === opt.id;
+              const Icon = opt.icon;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setSeriesType(opt.id)}
+                  className={`p-4 rounded-2xl border text-left transition-all space-y-2 flex flex-col justify-between ${
+                    isSelected
+                      ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-500/10 ring-2 ring-blue-500/40'
+                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 font-bold text-sm text-white">
+                      <Icon className="w-4 h-4 text-blue-400" />
+                      <span>{opt.label}</span>
+                    </div>
+                    {opt.badge && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        {opt.badge}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    {opt.desc}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 2: Content Format */}
+        <div className="space-y-3 pt-2 border-t border-slate-800/80">
+          <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
             <Mic className="w-4 h-4 text-blue-400" />
-            <span>1. コンテンツの形式（タイプ）を選択:</span>
+            <span>2. コンテンツ形式を選択:</span>
           </label>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {contentTypes.map((type) => {
               const isSelected = contentType === type.id;
               const Icon = type.icon;
-
               return (
                 <button
                   key={type.id}
                   type="button"
                   onClick={() => setContentType(type.id)}
-                  className={`p-4 rounded-2xl border text-left transition-all relative flex flex-col justify-between space-y-2 ${
+                  className={`p-4 rounded-2xl border text-left transition-all space-y-2 flex flex-col justify-between ${
                     isSelected
                       ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-500/10 ring-2 ring-blue-500/40'
                       : 'bg-slate-950 border-slate-800 hover:border-slate-700'
@@ -159,7 +232,6 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
                       </span>
                     )}
                   </div>
-
                   <p className="text-xs text-slate-400 leading-relaxed">
                     {type.desc}
                   </p>
@@ -169,12 +241,12 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 2: CEFR Level */}
+        {/* Step 3: CEFR Level */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <div className="flex items-center justify-between">
             <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
               <Layers className="w-4 h-4 text-blue-400" />
-              <span>2. 英語難易度レベルを選択:</span>
+              <span>3. 英語難易度レベルを選択:</span>
             </label>
             <span className="text-xs text-blue-400 font-bold">
               {levelDescriptions[currentLevel]?.name}
@@ -205,11 +277,11 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 3: Word Count Target */}
+        {/* Step 4: Word Count Target */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
             <Clock className="w-4 h-4 text-blue-400" />
-            <span>3. 目標単語数（ボリューム）:</span>
+            <span>4. 1話あたりの目標単語数（ボリューム）:</span>
           </label>
 
           <div className="flex items-center flex-wrap gap-3">
@@ -231,7 +303,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
                 onChange={(e) => setWordCount(Number(e.target.value) || 700)}
                 className="w-20 bg-transparent text-center text-base sm:text-lg font-bold text-blue-400 outline-none"
               />
-              <span className="text-xs font-semibold text-slate-400 pr-2">words (語)</span>
+              <span className="text-xs font-semibold text-slate-400 pr-2">words / 話</span>
               <button
                 type="button"
                 onClick={() => changeWordCount(100)}
@@ -261,10 +333,10 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 4: Theme / Prompt & Target Vocabs */}
+        {/* Step 5: Theme / Prompt & Target Vocabs */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white block">
-            4. テーマ・シチュエーション（任意）:
+            5. テーマ・シチュエーション（任意）:
           </label>
 
           <input
@@ -280,21 +352,29 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-2xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
           />
 
-          <div className="p-3.5 bg-slate-950/70 border border-blue-500/20 rounded-2xl flex items-center justify-between text-xs gap-3">
-            <div className="flex items-center space-x-2 text-slate-300">
-              <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
-              <span>未定着の重要語彙や発話カルテの表現をAIが自動選定して物語に自然にブレンドします</span>
+          {/* Target Binding Card */}
+          <div className="p-4 bg-slate-950/70 border border-blue-500/20 rounded-2xl space-y-2 text-xs">
+            <div className="flex items-center justify-between text-slate-300">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <span className="font-bold text-slate-200">AIターゲット自動バインディング（無駄のない弱点克服）</span>
+              </div>
+              <span className="text-[10px] uppercase tracking-wider font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md flex-shrink-0">
+                マスターDB連動
+              </span>
             </div>
-            <span className="text-[10px] uppercase tracking-wider font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md flex-shrink-0">
-              AI自動選定
-            </span>
+            <p className="text-slate-400 leading-relaxed">
+              選択中レベル（{currentLevel}）の未習得構文（{targetPatterns.map(p => p.name).slice(0, 2).join(', ')}...）と重要語彙（{targetVocabs.map(v => v.phrase).slice(0, 3).join(', ')}...）をAIが自動選定し、物語の文脈に溶け込ませて出題します。
+            </p>
           </div>
         </div>
 
         {/* Action Button: Start generation in background */}
         <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-slate-400">
-            ※生成開始後、すぐに本棚に戻って読書を続けても裏で自動追加されます
+            {seriesType === 'single'
+              ? '※生成開始後、すぐに本棚に戻って読書を続けても裏で自動追加されます'
+              : '※3話連続でバックグラウンド生成されます。完成順に本棚に追加されます'}
           </p>
 
           <button
@@ -305,12 +385,18 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             {isGenerating ? (
               <>
                 <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>生成中（裏で執筆中...）</span>
+                <span>生成中（{generatingProgress ? `[${generatingProgress.current}/${generatingProgress.total}]` : '執筆中...'}）</span>
               </>
             ) : (
               <>
                 <Sparkles className="w-4 h-4" />
-                <span>スクリプトを生成する（バックグラウンド）</span>
+                <span>
+                  {seriesType === 'single'
+                    ? 'スクリプトを生成する'
+                    : seriesType === 'trilogy'
+                    ? '3部作ミニ連載を一括生成する'
+                    : '3編オムニバスを一括生成する'}
+                </span>
               </>
             )}
           </button>
