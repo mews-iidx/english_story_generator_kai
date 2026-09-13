@@ -1,3 +1,7 @@
+import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress } from '../types/mastery';
+import { CEFR_PATTERNS_MASTER, getPatternById, getPatternsByLevel } from '../data/cefrPatternsMaster';
+import { CEFR_VOCAB_MASTER, getVocabMasterById, getVocabMasterByLevel } from '../data/cefrVocabMaster';
+import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { VocabItem, VocabLookupResult } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
@@ -16,6 +20,9 @@ const STORAGE_KEYS = {
   PERSONAS: 'storykai_personas_v1',
   CALL_SESSIONS: 'storykai_call_sessions_v1',
   EXPRESSION_ERRORS: 'storykai_expression_errors_v1',
+  MASTERY_STATE: 'storykai_mastery_state_v1',
+  DAILY_SNAPSHOTS: 'storykai_daily_snapshots_v1',
+  MY_GOAL: 'storykai_my_goal_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -802,4 +809,315 @@ export function incrementExpressionReinforced(corePattern: string): void {
   if (changed) {
     localStorage.setItem(STORAGE_KEYS.EXPRESSION_ERRORS, JSON.stringify(updated));
   }
+}
+
+// ===================== MASTERY & TELEMETRY (スキルツリー・アナリティクス) =====================
+
+export function loadMasteryState(): UserMasteryState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.MASTERY_STATE);
+    let state: UserMasteryState;
+    if (raw) {
+      state = JSON.parse(raw);
+    } else {
+      state = {
+        patterns: {},
+        vocabs: {},
+        lastUpdatedAt: new Date().toISOString(),
+      };
+    }
+
+    // 既存の単語帳データ (vocabs) と自動同期
+    const existingVocabs = loadVocabs();
+    let changed = false;
+    existingVocabs.forEach(v => {
+      const phraseKey = v.phrase.trim().toLowerCase();
+      // Master DB に一致する単語を探す
+      const matchedMaster = CEFR_VOCAB_MASTER.find(m => m.phrase.toLowerCase() === phraseKey);
+      const targetKey = matchedMaster ? matchedMaster.id : phraseKey;
+
+      if (!state.vocabs[targetKey]) {
+        const isMastered = (v.repetitionCount ?? 0) >= 3 || (v.intervalDays ?? 0) >= 4;
+        state.vocabs[targetKey] = {
+          status: isMastered ? 'mastered' : 'lapsed',
+          firstSeenAt: v.createdAt || new Date().toISOString(),
+          lastSeenAt: v.lastReviewedAt || v.createdAt || new Date().toISOString(),
+          encounterCount: (v.repetitionCount || 1),
+          masteredAt: isMastered ? new Date().toISOString() : undefined,
+        };
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      saveMasteryState(state);
+    }
+
+    return state;
+  } catch (e) {
+    console.error('Failed to load mastery state', e);
+    return { patterns: {}, vocabs: {}, lastUpdatedAt: new Date().toISOString() };
+  }
+}
+
+export function saveMasteryState(state: UserMasteryState): void {
+  try {
+    state.lastUpdatedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEYS.MASTERY_STATE, JSON.stringify(state));
+  } catch (e) {
+    console.error('Failed to save mastery state', e);
+  }
+}
+
+export function computeLevelProgress(level: 'A1' | 'A2' | 'B1' | 'B2', state?: UserMasteryState): LevelProgressSummary {
+  const currentState = state || loadMasteryState();
+  const patternsInLevel = getPatternsByLevel(level);
+  const vocabsInLevel = getVocabMasterByLevel(level);
+
+  let patternMastered = 0;
+  let patternLapsed = 0;
+  let patternExposed = 0;
+
+  patternsInLevel.forEach(p => {
+    const prog = currentState.patterns[p.id];
+    if (prog) {
+      if (prog.status === 'mastered') patternMastered++;
+      else if (prog.status === 'lapsed') patternLapsed++;
+      else if (prog.status === 'exposed') patternExposed++;
+    }
+  });
+
+  const patternTotal = patternsInLevel.length || 1;
+  const patternUnseen = Math.max(0, patternTotal - (patternMastered + patternLapsed + patternExposed));
+  const patternPct = Math.round((patternMastered / patternTotal) * 100);
+
+  let vocabMastered = 0;
+  let vocabLapsed = 0;
+  let vocabExposed = 0;
+
+  vocabsInLevel.forEach(v => {
+    const prog = currentState.vocabs[v.id] || currentState.vocabs[v.phrase.toLowerCase()];
+    if (prog) {
+      if (prog.status === 'mastered') vocabMastered++;
+      else if (prog.status === 'lapsed') vocabLapsed++;
+      else if (prog.status === 'exposed') vocabExposed++;
+    }
+  });
+
+  const vocabTotal = vocabsInLevel.length || 1;
+  const vocabUnseen = Math.max(0, vocabTotal - (vocabMastered + vocabLapsed + vocabExposed));
+  const vocabPct = Math.round((vocabMastered / vocabTotal) * 100);
+
+  const overallPct = Math.round((patternPct * 0.5) + (vocabPct * 0.5));
+
+  return {
+    vocabTotal,
+    vocabMastered,
+    vocabLapsed,
+    vocabExposed,
+    vocabUnseen,
+    vocabPct,
+    patternTotal,
+    patternMastered,
+    patternLapsed,
+    patternExposed,
+    patternUnseen,
+    patternPct,
+    overallPct,
+  };
+}
+
+export function computeAllLevelProgress(state?: UserMasteryState): Record<'A1' | 'A2' | 'B1' | 'B2', LevelProgressSummary> {
+  const currentState = state || loadMasteryState();
+  return {
+    A1: computeLevelProgress('A1', currentState),
+    A2: computeLevelProgress('A2', currentState),
+    B1: computeLevelProgress('B1', currentState),
+    B2: computeLevelProgress('B2', currentState),
+  };
+}
+
+export function recordPatternStatus(patternId: string, status: MasteryStatus): void {
+  const state = loadMasteryState();
+  const now = new Date().toISOString();
+  const prev = state.patterns[patternId] || {
+    status: 'unseen',
+    encounterCount: 0,
+    firstSeenAt: now,
+  };
+
+  const updated: ItemProgress = {
+    ...prev,
+    status,
+    lastSeenAt: now,
+    encounterCount: prev.encounterCount + 1,
+    masteredAt: status === 'mastered' ? (prev.masteredAt || now) : prev.masteredAt,
+  };
+
+  state.patterns[patternId] = updated;
+  saveMasteryState(state);
+}
+
+export function recordVocabMasteryStatus(phraseOrId: string, status: MasteryStatus): void {
+  const state = loadMasteryState();
+  const now = new Date().toISOString();
+  const key = phraseOrId.trim().toLowerCase();
+  const prev = state.vocabs[key] || {
+    status: 'unseen',
+    encounterCount: 0,
+    firstSeenAt: now,
+  };
+
+  const updated: ItemProgress = {
+    ...prev,
+    status,
+    lastSeenAt: now,
+    encounterCount: prev.encounterCount + 1,
+    masteredAt: status === 'mastered' ? (prev.masteredAt || now) : prev.masteredAt,
+  };
+
+  state.vocabs[key] = updated;
+  saveMasteryState(state);
+}
+
+// --------------------- DAILY SNAPSHOTS (成長推移・Diff) ---------------------
+
+export function loadDailySnapshots(): DailySnapshot[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DAILY_SNAPSHOTS);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load daily snapshots', e);
+    return [];
+  }
+}
+
+export function saveDailySnapshotsBatch(snapshots: DailySnapshot[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.DAILY_SNAPSHOTS, JSON.stringify(snapshots));
+  } catch (e) {
+    console.error('Failed to save daily snapshots', e);
+  }
+}
+
+export function ensureTodaySnapshot(): DailySnapshot {
+  const today = getTodayDateString();
+  const snapshots = loadDailySnapshots();
+  const existingIdx = snapshots.findIndex(s => s.date === today);
+
+  const allLevels = computeAllLevelProgress();
+  const snapshot: DailySnapshot = {
+    date: today,
+    a1Progress: allLevels.A1,
+    a2Progress: allLevels.A2,
+    b1Progress: allLevels.B1,
+    b2Progress: allLevels.B2,
+    wordsRead: existingIdx >= 0 ? snapshots[existingIdx].wordsRead : 0,
+    averageWpm: existingIdx >= 0 ? snapshots[existingIdx].averageWpm : 0,
+    newMasteredPatternsCount: existingIdx >= 0 ? snapshots[existingIdx].newMasteredPatternsCount : 0,
+    newMasteredVocabsCount: existingIdx >= 0 ? snapshots[existingIdx].newMasteredVocabsCount : 0,
+  };
+
+  if (existingIdx >= 0) {
+    snapshots[existingIdx] = snapshot;
+  } else {
+    snapshots.push(snapshot);
+  }
+
+  // 直近60日分のみ保持
+  const trimmed = snapshots.slice(-60);
+  saveDailySnapshotsBatch(trimmed);
+  return snapshot;
+}
+
+export function recordDailyReadingActivity(wordsCount: number, wpm?: number): void {
+  const today = getTodayDateString();
+  const snapshots = loadDailySnapshots();
+  let existing = snapshots.find(s => s.date === today);
+
+  if (!existing) {
+    existing = ensureTodaySnapshot();
+  }
+
+  existing.wordsRead = (existing.wordsRead || 0) + wordsCount;
+  if (wpm && wpm > 0) {
+    existing.averageWpm = existing.averageWpm ? Math.round((existing.averageWpm + wpm) / 2) : Math.round(wpm);
+  }
+
+  const allLevels = computeAllLevelProgress();
+  existing.a1Progress = allLevels.A1;
+  existing.a2Progress = allLevels.A2;
+  existing.b1Progress = allLevels.B1;
+  existing.b2Progress = allLevels.B2;
+
+  const idx = snapshots.findIndex(s => s.date === today);
+  if (idx >= 0) {
+    snapshots[idx] = existing;
+  } else {
+    snapshots.push(existing);
+  }
+  saveDailySnapshotsBatch(snapshots);
+}
+
+// --------------------- MY GOAL (任意目標) ---------------------
+
+export function loadMyGoal(): MyGoal | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.MY_GOAL);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load my goal', e);
+    return null;
+  }
+}
+
+export function saveMyGoal(goal: MyGoal): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.MY_GOAL, JSON.stringify(goal));
+  } catch (e) {
+    console.error('Failed to save my goal', e);
+  }
+}
+
+export function clearMyGoal(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.MY_GOAL);
+  } catch (e) {
+    console.error('Failed to clear my goal', e);
+  }
+}
+
+// --------------------- TARGET SELECTION HELPERS (ストーリー生成用の未習得選定) ---------------------
+
+export function getUnmasteredTargetPatterns(level: 'A1' | 'A2' | 'B1' | 'B2', count: number = 2): PatternMasterItem[] {
+  const state = loadMasteryState();
+  const patterns = getPatternsByLevel(level);
+
+  // 1. 要復習 (lapsed) を最優先
+  const lapsed = patterns.filter(p => state.patterns[p.id]?.status === 'lapsed');
+  // 2. 未遭遇 (unseen) を次に優先
+  const unseen = patterns.filter(p => !state.patterns[p.id] || state.patterns[p.id].status === 'unseen');
+  // 3. 遭遇済み (exposed)
+  const exposed = patterns.filter(p => state.patterns[p.id]?.status === 'exposed');
+
+  const pool = [...lapsed, ...unseen, ...exposed];
+  if (pool.length === 0) return patterns.slice(0, count);
+
+  return pool.slice(0, count);
+}
+
+export function getUnmasteredTargetVocabs(level: 'A1' | 'A2' | 'B1' | 'B2', count: number = 3): VocabMasterItem[] {
+  const state = loadMasteryState();
+  const vocabs = getVocabMasterByLevel(level);
+
+  const lapsed = vocabs.filter(v => state.vocabs[v.id]?.status === 'lapsed' || state.vocabs[v.phrase.toLowerCase()]?.status === 'lapsed');
+  const unseen = vocabs.filter(v => (!state.vocabs[v.id] && !state.vocabs[v.phrase.toLowerCase()]) || state.vocabs[v.id]?.status === 'unseen');
+  const exposed = vocabs.filter(v => state.vocabs[v.id]?.status === 'exposed' || state.vocabs[v.phrase.toLowerCase()]?.status === 'exposed');
+
+  const pool = [...lapsed, ...unseen, ...exposed];
+  if (pool.length === 0) return vocabs.slice(0, count);
+
+  return pool.slice(0, count);
 }
