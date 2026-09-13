@@ -22,6 +22,7 @@ import { AppSettings, DEFAULT_SETTINGS, CefrLevel } from './types/settings';
 import {
   loadSettings,
   saveSettings,
+  loadMasteryState,
   loadStories,
   saveStory,
   deleteStory as removeStoryFromStorage,
@@ -189,7 +190,17 @@ export const App: React.FC = () => {
   }, [vocabs]);
 
   const savedVocabPhrases = useMemo(() => {
-    return new Set(vocabs.map(v => v.phrase.toLowerCase()));
+    // 単語帳に「要復習（習得中）」として登録中の単語
+    const mastery = loadMasteryState();
+    return new Set(
+      vocabs
+        .filter(v => {
+          const st = mastery.vocabs[v.phrase.toLowerCase()]?.status;
+          if (st === 'mastered') return false;
+          return (v.repetitionCount || 0) < 4;
+        })
+        .map(v => v.phrase.toLowerCase())
+    );
   }, [vocabs]);
 
   const isSavedAsVocab = useMemo(() => {

@@ -24,7 +24,7 @@ export interface ExtractedStoryVocab {
 }
 
 // 簡易英語レンマタイザー（活用形・屈折から原形への復元）
-function getCandidateLemmas(rawWord: string): string[] {
+export function getCandidateLemmas(rawWord: string): string[] {
   const word = rawWord.toLowerCase();
   const candidates: string[] = [word];
 

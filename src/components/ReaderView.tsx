@@ -6,8 +6,8 @@ import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones,
 import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
-import { recordPatternMasteryBatch, recordVocabMasteryBatch, recordDailyReadingActivity, recordVocabLapse } from '../services/storage';
-import { extractStoryVocabs, ExtractedStoryVocab } from '../utils/storyVocabExtractor';
+import { recordPatternMasteryBatch, recordVocabMasteryBatch, recordDailyReadingActivity, recordVocabLapse, loadMasteryState } from '../services/storage';
+import { extractStoryVocabs, ExtractedStoryVocab, getCandidateLemmas } from '../utils/storyVocabExtractor';
 import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
 
 interface ReaderViewProps {
@@ -68,6 +68,56 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [extractedVocabs, setExtractedVocabs] = useState<ExtractedStoryVocab[]>([]);
   const [pendingWpm, setPendingWpm] = useState<number>(150);
+
+  // 全ランクのマスター状態（習得済み・要復習）を取得
+  const masteryState = useMemo(() => {
+    return loadMasteryState();
+  }, [vocabs, currentStory.id, isFinished]);
+
+  const savedVocabSet = useMemo(() => {
+    return new Set(
+      vocabs
+        .filter(v => {
+          const st = masteryState.vocabs[v.phrase.toLowerCase()]?.status;
+          if (st === 'mastered') return false;
+          return (v.repetitionCount || 0) < 4;
+        })
+        .map(v => v.phrase.toLowerCase())
+    );
+  }, [vocabs, masteryState]);
+
+  const targetVocabSet = useMemo(() => {
+    const list = currentStory.targetVocabList || [];
+    const set = new Set<string>();
+    list.forEach(t => {
+      const clean = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+      if (clean) set.add(clean);
+    });
+    return set;
+  }, [currentStory.targetVocabList]);
+
+  // 単語ごとのステータス判定（活用形・全CEFRランク対応）
+  const getWordStatus = useCallback((cleanWord: string): 'lapsed' | 'mastered' | 'target' | 'unseen' => {
+    if (!cleanWord || cleanWord.length < 1) return 'unseen';
+    const lower = cleanWord.toLowerCase();
+    const lemmas = getCandidateLemmas(lower);
+
+    for (const lemma of lemmas) {
+      // 1. 要復習 / 単語帳に保存中（習得中）
+      if (savedVocabSet.has(lemma) || masteryState.vocabs[lemma]?.status === 'lapsed') {
+        return 'lapsed';
+      }
+      // 2. 習得済み (mastered)
+      if (masteryState.vocabs[lemma]?.status === 'mastered') {
+        return 'mastered';
+      }
+      // 3. 今回の出題ターゲット語彙
+      if (targetVocabSet.has(lemma)) {
+        return 'target';
+      }
+    }
+    return 'unseen';
+  }, [savedVocabSet, masteryState.vocabs, targetVocabSet]);
 
   // 今回の読書セッションでマークされた「訳せなかった文」の理由編集用
   const [sessionSentenceReasons, setSessionSentenceReasons] = useState<Record<string, { category: DifficultyReasonCategory; note: string }>>({});
@@ -664,6 +714,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               {currentStory.summary}
             </p>
           )}
+
+          {/* Highlight Legend */}
+          <div className="flex items-center gap-3 flex-wrap pt-1 text-[11px] text-slate-400 border-t border-slate-800/60">
+            <span className="text-slate-500 font-medium">ハイライト:</span>
+            <span className="flex items-center space-x-1 text-amber-300 font-medium">
+              <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
+              <span>習得中（要復習）</span>
+            </span>
+            <span className="flex items-center space-x-1 text-emerald-300 font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+              <span>習得済み</span>
+            </span>
+            <span className="flex items-center space-x-1 text-sky-300 font-medium">
+              <span className="w-2 h-2 rounded-full bg-sky-400 inline-block"></span>
+              <span>出題ターゲット</span>
+            </span>
+          </div>
         </div>
 
         {/* Story Body */}
@@ -681,9 +748,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     seg.wIdx >= selectionRange.startWIdx &&
                     seg.wIdx <= selectionRange.endWIdx;
 
-                  const wordStyle = isSelected
-                    ? 'bg-blue-600 text-white'
-                    : 'hover:text-sky-300 hover:underline';
+                  let wordStyle = 'text-slate-200 hover:text-sky-300 hover:underline';
+
+                  if (isSelected) {
+                    wordStyle = 'bg-blue-600 text-white';
+                  } else {
+                    const status = getWordStatus(seg.cleanWord);
+                    if (status === 'lapsed') {
+                      // 🟡 習得中 / 要復習（単語帳に登録中）
+                      wordStyle = 'text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10';
+                    } else if (status === 'mastered') {
+                      // 🟢 習得済み（マスター済み・忘れた場合はタップで再登録可能）
+                      wordStyle = 'text-emerald-300/90 underline decoration-emerald-500/50 decoration-1 underline-offset-2 hover:text-emerald-200 hover:bg-emerald-500/10';
+                    } else if (status === 'target') {
+                      // 🔵 今回の出題ターゲット語彙
+                      wordStyle = 'text-sky-300 underline decoration-sky-400/50 decoration-1 underline-offset-2 hover:text-sky-200';
+                    }
+                  }
 
                   return (
                     <span
