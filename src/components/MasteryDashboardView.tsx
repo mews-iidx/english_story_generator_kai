@@ -12,7 +12,7 @@ import {
 import { getPatternsByLevel } from '../data/cefrPatternsMaster';
 import { getVocabMasterByLevel } from '../data/cefrVocabMaster';
 import { MasteryStatus, MyGoal } from '../types/mastery';
-import { Target, Sparkles, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Award, Layers, Volume2 } from 'lucide-react';
+import { Target, Sparkles, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Award, Layers, Volume2, Search } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { addDaysToDate } from '../utils/srs';
 
@@ -30,6 +30,8 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   const [selectedLevel, setSelectedLevel] = useState<CefrTab>('B1');
   const [selectedItemType, setSelectedItemType] = useState<ItemTypeTab>('patterns');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [displayLimit, setDisplayLimit] = useState(60);
   const [expandedPatternId, setExpandedPatternId] = useState<string | null>(null);
 
   // 目標設定状態
@@ -57,26 +59,40 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
   // フィルタリング
   const filteredPatterns = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return currentPatterns.filter(p => {
       const st = masteryState.patterns[p.id]?.status || 'unseen';
-      if (statusFilter === 'all') return true;
-      if (statusFilter === 'mastered') return st === 'mastered';
-      if (statusFilter === 'lapsed') return st === 'lapsed';
-      if (statusFilter === 'unseen') return st === 'unseen' || st === 'exposed';
+      if (statusFilter === 'mastered' && st !== 'mastered') return false;
+      if (statusFilter === 'lapsed' && st !== 'lapsed') return false;
+      if (statusFilter === 'unseen' && (st !== 'unseen' && st !== 'exposed')) return false;
+
+      if (q) {
+        const matchesName = p.name.toLowerCase().includes(q);
+        const matchesMeaning = p.meaning.toLowerCase().includes(q);
+        const matchesFocus = p.focus.toLowerCase().includes(q);
+        const matchesCat = p.categoryLabel.toLowerCase().includes(q);
+        return matchesName || matchesMeaning || matchesFocus || matchesCat;
+      }
       return true;
     });
-  }, [currentPatterns, masteryState, statusFilter]);
+  }, [currentPatterns, masteryState, statusFilter, searchQuery]);
 
   const filteredVocabs = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return currentVocabs.filter(v => {
       const st = masteryState.vocabs[v.id]?.status || masteryState.vocabs[v.phrase.toLowerCase()]?.status || 'unseen';
-      if (statusFilter === 'all') return true;
-      if (statusFilter === 'mastered') return st === 'mastered';
-      if (statusFilter === 'lapsed') return st === 'lapsed';
-      if (statusFilter === 'unseen') return st === 'unseen' || st === 'exposed';
+      if (statusFilter === 'mastered' && st !== 'mastered') return false;
+      if (statusFilter === 'lapsed' && st !== 'lapsed') return false;
+      if (statusFilter === 'unseen' && (st !== 'unseen' && st !== 'exposed')) return false;
+
+      if (q) {
+        const matchesPhrase = v.phrase.toLowerCase().includes(q);
+        const matchesMeaning = v.meaning.toLowerCase().includes(q);
+        return matchesPhrase || matchesMeaning;
+      }
       return true;
     });
-  }, [currentVocabs, masteryState, statusFilter]);
+  }, [currentVocabs, masteryState, statusFilter, searchQuery]);
 
   // ステータス手動トグル
   const handleTogglePatternStatus = (patternId: string, newStatus: MasteryStatus) => {
@@ -386,29 +402,48 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             </button>
           </div>
 
-          {/* Status Filter Pills */}
-          <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 text-xs">
-            {(['all', 'mastered', 'lapsed', 'unseen'] as const).map(st => {
-              const labels: Record<StatusFilter, string> = {
-                all: 'すべて',
-                mastered: '🟢 習得済み',
-                lapsed: '🔴 要復習',
-                unseen: '⚪ 未遭遇',
-              };
-              return (
-                <button
-                  key={st}
-                  onClick={() => setStatusFilter(st)}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                    statusFilter === st
-                      ? 'bg-blue-600/30 text-sky-300 border border-blue-500/50'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                  }`}
-                >
-                  {labels[st]}
-                </button>
-              );
-            })}
+          {/* Search Bar & Status Filter Pills */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-48">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder={selectedItemType === 'patterns' ? "構文・日本語検索..." : "単語・意味検索..."}
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setDisplayLimit(60);
+                }}
+                className="w-full pl-8 pr-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 text-xs">
+              {(['all', 'mastered', 'lapsed', 'unseen'] as const).map(st => {
+                const labels: Record<StatusFilter, string> = {
+                  all: 'すべて',
+                  mastered: '🟢 習得済み',
+                  lapsed: '🔴 要復習',
+                  unseen: '⚪ 未遭遇',
+                };
+                return (
+                  <button
+                    key={st}
+                    onClick={() => {
+                      setStatusFilter(st);
+                      setDisplayLimit(60);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      statusFilter === st
+                        ? 'bg-blue-600/30 text-sky-300 border border-blue-500/50'
+                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    {labels[st]}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -420,155 +455,186 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                 該当する構文パターンはありません。
               </div>
             ) : (
-              filteredPatterns.map(p => {
-                const pState = masteryState.patterns[p.id];
-                const status = pState?.status || 'unseen';
-                const isExpanded = expandedPatternId === p.id;
+              <>
+                {filteredPatterns.slice(0, displayLimit).map(p => {
+                  const pState = masteryState.patterns[p.id];
+                  const status = pState?.status || 'unseen';
+                  const isExpanded = expandedPatternId === p.id;
 
-                return (
-                  <div
-                    key={p.id}
-                    className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-3 transition-all hover:border-slate-700"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1 flex-1">
-                        <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                            {p.categoryLabel}
-                          </span>
-                          <span className="text-base font-bold text-white tracking-tight">
-                            {p.name}
-                          </span>
+                  return (
+                    <div
+                      key={p.id}
+                      className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-3 transition-all hover:border-slate-700"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 flex-1">
+                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                              {p.categoryLabel}
+                            </span>
+                            <span className="text-base font-bold text-white tracking-tight">
+                              {p.name}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-300 font-medium">
+                            {p.meaning}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            💡 要点: {p.focus}
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-300 font-medium">
-                          {p.meaning}
-                        </div>
-                        <div className="text-[11px] text-slate-400">
-                          💡 要点: {p.focus}
+
+                        {/* Status Toggle Buttons */}
+                        <div className="flex items-center space-x-1.5 flex-shrink-0">
+                          <button
+                            onClick={() => handleTogglePatternStatus(p.id, 'lapsed')}
+                            className={`p-1.5 rounded-lg text-xs transition-colors ${
+                              status === 'lapsed'
+                                ? 'bg-rose-600 text-white shadow-md'
+                                : 'bg-slate-900 text-slate-400 hover:text-rose-300 hover:bg-slate-855'
+                            }`}
+                            title="要復習に設定"
+                          >
+                            <AlertCircle className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleTogglePatternStatus(p.id, 'mastered')}
+                            className={`p-1.5 rounded-lg text-xs transition-colors ${
+                              status === 'mastered'
+                                ? 'bg-emerald-600 text-white shadow-md'
+                                : 'bg-slate-900 text-slate-400 hover:text-emerald-300 hover:bg-slate-855'
+                            }`}
+                            title="習得済みに設定"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
 
-                      {/* Status Toggle Buttons */}
-                      <div className="flex items-center space-x-1.5 flex-shrink-0">
+                      {/* Expand 3 Contextual Variations */}
+                      <div className="pt-2 border-t border-slate-850">
                         <button
-                          onClick={() => handleTogglePatternStatus(p.id, 'lapsed')}
-                          className={`p-1.5 rounded-lg text-xs transition-colors ${
-                            status === 'lapsed'
-                              ? 'bg-rose-600 text-white shadow-md'
-                              : 'bg-slate-900 text-slate-400 hover:text-rose-300 hover:bg-slate-855'
-                          }`}
-                          title="要復習に設定"
+                          onClick={() => setExpandedPatternId(isExpanded ? null : p.id)}
+                          className="flex items-center space-x-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"
                         >
-                          <AlertCircle className="w-4 h-4" />
+                          <span>3つの文脈用例 ({p.variations.length})</span>
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
-                        <button
-                          onClick={() => handleTogglePatternStatus(p.id, 'mastered')}
-                          className={`p-1.5 rounded-lg text-xs transition-colors ${
-                            status === 'mastered'
-                              ? 'bg-emerald-600 text-white shadow-md'
-                              : 'bg-slate-900 text-slate-400 hover:text-emerald-300 hover:bg-slate-855'
-                          }`}
-                          title="習得済みに設定"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
 
-                    {/* Expand 3 Contextual Variations */}
-                    <div className="pt-2 border-t border-slate-850">
-                      <button
-                        onClick={() => setExpandedPatternId(isExpanded ? null : p.id)}
-                        className="flex items-center space-x-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"
-                      >
-                        <span>3つの文脈用例 ({p.variations.length})</span>
-                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-
-                      {isExpanded && (
-                        <div className="mt-2 space-y-2 animate-fadeIn">
-                          {p.variations.map((v, idx) => (
-                            <div key={idx} className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-xl space-y-1 text-xs">
-                              <div className="flex items-center justify-between">
-                                <span className="font-serif text-white font-medium">
-                                  {idx + 1}. {v.sentence}
-                                </span>
-                                <button
-                                  onClick={() => speakText(v.sentence)}
-                                  className="p-1 text-sky-400 hover:text-sky-300"
-                                  title="音声を再生"
-                                >
-                                  <Volume2 className="w-3.5 h-3.5" />
-                                </button>
+                        {isExpanded && (
+                          <div className="mt-2 space-y-2 animate-fadeIn">
+                            {p.variations.map((v, idx) => (
+                              <div key={idx} className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-xl space-y-1 text-xs">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-serif text-white font-medium">
+                                    {idx + 1}. {v.sentence}
+                                  </span>
+                                  <button
+                                    onClick={() => speakText(v.sentence)}
+                                    className="p-1 text-sky-400 hover:text-sky-300"
+                                    title="音声を再生"
+                                  >
+                                    <Volume2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <p className="text-[11px] text-slate-400">{v.translation}</p>
                               </div>
-                              <p className="text-[11px] text-slate-400">{v.translation}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
+                  );
+                })}
+
+                {filteredPatterns.length > displayLimit && (
+                  <div className="pt-3 text-center">
+                    <button
+                      onClick={() => setDisplayLimit(prev => prev + 60)}
+                      className="px-5 py-2 bg-slate-950 border border-slate-800 hover:border-slate-700 text-xs font-bold text-sky-400 rounded-xl transition-all shadow"
+                    >
+                      さらに表示 (+60件 / 残り {filteredPatterns.length - displayLimit}件)
+                    </button>
                   </div>
-                );
-              })
+                )}
+              </>
             )}
           </div>
         ) : (
           /* Vocab List */
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-3">
             {filteredVocabs.length === 0 ? (
-              <div className="py-8 text-center text-xs text-slate-500 col-span-2">
+              <div className="py-8 text-center text-xs text-slate-500">
                 該当する語彙はありません。
               </div>
             ) : (
-              filteredVocabs.map(v => {
-                const vState = masteryState.vocabs[v.id] || masteryState.vocabs[v.phrase.toLowerCase()];
-                const status = vState?.status || 'unseen';
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {filteredVocabs.slice(0, displayLimit).map(v => {
+                    const vState = masteryState.vocabs[v.id] || masteryState.vocabs[v.phrase.toLowerCase()];
+                    const status = vState?.status || 'unseen';
 
-                return (
-                  <div
-                    key={v.id}
-                    className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl flex items-center justify-between gap-3 transition-all hover:border-slate-700"
-                  >
-                    <div className="space-y-0.5 min-w-0">
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-bold text-sky-400 truncate">{v.phrase}</span>
-                        <button
-                          onClick={() => speakText(v.phrase)}
-                          className="text-slate-400 hover:text-sky-300"
-                        >
-                          <Volume2 className="w-3.5 h-3.5" />
-                        </button>
+                    return (
+                      <div
+                        key={v.id}
+                        className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl flex items-center justify-between gap-3 transition-all hover:border-slate-700"
+                      >
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm font-bold text-sky-400 truncate">{v.phrase}</span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-slate-400 font-normal">
+                              {v.partOfSpeech}
+                            </span>
+                            <button
+                              onClick={() => speakText(v.phrase)}
+                              className="text-slate-400 hover:text-sky-300"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="text-xs text-slate-300 truncate">{v.meaning}</div>
+                        </div>
+
+                        <div className="flex items-center space-x-1 flex-shrink-0">
+                          <button
+                            onClick={() => handleToggleVocabStatus(v.id, 'lapsed')}
+                            className={`p-1.5 rounded-lg text-xs transition-colors ${
+                              status === 'lapsed'
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-slate-900 text-slate-400 hover:text-rose-300'
+                            }`}
+                            title="要復習に設定"
+                          >
+                            <AlertCircle className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleToggleVocabStatus(v.id, 'mastered')}
+                            className={`p-1.5 rounded-lg text-xs transition-colors ${
+                              status === 'mastered'
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-900 text-slate-400 hover:text-emerald-300'
+                            }`}
+                            title="習得済みに設定"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-300 truncate">{v.meaning}</div>
-                    </div>
+                    );
+                  })}
+                </div>
 
-                    <div className="flex items-center space-x-1 flex-shrink-0">
-                      <button
-                        onClick={() => handleToggleVocabStatus(v.id, 'lapsed')}
-                        className={`p-1.5 rounded-lg text-xs transition-colors ${
-                          status === 'lapsed'
-                            ? 'bg-rose-600 text-white'
-                            : 'bg-slate-900 text-slate-400 hover:text-rose-300'
-                        }`}
-                        title="要復習に設定"
-                      >
-                        <AlertCircle className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleToggleVocabStatus(v.id, 'mastered')}
-                        className={`p-1.5 rounded-lg text-xs transition-colors ${
-                          status === 'mastered'
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-slate-900 text-slate-400 hover:text-emerald-300'
-                        }`}
-                        title="習得済みに設定"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                {filteredVocabs.length > displayLimit && (
+                  <div className="pt-3 text-center">
+                    <button
+                      onClick={() => setDisplayLimit(prev => prev + 60)}
+                      className="px-5 py-2 bg-slate-950 border border-slate-800 hover:border-slate-700 text-xs font-bold text-sky-400 rounded-xl transition-all shadow"
+                    >
+                      さらに表示 (+60件 / 残り {filteredVocabs.length - displayLimit}件)
+                    </button>
                   </div>
-                );
-              })
+                )}
+              </>
             )}
           </div>
         )}

@@ -13,7 +13,12 @@ export type PatternCategory =
   | 'comparatives'
   | 'conditionals'
   | 'inversion_emphasis'
-  | 'causative_passive';
+  | 'causative_passive'
+  | 'adjectives_adverbs'
+  | 'nouns_pronouns'
+  | 'prepositions'
+  | 'determiners'
+  | 'reported_speech';
 
 export interface PatternVariation {
   sentence: string;
