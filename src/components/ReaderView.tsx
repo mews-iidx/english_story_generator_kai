@@ -91,7 +91,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const set = new Set<string>();
     list.forEach(t => {
       const clean = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-      if (clean) set.add(clean);
+      if (clean) {
+        set.add(clean);
+        getCandidateLemmas(clean).forEach(l => set.add(l));
+      }
     });
     return set;
   }, [currentStory.targetVocabList]);
@@ -827,9 +830,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       (seg.charEnd > m.start && seg.charEnd <= m.end)
                     );
 
-                    const isTargetMatch = showTargetHighlights && para.targetMatches.some(m =>
-                      (seg.charStart >= m.start && seg.charStart < m.end) ||
-                      (seg.charEnd > m.start && seg.charEnd <= m.end)
+                    const lowerClean = seg.cleanWord.toLowerCase();
+                    const isTargetMatch = showTargetHighlights && (
+                      targetVocabSet.has(lowerClean) ||
+                      getCandidateLemmas(lowerClean).some(l => targetVocabSet.has(l)) ||
+                      para.targetMatches.some(m =>
+                        (seg.charStart >= m.start && seg.charStart < m.end) ||
+                        (seg.charEnd > m.start && seg.charEnd <= m.end)
+                      )
                     );
 
                     const status = getWordStatus(seg.cleanWord);
@@ -837,15 +845,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     if (isPattern) {
                       // 💡 出題構文（パープル系背景・波線）
                       wordStyle = 'bg-purple-950/70 text-purple-200 underline decoration-purple-400 decoration-2 underline-offset-4 font-semibold hover:bg-purple-900/90 hover:text-purple-100 rounded px-0.5';
+                    } else if (isTargetMatch) {
+                      // 🔵 出題ターゲット単語（可視化ON時は最優先でスカイブルー強調！）
+                      wordStyle = 'text-sky-300 underline decoration-sky-400/90 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/50 font-medium rounded px-0.5';
                     } else if (status === 'lapsed') {
                       // 🟡 習得中 / 要復習（単語帳に登録中）
                       wordStyle = 'text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10';
                     } else if (status === 'mastered') {
                       // 🟢 習得済み（マスター済み・忘れた場合はタップで再登録可能）
                       wordStyle = 'text-emerald-300/90 underline decoration-emerald-500/50 decoration-1 underline-offset-2 hover:text-emerald-200 hover:bg-emerald-500/10';
-                    } else if (showTargetHighlights && (status === 'target' || isTargetMatch)) {
-                      // 🔵 今回の出題ターゲット語彙（可視化ON時のみ）
-                      wordStyle = 'text-sky-300 underline decoration-sky-400/80 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/40 rounded px-0.5';
                     }
                   }
 

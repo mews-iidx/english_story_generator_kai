@@ -353,13 +353,14 @@ export const App: React.FC = () => {
     triggerAutoSync(vocabs, updatedStories);
   };
 
-  // 単語・複数単語タップ時の即時翻訳（4-tier fallback）
-  const handleWordOrPhraseTap = async (text: string, sentence: string) => {
+  // 単語・複数単語タップ時の即時翻訳（4-tier fallback & 構文バインディング）
+  const handleWordOrPhraseTap = async (text: string, sentence: string, targetEmbedding?: TargetEmbedding) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
     setSelectedText(trimmed);
     setContextSentence(sentence);
+    setActiveTargetEmbedding(targetEmbedding || null);
     setIsSheetOpen(true);
     setIsTranslating(true);
     setTranslatedText('翻訳中...');
@@ -376,6 +377,7 @@ export const App: React.FC = () => {
 
   const handleClearSelection = () => {
     setSelectedText('');
+    setActiveTargetEmbedding(null);
     setIsSheetOpen(false);
   };
 
