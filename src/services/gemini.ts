@@ -68,30 +68,37 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   let promptText = `あなたは英語学習者向けの優秀なプロの英語作家兼英語講師です。\n`;
   promptText += `${levelGuidelines[cefrLevel] || levelGuidelines.A2}\n\n`;
 
-  // 3部作・オムニバスなどのシリーズ連載指示
-  if (seriesType === 'trilogy') {
-    promptText += `【★三部作ミニ連載（3-Part Trilogy Series）: 第 ${episodeIndex || 1} 話 / 全 ${totalEpisodes || 3} 話】\n`;
-    if (episodeIndex === 1) {
-      promptText += `【第1話（前編・起）の要件】:\n`;
+  // 連続ストーリー・オムニバスなどのシリーズ連載指示
+  if (seriesType === 'continuous' || seriesType === 'trilogy') {
+    const epIdx = episodeIndex || 1;
+    const totEp = totalEpisodes || 3;
+    promptText += `【★連続連載ストーリー（Continuous Series）: 第 ${epIdx} 話 / 全 ${totEp} 話】\n`;
+    if (epIdx === 1) {
+      promptText += `【第1話（導入・起）の要件】:\n`;
       promptText += `- 物語の導入、魅力的な主人公・舞台設定、そして物語が動き出すきっかけとなる事件・謎・旅立ちを描いてください。\n`;
       promptText += `- 次の第2話が読みたくなるようなワクワクする展開やクリフハンガーで締めくくってください。\n\n`;
-    } else if (episodeIndex === 2) {
-      promptText += `【第2話（中編・承・転）の要件】:\n`;
+    } else if (epIdx < totEp) {
+      promptText += `【第${epIdx}話（展開・承/転）の要件】:\n`;
       if (previousEpisodesSummary) {
         promptText += `前話までのあらすじ:\n${previousEpisodesSummary}\n\n`;
       }
       promptText += `- 前話の続きから始まり、事態の急展開、予期せぬ試練や対立、新事実の発見などを描いてください。\n`;
-      promptText += `- 第3話のクライマックス直前の緊張感や最大の選択・ピンチで締めくくってください。\n\n`;
-    } else if (episodeIndex === 3) {
-      promptText += `【第3話（後編・結）の要件】:\n`;
+      promptText += `- 次の展開が気になる緊張感や選択・ピンチで締めくくってください。\n\n`;
+    } else {
+      promptText += `【第${epIdx}話（完結編・結）の要件】:\n`;
       if (previousEpisodesSummary) {
         promptText += `前話までのあらすじ:\n${previousEpisodesSummary}\n\n`;
       }
-      promptText += `- 前話の危機や伏線を回収し、最大のクライマックス、鮮やかな解決、そして心に残るエンディングを描いて完結させてください。\n\n`;
+      promptText += `- 前話の危機や伏線を回収し、最大のクライマックス、鮮やかな解決、そして心に残るエンディングを描いて物語を美しく完結させてください。\n\n`;
     }
   } else if (seriesType === 'omnibus') {
-    promptText += `【★3編オムニバス短編集（Omnibus Collection）: エピソード ${episodeIndex || 1} / 全 ${totalEpisodes || 3} 話】\n`;
-    promptText += `- 共通のテーマや雰囲気を持ちながら、1話完結のユニークで満足度の高い短編ストーリーにしてください。\n\n`;
+    const epIdx = episodeIndex || 1;
+    const totEp = totalEpisodes || 3;
+    promptText += `【★独立オムニバス短編集（Omnibus Collection）: エピソード ${epIdx} / 全 ${totEp} 話】\n`;
+    promptText += `- 共通の英語学習ターゲット構文・語彙を含めつつ、1話完結の独立した短編ストーリーにしてください。\n`;
+    if (previousEpisodesSummary) {
+      promptText += `（既に作成された他話のテーマ・概要:\n${previousEpisodesSummary}\n※これらとは異なる新鮮なシチュエーション・登場人物で描いてください）\n\n`;
+    }
   }
 
   // コンテンツタイプ別の指示
@@ -279,21 +286,29 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
 }
 
 /**
- * 単発・三部作連載・オムニバスのバッチ生成オーケストレーター
+ * 単発・連続連載・オムニバスの任意話数（1〜5話）バッチ生成オーケストレーター
  */
 export async function generateStorySeriesWithGemini(
   params: Omit<GenerateStoryParams, 'episodeIndex' | 'totalEpisodes' | 'seriesId' | 'previousEpisodesSummary'> & {
     seriesType?: SeriesType;
+    storyCount?: number;
+    isContinuous?: boolean;
   },
   onProgress?: (current: number, total: number, message: string) => void
 ): Promise<{ stories: Story[]; totalPromptTokens: number; totalCandidatesTokens: number }> {
-  const seriesType = params.seriesType || 'single';
+  const storyCount = Math.max(1, Math.min(5, params.storyCount ?? (params.seriesType === 'trilogy' || params.seriesType === 'omnibus' ? 3 : 1)));
+  const isContinuous = params.isContinuous !== undefined 
+    ? params.isContinuous 
+    : (params.seriesType === 'trilogy' || params.seriesType === 'continuous' || storyCount > 1);
+  const seriesType: SeriesType = storyCount <= 1 ? 'single' : (isContinuous ? 'continuous' : 'omnibus');
 
-  if (seriesType === 'single') {
+  if (storyCount === 1) {
     onProgress?.(1, 1, 'ストーリーを生成中...');
     const res = await generateStoryWithGemini({
       ...params,
       seriesType: 'single',
+      episodeIndex: 1,
+      totalEpisodes: 1,
     });
     return {
       stories: [res.story],
@@ -307,65 +322,35 @@ export async function generateStorySeriesWithGemini(
   let totalPromptTokens = 0;
   let totalCandidatesTokens = 0;
 
-  if (seriesType === 'trilogy') {
-    // 3部作（前編・中編・後編を連続生成）
-    // Episode 1 (前編)
-    onProgress?.(1, 3, '第1話（前編）を執筆中...');
-    const ep1Res = await generateStoryWithGemini({
-      ...params,
-      seriesType: 'trilogy',
-      episodeIndex: 1,
-      totalEpisodes: 3,
-      seriesId,
-    });
-    stories.push(ep1Res.story);
-    totalPromptTokens += ep1Res.tokenUsage?.promptTokens || 0;
-    totalCandidatesTokens += ep1Res.tokenUsage?.candidatesTokens || 0;
+  for (let i = 1; i <= storyCount; i++) {
+    const progressLabel = isContinuous
+      ? `第 ${i}/${storyCount} 話（連載: ${i === 1 ? '前編' : i === storyCount ? '完結編' : '中編'}）を執筆中...`
+      : `第 ${i}/${storyCount} 話（独立オムニバス）を執筆中...`;
+    
+    onProgress?.(i, storyCount, progressLabel);
 
-    // Episode 2 (中編)
-    onProgress?.(2, 3, '第2話（中編）を執筆中...');
-    const ep2Res = await generateStoryWithGemini({
-      ...params,
-      seriesType: 'trilogy',
-      episodeIndex: 2,
-      totalEpisodes: 3,
-      seriesId,
-      previousEpisodesSummary: `第1話「${ep1Res.story.titleJa || ep1Res.story.title}」: ${ep1Res.story.summary}`,
-    });
-    stories.push(ep2Res.story);
-    totalPromptTokens += ep2Res.tokenUsage?.promptTokens || 0;
-    totalCandidatesTokens += ep2Res.tokenUsage?.candidatesTokens || 0;
+    // 前話までのあらすじ/概要の集約
+    let previousSummary = '';
+    if (stories.length > 0) {
+      if (isContinuous) {
+        previousSummary = stories.map((s, idx) => `第${idx + 1}話「${s.titleJa || s.title}」: ${s.summary}`).join('\n');
+      } else {
+        previousSummary = stories.map((s, idx) => `エピソード${idx + 1}「${s.titleJa || s.title}」: ${s.summary}`).join('\n');
+      }
+    }
 
-    // Episode 3 (後編)
-    onProgress?.(3, 3, '第3話（完結編）を執筆中...');
-    const ep3Res = await generateStoryWithGemini({
+    const res = await generateStoryWithGemini({
       ...params,
-      seriesType: 'trilogy',
-      episodeIndex: 3,
-      totalEpisodes: 3,
-      seriesId,
-      previousEpisodesSummary: `第1話「${ep1Res.story.titleJa}」: ${ep1Res.story.summary}\n第2話「${ep2Res.story.titleJa}」: ${ep2Res.story.summary}`,
-    });
-    stories.push(ep3Res.story);
-    totalPromptTokens += ep3Res.tokenUsage?.promptTokens || 0;
-    totalCandidatesTokens += ep3Res.tokenUsage?.candidatesTokens || 0;
-
-    return { stories, totalPromptTokens, totalCandidatesTokens };
-  }
-
-  // Omnibus (3編オムニバス)
-  for (let i = 1; i <= 3; i++) {
-    onProgress?.(i, 3, `オムニバス第 ${i} 話を執筆中...`);
-    const epRes = await generateStoryWithGemini({
-      ...params,
-      seriesType: 'omnibus',
+      seriesType,
       episodeIndex: i,
-      totalEpisodes: 3,
+      totalEpisodes: storyCount,
       seriesId,
+      previousEpisodesSummary: previousSummary,
     });
-    stories.push(epRes.story);
-    totalPromptTokens += epRes.tokenUsage?.promptTokens || 0;
-    totalCandidatesTokens += epRes.tokenUsage?.candidatesTokens || 0;
+
+    stories.push(res.story);
+    totalPromptTokens += res.tokenUsage?.promptTokens || 0;
+    totalCandidatesTokens += res.tokenUsage?.candidatesTokens || 0;
   }
 
   return { stories, totalPromptTokens, totalCandidatesTokens };

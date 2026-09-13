@@ -12,7 +12,7 @@ import { CallView } from './components/CallView';
 import { TranslationBottomSheet } from './components/TranslationBottomSheet';
 import { ImportStoryModal } from './components/ImportStoryModal';
 
-import { Story, ContentType, SeriesType, TargetEmbedding } from './types/story';
+import { Story, ContentType, TargetEmbedding } from './types/story';
 import { VocabItem } from './types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from './types/sentence';
 import { ChatMessage, ChatSuggestedVocab } from './types/chat';
@@ -242,7 +242,8 @@ export const App: React.FC = () => {
     userPrompt?: string,
     wordCount = 700,
     contentType: ContentType = 'podcast',
-    seriesType: SeriesType = 'single'
+    storyCount = 1,
+    isContinuous = true
   ) => {
     if (!settings.geminiApiKey) {
       alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
@@ -252,7 +253,7 @@ export const App: React.FC = () => {
 
     setIsGenerating(true);
     setGeneratingTheme(userPrompt || '');
-    setGeneratingProgress({ current: 1, total: seriesType === 'single' ? 1 : 3, message: '執筆準備中...' });
+    setGeneratingProgress({ current: 1, total: storyCount, message: '執筆準備中...' });
     setActiveTab('bookshelf');
 
     try {
@@ -277,7 +278,8 @@ export const App: React.FC = () => {
           model: settings.geminiModel,
           cefrLevel: settings.cefrLevel,
           contentType,
-          seriesType,
+          storyCount,
+          isContinuous,
           userPrompt,
           targetVocabs: selectedDueVocabs,
           targetPatterns,
@@ -308,10 +310,12 @@ export const App: React.FC = () => {
       const updatedStories = loadStories();
       setStories(updatedStories);
 
-      if (seriesType === 'trilogy') {
-        setNotificationToast(`🎉 3部作ミニ連載『${res.stories[0]?.titleJa || res.stories[0]?.title}』（全3話）が本棚に追加されました！`);
-      } else if (seriesType === 'omnibus') {
-        setNotificationToast(`🎉 3編オムニバスが本棚に追加されました！`);
+      if (storyCount > 1) {
+        if (isContinuous) {
+          setNotificationToast(`🎉 連続ストーリー『${res.stories[0]?.titleJa || res.stories[0]?.title}』（全${storyCount}話）が本棚に追加されました！`);
+        } else {
+          setNotificationToast(`🎉 ${storyCount}編の独立ストーリーが本棚に追加されました！`);
+        }
       } else {
         const first = res.stories[0];
         setNotificationToast(`🎉 新しいエピソード『${first?.titleJa || first?.title}』が本棚に追加されました！`);

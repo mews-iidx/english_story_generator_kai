@@ -293,6 +293,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           💬 Dialogue
                         </span>
                       )}
+                      {story.episodeIndex && story.totalEpisodes && story.totalEpisodes > 1 && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/30 text-blue-200 font-bold backdrop-blur-md border border-blue-400/30">
+                          {story.seriesType === 'continuous' || story.seriesType === 'trilogy' ? `連載 ${story.episodeIndex}/${story.totalEpisodes}` : `話 ${story.episodeIndex}/${story.totalEpisodes}`}
+                        </span>
+                      )}
                       {story.isRead && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 font-bold border border-emerald-400/40 backdrop-blur-md">
                           ✓ 読了済

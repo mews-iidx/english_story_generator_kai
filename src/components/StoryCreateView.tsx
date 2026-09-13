@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
-import { ContentType, SeriesType } from '../types/story';
-import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, Clock, Mic, MessageSquare, BookMarked, Film, Library } from 'lucide-react';
+import { ContentType } from '../types/story';
+import { Sparkles, RefreshCw, Minus, Plus, Layers, Clock, Mic, MessageSquare, BookOpen, Link, FileText, Compass } from 'lucide-react';
 import { getUnmasteredTargetPatterns, getUnmasteredTargetVocabs } from '../services/storage';
 
 interface StoryCreateViewProps {
@@ -10,7 +10,7 @@ interface StoryCreateViewProps {
   isGenerating: boolean;
   generatingTheme?: string;
   generatingProgress?: { current: number; total: number; message: string };
-  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType, seriesType?: SeriesType) => void;
+  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType, storyCount?: number, isContinuous?: boolean) => void;
   onOpenImportModal: () => void;
   onNavigateToBookshelf: () => void;
 }
@@ -26,7 +26,8 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
   onNavigateToBookshelf,
 }) => {
   const [contentType, setContentType] = useState<ContentType>('podcast');
-  const [seriesType, setSeriesType] = useState<SeriesType>('single');
+  const [storyCount, setStoryCount] = useState<number>(1);
+  const [isContinuous, setIsContinuous] = useState<boolean>(true);
   const [promptInput, setPromptInput] = useState('');
   const [wordCount, setWordCount] = useState<number>(700);
 
@@ -39,10 +40,23 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
     setWordCount(prev => Math.max(100, Math.min(2500, (prev || 700) + delta)));
   };
 
+  const changeStoryCount = (delta: number) => {
+    setStoryCount(prev => Math.max(1, Math.min(5, (prev || 1) + delta)));
+  };
+
   const handleStartGeneration = () => {
     if (isGenerating) return;
-    onGenerateStory(promptInput, wordCount, contentType, seriesType);
+    onGenerateStory(promptInput, wordCount, contentType, storyCount, isContinuous);
   };
+
+  const quickTopics = [
+    { label: '☕ 日常・カフェ', text: 'カフェでの朝のひとときと日常のささやかな発見' },
+    { label: '✈️ 旅行・空港', text: '初めての海外旅行でのハプニングと温かい出会い' },
+    { label: '💼 仕事・キャリア', text: '新しいプロジェクトへの挑戦とチームとの対話' },
+    { label: '🤖 テクノロジー', text: 'AIと未来のライフスタイルについての考察' },
+    { label: '🍳 料理・食事', text: '祖母直伝の秘伝レシピと家族の思い出' },
+    { label: '🌲 自然・冒険', text: '週末の森のハイキングと静寂の中の気付き' },
+  ];
 
   const levelDescriptions: Record<CefrLevel, { name: string; desc: string }> = {
     A1: { name: '超初級 (A1)', desc: '中学1〜2年レベル。基本単語と短い文で読みやすい' },
@@ -52,47 +66,24 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
     C1: { name: '上級 (C1)', desc: '高度で洗練された語彙と多彩な表現' },
   };
 
-  const seriesOptions: { id: SeriesType; label: string; icon: React.ComponentType<{ className?: string }>; desc: string; badge?: string }[] = [
-    {
-      id: 'single',
-      label: '📖 単発ストーリー',
-      icon: BookMarked,
-      desc: '1話完結のポッドキャスト・短編ストーリー',
-    },
-    {
-      id: 'trilogy',
-      label: '🎬 3部作 ミニ連載',
-      icon: Film,
-      desc: '前編・中編・後編が連続する没入型ミニシリーズ（3話一括生成）',
-      badge: '人気・多読推進',
-    },
-    {
-      id: 'omnibus',
-      label: '📚 3編オムニバス',
-      icon: Library,
-      desc: '同じターゲット構文を異なるシチュエーションで味わう3短編（3話一括生成）',
-    },
-  ];
-
-  const contentTypes: { id: ContentType; label: string; icon: React.ComponentType<{ className?: string }>; desc: string; badge?: string }[] = [
+  const contentTypes: { id: ContentType; label: string; icon: React.ComponentType<{ className?: string }>; desc: string }[] = [
     {
       id: 'podcast',
       label: '🎙️ ポッドキャスト風エッセイ',
       icon: Mic,
-      desc: '『Listening Time』風の親しみやすい1人語り。日常の思考や経験を自然な語り口で',
-      badge: '推奨・リスニング特化',
+      desc: '『Listening Time』風の親しみやすい1人語りエッセイ',
     },
     {
       id: 'story',
       label: '📖 ショートストーリー',
-      icon: BookMarked,
-      desc: '日常、冒険、発見、ミステリーなどの満足感ある短編小説',
+      icon: BookOpen,
+      desc: '情景が浮かび上がる起承転結のある短編小説',
     },
     {
       id: 'dialogue',
-      label: '💬 日常会話（Dialogue）',
+      label: '💬 日常会話劇 (Dialogue)',
       icon: MessageSquare,
-      desc: '2人の登場人物によるテンポの良い日常会話・リアルな掛け合い',
+      desc: '2人の登場人物によるテンポの良いリアルな対話',
     },
   ];
 
@@ -110,7 +101,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
                 物語・スクリプト作成スタジオ ✨
               </h2>
               <p className="text-xs sm:text-sm text-slate-400">
-                あなたのCEFR未習得構文・重要語彙を自然に組み込んだストーリーを生成します
+                CEFR未習得構文・重要語彙をAIが自動選定し、あなたのレベルに合わせたストーリーを執筆します
               </p>
             </div>
           </div>
@@ -119,126 +110,177 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             onClick={onOpenImportModal}
             className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-950 hover:bg-slate-800 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-semibold transition-colors"
           >
-            <FileJson className="w-4 h-4" />
-            <span>外部AIのJSONをインポート</span>
+            <FileText className="w-4 h-4" />
+            <span>テキスト直接インポート</span>
           </button>
         </div>
       </div>
 
-      {/* Background Generating Banner (裏で生成中の場合) */}
+      {/* Generation Status Indicator (if currently running) */}
       {isGenerating && (
-        <div className="bg-gradient-to-r from-blue-950/80 to-indigo-950/80 border border-blue-500/40 rounded-3xl p-5 shadow-2xl space-y-3 animate-fadeIn">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 rounded-xl bg-blue-600/30 border border-blue-500/40 flex items-center justify-center">
-                <RefreshCw className="w-4 h-4 text-sky-400 animate-spin" />
+        <div className="p-4 bg-blue-950/60 border border-blue-500/40 rounded-3xl flex items-center justify-between gap-4 animate-pulse">
+          <div className="flex items-center space-x-3">
+            <RefreshCw className="w-5 h-5 text-blue-400 animate-spin" />
+            <div>
+              <div className="text-sm font-bold text-white">
+                バックグラウンドでストーリーを執筆中...
+                {generatingProgress && ` [${generatingProgress.current}/${generatingProgress.total} 話]`}
               </div>
-              <div>
-                <h3 className="text-sm sm:text-base font-bold text-white">
-                  {generatingProgress ? generatingProgress.message : 'AIがバックグラウンドで執筆中...'}
-                </h3>
-                <p className="text-xs text-slate-300">
-                  {generatingProgress ? `進行状況: [${generatingProgress.current}/${generatingProgress.total}] ` : ''}
-                  {generatingTheme ? `テーマ: 「${generatingTheme}」` : 'テーマ: おまかせ・弱点構文注入'}（完成すると自動で本棚に追加されます）
-                </p>
+              <div className="text-xs text-blue-300">
+                {generatingTheme ? `テーマ: 「${generatingTheme}」 | ` : ''}{generatingProgress?.message || 'AIが構成・英文・翻訳・重要語彙を精査しています'}
               </div>
             </div>
-
-            <button
-              onClick={onNavigateToBookshelf}
-              className="flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/30 transition-all"
-            >
-              <BookOpen className="w-4 h-4" />
-              <span>本棚で他の本を読む</span>
-            </button>
           </div>
+
+          <button
+            onClick={onNavigateToBookshelf}
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-colors whitespace-nowrap"
+          >
+            本棚を見る
+          </button>
         </div>
       )}
 
-      {/* 2. Main Config Card */}
+      {/* Main Studio Settings Panel */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-6">
-        {/* Step 1: Series Type (Single / Trilogy / Omnibus) */}
+        
+        {/* Step 1: Content Format */}
         <div className="space-y-3">
           <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
-            <Film className="w-4 h-4 text-blue-400" />
-            <span>1. 連載・作品タイプを選択:</span>
+            <Mic className="w-4 h-4 text-blue-400" />
+            <span>1. フォーマット形式を選択:</span>
           </label>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {seriesOptions.map((opt) => {
-              const isSelected = seriesType === opt.id;
+            {contentTypes.map((opt) => {
+              const isSelected = contentType === opt.id;
               const Icon = opt.icon;
               return (
                 <button
                   key={opt.id}
                   type="button"
-                  onClick={() => setSeriesType(opt.id)}
-                  className={`p-4 rounded-2xl border text-left transition-all space-y-2 flex flex-col justify-between ${
+                  onClick={() => setContentType(opt.id)}
+                  className={`p-4 rounded-2xl border text-left transition-all relative flex flex-col justify-between ${
                     isSelected
-                      ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-500/10 ring-2 ring-blue-500/40'
-                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                      ? 'bg-blue-600/15 border-blue-500 text-white shadow-lg shadow-blue-500/10 ring-1 ring-blue-500'
+                      : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700 hover:bg-slate-900/80'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2 font-bold text-sm text-white">
-                      <Icon className="w-4 h-4 text-blue-400" />
-                      <span>{opt.label}</span>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center space-x-2">
+                      <Icon className={`w-4 h-4 ${isSelected ? 'text-blue-400' : 'text-slate-400'}`} />
+                      <span className="font-bold text-sm sm:text-base">{opt.label}</span>
                     </div>
-                    {opt.badge && (
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                        {opt.badge}
-                      </span>
-                    )}
+                    <p className={`text-xs leading-relaxed ${isSelected ? 'text-slate-300' : 'text-slate-400'}`}>
+                      {opt.desc}
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {opt.desc}
-                  </p>
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* Step 2: Content Format */}
-        <div className="space-y-3 pt-2 border-t border-slate-800/80">
-          <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
-            <Mic className="w-4 h-4 text-blue-400" />
-            <span>2. コンテンツ形式を選択:</span>
-          </label>
+        {/* Step 2: Story Count & Continuity */}
+        <div className="space-y-4 pt-2 border-t border-slate-800/80">
+          <div className="flex items-center justify-between">
+            <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
+              <Compass className="w-4 h-4 text-blue-400" />
+              <span>2. 連続生成数（話数）と連続性:</span>
+            </label>
+            <span className="text-xs font-bold text-blue-400">
+              {storyCount === 1 ? '単発 1話' : `${storyCount}話 ${isContinuous ? '連載' : 'オムニバス'}`}
+            </span>
+          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {contentTypes.map((type) => {
-              const isSelected = contentType === type.id;
-              const Icon = type.icon;
-              return (
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            {/* Story count spinner */}
+            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-2xl p-1">
+              <button
+                type="button"
+                onClick={() => changeStoryCount(-1)}
+                disabled={storyCount <= 1}
+                className="px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-xl transition-colors font-bold text-sm"
+                title="1話減らす"
+              >
+                <Minus className="w-4 h-4" />
+              </button>
+              <div className="w-16 text-center text-base sm:text-lg font-bold text-blue-400 select-none">
+                {storyCount} 話
+              </div>
+              <button
+                type="button"
+                onClick={() => changeStoryCount(1)}
+                disabled={storyCount >= 5}
+                className="px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-xl transition-colors font-bold text-sm"
+                title="1話増やす"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Count Preset Chips */}
+            <div className="flex items-center space-x-1.5 text-xs">
+              {[1, 2, 3, 5].map((count) => (
                 <button
-                  key={type.id}
+                  key={count}
                   type="button"
-                  onClick={() => setContentType(type.id)}
-                  className={`p-4 rounded-2xl border text-left transition-all space-y-2 flex flex-col justify-between ${
-                    isSelected
-                      ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-500/10 ring-2 ring-blue-500/40'
-                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  onClick={() => setStoryCount(count)}
+                  className={`px-3 py-2 rounded-xl font-semibold transition-colors ${
+                    storyCount === count
+                      ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2 font-bold text-sm text-white">
-                      <Icon className="w-4 h-4 text-blue-400" />
-                      <span>{type.label}</span>
-                    </div>
-                    {type.badge && (
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                        {type.badge}
-                      </span>
-                    )}
+                  {count === 1 ? '1話（単発）' : `${count}話`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Continuity Toggle (shown when storyCount > 1) */}
+          {storyCount > 1 && (
+            <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2 animate-fadeIn">
+              <div className="text-xs font-bold text-slate-300">ストーリーの連続性:</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsContinuous(true)}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    isContinuous
+                      ? 'bg-blue-600/20 border-blue-500 text-white ring-1 ring-blue-500'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2 font-bold text-xs sm:text-sm">
+                    <Link className="w-3.5 h-3.5 text-blue-400" />
+                    <span>🔗 連続ストーリー（連載）</span>
                   </div>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {type.desc}
+                  <p className="text-[11px] text-slate-400 mt-1 leading-tight">
+                    前話のあらすじを引き継ぐ連続ストーリー（前編・中編・完結編など）
                   </p>
                 </button>
-              );
-            })}
-          </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsContinuous(false)}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    !isContinuous
+                      ? 'bg-blue-600/20 border-blue-500 text-white ring-1 ring-blue-500'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2 font-bold text-xs sm:text-sm">
+                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>📄 独立ストーリー（オムニバス）</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-tight">
+                    同じ学習ターゲット構文を異なるシチュエーションで味わう短編集
+                  </p>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Step 3: CEFR Level */}
@@ -333,7 +375,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 5: Theme / Prompt & Target Vocabs */}
+        {/* Step 5: Theme / Prompt & Target Preview */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white block">
             5. テーマ・シチュエーション（任意）:
@@ -352,19 +394,34 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-2xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all"
           />
 
-          {/* Target Binding Card */}
-          <div className="p-4 bg-slate-950/70 border border-blue-500/20 rounded-2xl space-y-2 text-xs">
+          {/* Quick topic chips */}
+          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+            <span className="text-[11px] text-slate-500 font-medium mr-1">クイック指定:</span>
+            {quickTopics.map((topic, tIdx) => (
+              <button
+                key={tIdx}
+                type="button"
+                onClick={() => setPromptInput(topic.text)}
+                className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 rounded-lg text-xs transition-colors"
+              >
+                {topic.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Target Binding Preview */}
+          <div className="p-3.5 bg-slate-950/70 border border-blue-500/20 rounded-2xl space-y-1.5 text-xs">
             <div className="flex items-center justify-between text-slate-300">
               <div className="flex items-center space-x-2">
-                <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                <span className="font-bold text-slate-200">AIターゲット自動バインディング（無駄のない弱点克服）</span>
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                <span className="font-bold text-slate-200">AIターゲット自動バインディング</span>
               </div>
-              <span className="text-[10px] uppercase tracking-wider font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md flex-shrink-0">
-                マスターDB連動
+              <span className="text-[10px] uppercase font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md flex-shrink-0">
+                マスターDB連動 ({currentLevel})
               </span>
             </div>
-            <p className="text-slate-400 leading-relaxed">
-              選択中レベル（{currentLevel}）の未習得構文（{targetPatterns.map(p => p.name).slice(0, 2).join(', ')}...）と重要語彙（{targetVocabs.map(v => v.phrase).slice(0, 3).join(', ')}...）をAIが自動選定し、物語の文脈に溶け込ませて出題します。
+            <p className="text-slate-400 leading-relaxed text-[11px]">
+              未習得構文（{targetPatterns.map(p => p.name).slice(0, 2).join(', ')}...）と重要語彙（{targetVocabs.map(v => v.phrase).slice(0, 3).join(', ')}...）を文脈に自然に溶け込ませて出題します。
             </p>
           </div>
         </div>
@@ -372,9 +429,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
         {/* Action Button: Start generation in background */}
         <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-slate-400">
-            {seriesType === 'single'
-              ? '※生成開始後、すぐに本棚に戻って読書を続けても裏で自動追加されます'
-              : '※3話連続でバックグラウンド生成されます。完成順に本棚に追加されます'}
+            ※生成開始後、すぐに本棚に戻って読書を続けられます（バックグラウンド生成）
           </p>
 
           <button
@@ -391,11 +446,11 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
               <>
                 <Sparkles className="w-4 h-4" />
                 <span>
-                  {seriesType === 'single'
+                  {storyCount === 1
                     ? 'スクリプトを生成する'
-                    : seriesType === 'trilogy'
-                    ? '3部作ミニ連載を一括生成する'
-                    : '3編オムニバスを一括生成する'}
+                    : isContinuous
+                    ? `${storyCount}話の連続ストーリーを一括生成する`
+                    : `${storyCount}編の独立ストーリーを一括生成する`}
                 </span>
               </>
             )}

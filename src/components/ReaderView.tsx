@@ -627,17 +627,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     seg.wIdx >= selectionRange.startWIdx &&
                     seg.wIdx <= selectionRange.endWIdx;
 
-                  let wordStyle = 'hover:text-sky-300 hover:underline';
-                  if (isSelected) {
-                    wordStyle = 'bg-blue-600 text-white font-bold rounded px-1 shadow-sm';
-                  }
+                  const wordStyle = isSelected
+                    ? 'bg-blue-600 text-white'
+                    : 'hover:text-sky-300 hover:underline';
 
                   return (
                     <span
                       key={sIdx}
                       data-word="true"
                       onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
-                      className={`inline cursor-pointer transition-all ${wordStyle}`}
+                      className={`inline cursor-pointer px-0 py-0 transition-colors ${wordStyle}`}
                     >
                       {seg.text}
                     </span>
@@ -755,7 +754,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <div>
                 <div className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
                   <Film className="w-3.5 h-3.5 text-amber-400" />
-                  <span>3部作ミニ連載: 次の第 {nextEpisode.episodeIndex} 話へ</span>
+                  <span>{currentStory.seriesType === 'continuous' || currentStory.seriesType === 'trilogy' ? `連載ストーリー: 次の第 ${nextEpisode.episodeIndex} 話へ` : `次の第 ${nextEpisode.episodeIndex} 話へ`}</span>
                 </div>
                 <div className="text-sm font-bold text-white pt-0.5">
                   『{nextEpisode.titleJa || nextEpisode.title}』

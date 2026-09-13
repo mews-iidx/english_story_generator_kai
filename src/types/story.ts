@@ -2,7 +2,7 @@ import { VocabLookupResult } from './vocab';
 import { CefrLevel } from './settings';
 
 export type ContentType = 'story' | 'podcast' | 'dialogue';
-export type SeriesType = 'single' | 'trilogy' | 'omnibus';
+export type SeriesType = 'single' | 'continuous' | 'omnibus' | 'trilogy';
 
 export interface TargetEmbedding {
   targetId: string; // pattern ID (e.g. pat_b1_001) or vocab ID
@@ -24,10 +24,11 @@ export interface Story {
   targetVocabList: string[];
   vocabList?: VocabLookupResult[];
   targetEmbeddings?: TargetEmbedding[];
-  seriesId?: string; // 3部作連載のグループID
-  episodeIndex?: number; // 1, 2, 3
-  totalEpisodes?: number; // 3
+  seriesId?: string; // 連載・オムニバスのグループID
+  episodeIndex?: number; // 1, 2, 3, 4, 5...
+  totalEpisodes?: number; // 1, 2, 3, 4, 5...
   seriesType?: SeriesType;
+  isContinuous?: boolean;
   userPrompt?: string;
   cefrLevel: CefrLevel;
   contentType?: ContentType; // story: ショートストーリー, podcast: 1人語りエッセイ, dialogue: 会話劇
