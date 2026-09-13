@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Story, TargetEmbedding } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, ChevronLeft, ChevronRight, BookmarkPlus, Film } from 'lucide-react';
+import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, EyeOff, ChevronLeft, ChevronRight, BookmarkPlus, Film } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
@@ -124,6 +124,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   // 今回のセッションで「要復習」とマークされたターゲットID
   const lapsedTargetIdsRef = useRef<Set<string>>(new Set());
+
+  // 出題ターゲット（構文・出題単語）の可視化切り替え（デフォルトOFF）
+  const [showTargetHighlights, setShowTargetHighlights] = useState<boolean>(() => {
+    return localStorage.getItem('reader_show_targets') === 'true';
+  });
 
   const [selectionRange, setSelectionRange] = useState<{
     pIdx: number;
@@ -344,12 +349,27 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         }
       });
 
+      // ターゲット構文パターンのマッチング
+      const patternMatches: { start: number; end: number; embedding: TargetEmbedding }[] = [];
+      const targetEmbeddings = currentStory.targetEmbeddings || [];
+      targetEmbeddings.forEach(emb => {
+        const span = (emb.textSpan || '').trim().toLowerCase();
+        if (span && span.length > 2) {
+          let pos = 0;
+          while ((pos = lowerPara.indexOf(span, pos)) !== -1) {
+            patternMatches.push({ start: pos, end: pos + span.length, embedding: emb });
+            pos += span.length;
+          }
+        }
+      });
+
       return {
         pIdx,
         fullParaText: para,
         segments,
         targetMatches,
         savedMatches,
+        patternMatches,
       };
     });
   }, [paragraphs, currentStory, vocabs]);
@@ -422,13 +442,26 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const phrase = selectedTokens.join('').replace(/\s+/g, ' ').trim();
     if (phrase) {
       // ターゲット構文・単語の判定
-      const matchingEmbedding = currentStory.targetEmbeddings?.find(emb => {
-        const tText = (emb.textSpan || emb.targetName || '').toLowerCase();
+      // 選択位置と重なる patternMatches を優先
+      const startSeg = para.segments.find(s => s.wIdx === range.startWIdx && s.isWord);
+      const endSeg = para.segments.find(s => s.wIdx === range.endWIdx && s.isWord);
+      
+      let matchingEmbedding: TargetEmbedding | undefined = undefined;
+      if (startSeg && endSeg) {
+        const found = para.patternMatches.find(m => startSeg.charStart < m.end && endSeg.charEnd > m.start);
+        if (found) {
+          matchingEmbedding = found.embedding;
+        }
+      }
+
+      if (!matchingEmbedding) {
         const pText = phrase.toLowerCase();
-        if (tText && (pText.includes(tText) || tText.includes(pText))) return true;
-        if (emb.textSpan && fullParaText.toLowerCase().includes(emb.textSpan.toLowerCase())) return true;
-        return false;
-      });
+        matchingEmbedding = currentStory.targetEmbeddings?.find(emb => {
+          const tText = (emb.textSpan || emb.targetName || '').toLowerCase().trim();
+          if (tText && (pText === tText || (pText.length > 3 && tText.includes(pText)))) return true;
+          return false;
+        });
+      }
 
       onWordOrPhraseTap(phrase, fullParaText, matchingEmbedding);
     }
@@ -715,21 +748,57 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </p>
           )}
 
-          {/* Highlight Legend */}
-          <div className="flex items-center gap-3 flex-wrap pt-1 text-[11px] text-slate-400 border-t border-slate-800/60">
-            <span className="text-slate-500 font-medium">ハイライト:</span>
-            <span className="flex items-center space-x-1 text-amber-300 font-medium">
-              <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
-              <span>習得中（要復習）</span>
-            </span>
-            <span className="flex items-center space-x-1 text-emerald-300 font-medium">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
-              <span>習得済み</span>
-            </span>
-            <span className="flex items-center space-x-1 text-sky-300 font-medium">
-              <span className="w-2 h-2 rounded-full bg-sky-400 inline-block"></span>
-              <span>出題ターゲット</span>
-            </span>
+          {/* Highlight Legend & Target Visibility Toggle */}
+          <div className="flex items-center justify-between flex-wrap gap-2 pt-1 text-[11px] text-slate-400 border-t border-slate-800/60">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-slate-500 font-medium">ハイライト:</span>
+              <span className="flex items-center space-x-1 text-amber-300 font-medium">
+                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
+                <span>習得中</span>
+              </span>
+              <span className="flex items-center space-x-1 text-emerald-300 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+                <span>習得済み</span>
+              </span>
+              {showTargetHighlights && (
+                <>
+                  <span className="flex items-center space-x-1 text-purple-300 font-medium animate-fadeIn">
+                    <span className="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>
+                    <span>💡 出題構文</span>
+                  </span>
+                  <span className="flex items-center space-x-1 text-sky-300 font-medium animate-fadeIn">
+                    <span className="w-2 h-2 rounded-full bg-sky-400 inline-block"></span>
+                    <span>🔵 出題単語</span>
+                  </span>
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={() => {
+                const next = !showTargetHighlights;
+                setShowTargetHighlights(next);
+                localStorage.setItem('reader_show_targets', String(next));
+              }}
+              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                showTargetHighlights
+                  ? 'bg-purple-950/80 text-purple-300 border-purple-500/50 shadow-sm'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+              }`}
+              title="出題された重要構文・単語のハイライト表示を切り替えます"
+            >
+              {showTargetHighlights ? (
+                <>
+                  <Eye className="w-3.5 h-3.5 text-purple-400" />
+                  <span>ターゲット可視化: ON</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+                  <span>ターゲット可視化: OFF</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
 
@@ -753,16 +822,30 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   if (isSelected) {
                     wordStyle = 'bg-blue-600 text-white';
                   } else {
+                    const isPattern = showTargetHighlights && para.patternMatches.some(m =>
+                      (seg.charStart >= m.start && seg.charStart < m.end) ||
+                      (seg.charEnd > m.start && seg.charEnd <= m.end)
+                    );
+
+                    const isTargetMatch = showTargetHighlights && para.targetMatches.some(m =>
+                      (seg.charStart >= m.start && seg.charStart < m.end) ||
+                      (seg.charEnd > m.start && seg.charEnd <= m.end)
+                    );
+
                     const status = getWordStatus(seg.cleanWord);
-                    if (status === 'lapsed') {
+
+                    if (isPattern) {
+                      // 💡 出題構文（パープル系背景・波線）
+                      wordStyle = 'bg-purple-950/70 text-purple-200 underline decoration-purple-400 decoration-2 underline-offset-4 font-semibold hover:bg-purple-900/90 hover:text-purple-100 rounded px-0.5';
+                    } else if (status === 'lapsed') {
                       // 🟡 習得中 / 要復習（単語帳に登録中）
                       wordStyle = 'text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10';
                     } else if (status === 'mastered') {
                       // 🟢 習得済み（マスター済み・忘れた場合はタップで再登録可能）
                       wordStyle = 'text-emerald-300/90 underline decoration-emerald-500/50 decoration-1 underline-offset-2 hover:text-emerald-200 hover:bg-emerald-500/10';
-                    } else if (status === 'target') {
-                      // 🔵 今回の出題ターゲット語彙
-                      wordStyle = 'text-sky-300 underline decoration-sky-400/50 decoration-1 underline-offset-2 hover:text-sky-200';
+                    } else if (showTargetHighlights && (status === 'target' || isTargetMatch)) {
+                      // 🔵 今回の出題ターゲット語彙（可視化ON時のみ）
+                      wordStyle = 'text-sky-300 underline decoration-sky-400/80 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/40 rounded px-0.5';
                     }
                   }
 
