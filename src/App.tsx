@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Header, NavTab } from './components/Header';
 import { HistoryView } from './components/HistoryView';
 import { StoryCreateView } from './components/StoryCreateView';
+import { MasteryDashboardView } from './components/MasteryDashboardView';
 import { ReaderView } from './components/ReaderView';
 import { QuizView } from './components/QuizView';
 import { VocabBankView } from './components/VocabBankView';
@@ -819,6 +820,13 @@ export const App: React.FC = () => {
                 onGenerateStory={handleGenerateStoryInBackground}
                 onOpenImportModal={() => setIsImportModalOpen(true)}
                 onNavigateToBookshelf={() => setActiveTab('bookshelf')}
+              />
+            )}
+
+                        {/* Mastery Cockpit Tab */}
+            {activeTab === 'mastery' && (
+              <MasteryDashboardView
+                onNavigateToCreate={() => setActiveTab('create')}
               />
             )}
 

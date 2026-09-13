@@ -1,7 +1,7 @@
 import React from 'react';
-import { BookOpen, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot, Phone } from 'lucide-react';
+import { BookOpen, BookMarked, Settings, RefreshCw, Zap, PlusCircle, Download, Bot, Phone, Target } from 'lucide-react';
 
-export type NavTab = 'bookshelf' | 'create' | 'call' | 'chat' | 'quiz' | 'vocab' | 'settings';
+export type NavTab = 'bookshelf' | 'create' | 'mastery' | 'call' | 'chat' | 'quiz' | 'vocab' | 'settings';
 
 interface HeaderProps {
   activeTab: NavTab;
@@ -38,6 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   const tabs: TabItem[] = [
     { id: 'bookshelf', label: '本棚', icon: BookOpen },
     { id: 'create', label: '作成', icon: PlusCircle },
+    { id: 'mastery', label: '習得度', icon: Target },
     { id: 'call', label: '英会話', icon: Phone },
     { id: 'chat', label: 'AI相談', icon: Bot },
     { id: 'quiz', label: 'Anki', icon: Zap, badge: dueCount > 0 ? dueCount : undefined },
@@ -135,7 +136,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </header>
 
-      {/* 2. Mobile Bottom Navigation Bar (6 compact items) */}
+      {/* 2. Mobile Bottom Navigation Bar (8 compact items) */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/90 px-1 py-1.5 flex items-center justify-around shadow-2xl safe-area-pb">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -144,7 +145,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`relative flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all flex-1 ${
+              className={`relative flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all flex-1 ${
                 isActive
                   ? 'text-blue-400 font-bold'
                   : 'text-slate-400 hover:text-slate-200'
@@ -158,7 +159,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </span>
                 )}
               </div>
-              <span className="text-[9px] mt-0.5 tracking-tight">{tab.label}</span>
+              <span className="text-[8px] mt-0.5 tracking-tight">{tab.label}</span>
               {isActive && (
                 <span className="absolute bottom-0 w-1 h-1 bg-blue-400 rounded-full" />
               )}
