@@ -538,7 +538,7 @@ export const App: React.FC = () => {
   const handleOpenChatWithSelection = (customText?: string) => {
     const targetText = customText || selectedText;
     if (targetText && targetText.trim()) {
-      setInitialChatInput(`「${targetText.trim()}」はどういう意味・ニュアンスですか？日常会話での使い方も教えてください。`);
+      setInitialChatInput(`「${targetText.trim()}」`);
     } else {
       setInitialChatInput('');
     }

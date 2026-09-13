@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
 import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle, X, BookOpen } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { chatWithAiMentor } from '../services/gemini';
 import { speakText } from '../utils/speech';
 import { computeLevelProgress, loadDailySnapshots, loadMyGoal } from '../services/storage';
@@ -35,7 +37,6 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
   const [inputText, setInputText] = useState(initialInput);
   const [isLoading, setIsLoading] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -44,12 +45,6 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       inputRef.current?.focus({ preventScroll: true });
     }
   }, [initialInput]);
-
-  useEffect(() => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-    }
-  }, [messages, isLoading]);
 
   const handleSend = async (textToSend?: string) => {
     const query = (textToSend || inputText).trim();
@@ -62,6 +57,13 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 
     setInputText('');
     setIsLoading(true);
+
+    // 質問送信時にスクロール位置を調整（AI回答生成後は勝手にスクロールしない）
+    setTimeout(() => {
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    }, 50);
 
     try {
       const historyContents = messages.slice(-6).map(m => ({
@@ -102,44 +104,38 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         onRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
       }
 
-      onSendMessage(query, res.replyText, res.suggestedVocabs);
+      onSendMessage(query, res.replyText, res.suggestedVocabs || []);
     } catch (e: any) {
-      console.error('Chat error', e);
-      alert(`エラーが発生しました: ${e.message}`);
+      alert(`AIメンターエラー: ${e.message || e}`);
     } finally {
       setIsLoading(false);
     }
   };
 
   const suggestionChips = [
-    '現在のペースだと、いつ頃次のレベルに到達できる？',
-    '最近間違えやすい文法・構文の弱点はどこ？',
-    '1日700語読むと何日で今のレベルをコンプリートできる？',
-    '「恐縮ですが」って英語でなんて言う？',
-    "look forward to と can't wait の違いは？",
+    'この表現の日常会話での使い分けを教えて',
+    '似た意味の言い換え表現はある？',
+    '文法の構造をわかりやすく分解して',
+    '発音やイントネーションのコツは？',
   ];
 
-  const containerClasses = isOverlayMode
-    ? 'w-full h-full flex flex-col p-3 sm:p-4 space-y-3 bg-slate-950/95 backdrop-blur-xl'
-    : 'max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 h-[calc(100vh-140px)] flex flex-col space-y-3';
-
   return (
-    <div className={containerClasses}>
-      {/* 1. Top Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
-            <Bot className="w-5 h-5 text-white" />
+    <div className={`flex flex-col h-full ${isOverlayMode ? 'p-3 sm:p-4 space-y-3' : 'max-w-4xl mx-auto p-4 space-y-4 h-[calc(100vh-140px)]'}`}>
+      {/* 1. Header Bar */}
+      <div className="flex items-center justify-between bg-slate-900/90 border border-slate-800 p-3 sm:p-4 rounded-2xl shadow-lg flex-shrink-0">
+        <div className="flex items-center space-x-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-600/30">
+            <Bot className="w-4 h-4" />
           </div>
           <div>
-            <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
-              <span>AI英語メンター（ペース調整・質問相談）</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-medium">
-                オンライン
+            <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-1.5">
+              <span>AI English Mentor</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-medium border border-blue-500/30">
+                {model}
               </span>
             </h2>
-            <p className="text-xs text-slate-400">
-              学習ペースの相談、構文・語彙のニュアンス、自然な言い回しを何でも質問できます
+            <p className="text-[11px] text-slate-400">
+              文脈ニュアンス・語法・文法構造をいつでも深掘り質問
             </p>
           </div>
         </div>
@@ -192,13 +188,52 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
               </div>
 
               {/* Bubble */}
-              <div className={`max-w-[85%] sm:max-w-[75%] space-y-2.5 ${isUser ? 'items-end' : 'items-start'}`}>
-                <div className={`p-3.5 sm:p-4 rounded-2xl text-xs sm:text-sm leading-relaxed whitespace-pre-wrap ${
+              <div className={`max-w-[88%] sm:max-w-[80%] space-y-2.5 ${isUser ? 'items-end' : 'items-start'}`}>
+                <div className={`p-3.5 sm:p-4 rounded-2xl text-xs sm:text-sm leading-relaxed ${
                   isUser
-                    ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/20'
-                    : 'bg-slate-900/90 text-slate-200 rounded-tl-none border border-slate-800 shadow-md'
+                    ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/20 whitespace-pre-wrap'
+                    : 'bg-slate-900/95 text-slate-200 rounded-tl-none border border-slate-800 shadow-md'
                 }`}>
-                  {msg.text}
+                  {isUser ? (
+                    msg.text
+                  ) : (
+                    <div className="prose prose-invert max-w-none text-xs sm:text-sm leading-relaxed space-y-2">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
+                          strong: ({ ...props }) => <strong className="font-bold text-sky-300" {...props} />,
+                          em: ({ ...props }) => <em className="italic text-amber-300" {...props} />,
+                          ul: ({ ...props }) => <ul className="list-disc list-inside space-y-1 my-1.5 ml-1" {...props} />,
+                          ol: ({ ...props }) => <ol className="list-decimal list-inside space-y-1 my-1.5 ml-1" {...props} />,
+                          li: ({ ...props }) => <li className="text-slate-200" {...props} />,
+                          h1: ({ ...props }) => <h1 className="text-base font-bold text-white mt-3 mb-1.5 border-b border-slate-800 pb-1" {...props} />,
+                          h2: ({ ...props }) => <h2 className="text-sm font-bold text-sky-400 mt-2.5 mb-1" {...props} />,
+                          h3: ({ ...props }) => <h3 className="text-xs font-bold text-amber-300 mt-2 mb-1" {...props} />,
+                          code: ({ inline, ...props }: any) =>
+                            inline ? (
+                              <code className="bg-slate-950 px-1.5 py-0.5 rounded text-sky-300 font-mono text-[11px] sm:text-xs border border-slate-800" {...props} />
+                            ) : (
+                              <pre className="bg-slate-950 p-2.5 rounded-xl text-[11px] sm:text-xs font-mono text-slate-300 border border-slate-800 overflow-x-auto my-2">
+                                <code {...props} />
+                              </pre>
+                            ),
+                          blockquote: ({ ...props }) => (
+                            <blockquote className="border-l-2 border-indigo-500 pl-3 my-2 text-slate-400 italic bg-slate-950/40 py-1 rounded-r-lg" {...props} />
+                          ),
+                          table: ({ ...props }) => (
+                            <div className="overflow-x-auto my-2">
+                              <table className="min-w-full text-[11px] sm:text-xs border border-slate-800 divide-y divide-slate-800" {...props} />
+                            </div>
+                          ),
+                          th: ({ ...props }) => <th className="px-2.5 py-1.5 bg-slate-950 text-left font-bold text-sky-400 border-r border-slate-800 last:border-r-0" {...props} />,
+                          td: ({ ...props }) => <td className="px-2.5 py-1.5 border-r border-slate-800 last:border-r-0" {...props} />,
+                        }}
+                      >
+                        {msg.text}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                 </div>
 
                 {/* Suggested Vocabs from Assistant */}
@@ -274,8 +309,6 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
             </div>
           </div>
         )}
-
-        <div ref={messagesEndRef} />
       </div>
 
       {/* 3. Suggestion Chips (if few messages) */}
@@ -309,7 +342,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
               handleSend();
             }
           }}
-          placeholder="英語の表現、ニュアンスの違い、文法の質問を入力... (Enterで送信)"
+          placeholder="質問を入力... (Enterで送信)"
           className="flex-1 bg-transparent px-3 py-1.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none"
         />
 
