@@ -6,7 +6,6 @@ import { StoryCreateView } from './components/StoryCreateView';
 import { MasteryDashboardView } from './components/MasteryDashboardView';
 import { ReaderView } from './components/ReaderView';
 import { QuizView } from './components/QuizView';
-import { VocabBankView } from './components/VocabBankView';
 import { AiMentorChatView } from './components/AiMentorChatView';
 import { SettingsView } from './components/SettingsView';
 import { CallView } from './components/CallView';
@@ -31,8 +30,6 @@ import {
   recordVocabLapse,
   recordVocabMastered,
   deleteVocab as removeVocabFromStorage,
-  updateVocabImportance,
-  batchUpdateVocabImportance,
   saveVocabsBatch,
   isInvalidVocabMeaning,
   recordAnkiRating,
@@ -62,7 +59,7 @@ import {
   recordPatternStatus,
 } from './services/storage';
 
-import { generateStorySeriesWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
+import { generateStorySeriesWithGemini, getDetailedNuanceWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
 import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
@@ -91,10 +88,6 @@ export const App: React.FC = () => {
   const [generatingTheme, setGeneratingTheme] = useState('');
   const [generatingProgress, setGeneratingProgress] = useState<{ current: number; total: number; message: string } | undefined>(undefined);
   const [notificationToast, setNotificationToast] = useState<string | null>(null);
-
-  // AI重要度ランク付け状態
-  const [isRankingImportance, setIsRankingImportance] = useState(false);
-
   const [isSyncing, setIsSyncing] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
@@ -419,12 +412,6 @@ export const App: React.FC = () => {
     setExpressionErrors(loadExpressionErrors());
   };
 
-  // 語彙重要度の手動更新
-  const handleUpdateVocabImportance = (vocabId: string, importance: number) => {
-    updateVocabImportance(vocabId, importance);
-    setVocabs(loadVocabs());
-  };
-
   // Anki 4段階評価
   const handleRateAnkiCard = (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => {
     recordAnkiRating(vocabId, rating);
@@ -445,62 +432,6 @@ export const App: React.FC = () => {
   const handleRecordStoryRead = (storyId: string, wpm?: number) => {
     recordStoryRead(storyId, wpm);
     setStories(loadStories());
-  };
-
-  // AIによる登録語彙の一括重要度ランク付け
-  const handleRankVocabImportance = async () => {
-    if (!settings.geminiApiKey) {
-      alert('Gemini APIキーを設定してください');
-      setActiveTab('settings');
-      return;
-    }
-
-    const currentVocabs = loadVocabs();
-    if (currentVocabs.length === 0) {
-      alert('登録された語彙がありません');
-      return;
-    }
-
-    // まだランク（重要度）がついていない未判定の語彙のみを対象にする
-    const unrankedVocabs = currentVocabs.filter(v => v.importance === undefined || v.importance === null);
-    if (unrankedVocabs.length === 0) {
-      alert('すべての語彙の重要度ランク付け（★1〜★5）が完了しています！');
-      return;
-    }
-
-    setIsRankingImportance(true);
-    try {
-      const itemsToRank = unrankedVocabs.map(v => ({
-        id: v.id,
-        phrase: v.phrase,
-        meaning: v.meaning,
-      }));
-
-      const res = await rankVocabImportanceWithGemini(
-        itemsToRank,
-        settings.geminiApiKey,
-        settings.geminiModel
-      );
-
-      if (res.tokenUsage) {
-        handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
-      }
-
-      if (res.rankings && res.rankings.length > 0) {
-        batchUpdateVocabImportance(res.rankings);
-        const updated = loadVocabs();
-        setVocabs(updated);
-        triggerAutoSync(updated, stories);
-        alert(`✨ ${res.rankings.length}件の未判定語彙の重要度ランク付けが完了しました！`);
-      } else {
-        alert('重要度スコアの取得に失敗しました。');
-      }
-    } catch (e: any) {
-      console.error('Rank importance error', e);
-      alert(`重要度判定エラー: ${e.message}`);
-    } finally {
-      setIsRankingImportance(false);
-    }
   };
 
   // AIメンターチャット メッセージ送信ハンドラー
@@ -823,10 +754,17 @@ export const App: React.FC = () => {
               />
             )}
 
-                        {/* Mastery Cockpit Tab */}
+            {/* Mastery & Integrated Vocab Bank Tab */}
             {activeTab === 'mastery' && (
               <MasteryDashboardView
                 onNavigateToCreate={() => setActiveTab('create')}
+                savedVocabs={vocabs}
+                difficultSentences={difficultSentences}
+                expressionErrors={expressionErrors}
+                onMasterVocab={handleMasterVocab}
+                onDeleteVocab={handleDeleteVocab}
+                onDeleteSentence={handleDeleteDifficultSentence}
+                onDeleteExpressionError={handleDeleteExpressionError}
               />
             )}
 
@@ -864,7 +802,7 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* 4. Anki & Interactive Quiz Tab */}
+            {/* 5. Anki & Interactive Quiz Tab */}
             {activeTab === 'quiz' && (
               <QuizView
                 apiKey={settings.geminiApiKey}
@@ -877,22 +815,6 @@ export const App: React.FC = () => {
                 onRecordTokenUsage={handleRecordTokenUsage}
                 onRateAnkiCard={handleRateAnkiCard}
                 onRevertAnkiCard={handleRevertAnkiCard}
-              />
-            )}
-
-            {/* 5. Vocab Bank Tab */}
-            {activeTab === 'vocab' && (
-              <VocabBankView
-                vocabs={vocabs}
-                difficultSentences={difficultSentences}
-                expressionErrors={expressionErrors}
-                onMasterVocab={handleMasterVocab}
-                onDeleteVocab={handleDeleteVocab}
-                onDeleteSentence={handleDeleteDifficultSentence}
-                onDeleteExpressionError={handleDeleteExpressionError}
-                onUpdateImportance={handleUpdateVocabImportance}
-                onRankVocabImportance={handleRankVocabImportance}
-                isRankingImportance={isRankingImportance}
               />
             )}
 

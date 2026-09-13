@@ -1,6 +1,6 @@
 import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress } from '../types/mastery';
 import { CEFR_PATTERNS_MASTER, getPatternsByLevel } from '../data/cefrPatternsMaster';
-import { CEFR_VOCAB_MASTER, getVocabMasterByLevel } from '../data/cefrVocabMaster';
+import { CEFR_VOCAB_MASTER, getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
 import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { VocabItem, VocabLookupResult } from '../types/vocab';
@@ -200,6 +200,8 @@ export function recordVocabLapse(
 ): VocabItem {
   const vocabs = loadVocabs();
   const existingIndex = findMatchingVocabIndex(vocabs, lookup.phrase);
+  const cefrItem = getVocabByPhrase(lookup.phrase);
+  const determinedLevel = cefrItem?.cefr || 'C1';
 
   let updatedItem: VocabItem;
 
@@ -210,12 +212,15 @@ export function recordVocabLapse(
     let finalMeaning = existing.meaning;
     if (!isInvalidVocabMeaning(lookup.meaning)) {
       finalMeaning = lookup.meaning.trim();
+    } else if (cefrItem?.meaning) {
+      finalMeaning = cefrItem.meaning;
     }
 
     updatedItem = {
       ...existing,
       meaning: finalMeaning,
-      partOfSpeech: lookup.part_of_speech || existing.partOfSpeech,
+      level: existing.level || determinedLevel,
+      partOfSpeech: lookup.part_of_speech || (cefrItem?.partOfSpeech ?? existing.partOfSpeech),
       contextNote: lookup.explanation || existing.contextNote,
       exampleSentence: lookup.context_sentence || existing.exampleSentence,
       ...srs,
@@ -224,12 +229,16 @@ export function recordVocabLapse(
     vocabs[existingIndex] = updatedItem;
   } else {
     const srs = calculateLapseSRS();
-    const meaning = !isInvalidVocabMeaning(lookup.meaning) ? lookup.meaning.trim() : '';
+    let meaning = !isInvalidVocabMeaning(lookup.meaning) ? lookup.meaning.trim() : '';
+    if (!meaning && cefrItem?.meaning) {
+      meaning = cefrItem.meaning;
+    }
     updatedItem = {
       id: 'voc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
       phrase: lookup.phrase.trim(),
       meaning,
-      partOfSpeech: lookup.part_of_speech || 'word/phrase',
+      level: determinedLevel,
+      partOfSpeech: lookup.part_of_speech || (cefrItem?.partOfSpeech ?? 'word/phrase'),
       contextNote: lookup.explanation || '',
       exampleSentence: lookup.context_sentence || '',
       ...srs,
@@ -241,6 +250,8 @@ export function recordVocabLapse(
   }
 
   saveVocabsBatch(vocabs);
+  // 習熟度マスターDBステートにも要復習として同期
+  recordVocabMasteryStatus(lookup.phrase, 'lapsed');
   return updatedItem;
 }
 
@@ -946,15 +957,18 @@ export function recordPatternStatus(patternId: string, status: MasteryStatus): v
     firstSeenAt: now,
   };
 
-  const updated: ItemProgress = {
-    ...prev,
-    status,
-    lastSeenAt: now,
-    encounterCount: prev.encounterCount + 1,
-    masteredAt: status === 'mastered' ? (prev.masteredAt || now) : prev.masteredAt,
-  };
-
-  state.patterns[patternId] = updated;
+  if (status === 'unseen') {
+    delete state.patterns[patternId];
+  } else {
+    const updated: ItemProgress = {
+      ...prev,
+      status,
+      lastSeenAt: now,
+      encounterCount: Math.max(1, prev.encounterCount + 1),
+      masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
+    };
+    state.patterns[patternId] = updated;
+  }
   saveMasteryState(state);
 }
 
@@ -968,15 +982,18 @@ export function recordVocabMasteryStatus(phraseOrId: string, status: MasteryStat
     firstSeenAt: now,
   };
 
-  const updated: ItemProgress = {
-    ...prev,
-    status,
-    lastSeenAt: now,
-    encounterCount: prev.encounterCount + 1,
-    masteredAt: status === 'mastered' ? (prev.masteredAt || now) : prev.masteredAt,
-  };
-
-  state.vocabs[key] = updated;
+  if (status === 'unseen') {
+    delete state.vocabs[key];
+  } else {
+    const updated: ItemProgress = {
+      ...prev,
+      status,
+      lastSeenAt: now,
+      encounterCount: Math.max(1, prev.encounterCount + 1),
+      masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
+    };
+    state.vocabs[key] = updated;
+  }
   saveMasteryState(state);
 }
 
