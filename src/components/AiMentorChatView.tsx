@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
-import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle, X, BookOpen } from 'lucide-react';
+import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle, X, BookOpen, Compass, TrendingUp } from 'lucide-react';
 import { chatWithAiMentor } from '../services/gemini';
 import { speakText } from '../utils/speech';
+import { loadMasteryState, computeLevelProgress, loadDailySnapshots, loadMyGoal } from '../services/storage';
 
 interface AiMentorChatViewProps {
   apiKey: string;
@@ -68,9 +69,32 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         parts: [{ text: m.text }],
       }));
 
+      // テレメトリ情報の収集
+      const masteryState = loadMasteryState();
+      const snapshots = loadDailySnapshots();
+      const latestSnapshot = snapshots[snapshots.length - 1];
+      const myGoal = loadMyGoal();
+      const targetLevel = myGoal?.targetLevel || 'B1';
+      const progress = computeLevelProgress(targetLevel);
+      const remaining = (progress.totalPatterns - progress.masteredPatterns) + (progress.totalVocabs - progress.masteredVocabs);
+      const itemsPerDay = Math.max(1, Math.round((myGoal?.dailyWordsTarget || 700) / 350));
+      const estimatedDays = Math.ceil(remaining / itemsPerDay);
+
       const res = await chatWithAiMentor({
         messages: historyContents,
         currentQuery: query,
+        contextInfo: {
+          cefrLevel: targetLevel,
+          levelProgressSummary: `構文: ${Math.round(progress.patternPercentage)}%, 語彙: ${Math.round(progress.vocabPercentage)}%`,
+          masteryStats: {
+            level: targetLevel,
+            patternProgress: progress.patternPercentage / 100,
+            vocabProgress: progress.vocabPercentage / 100,
+            totalMastered: progress.masteredPatterns + progress.masteredVocabs,
+            dailyReadingWords: latestSnapshot?.wordsReadToday || 0,
+            estimatedDaysToTarget: estimatedDays,
+          },
+        },
         apiKey,
         model,
       });
@@ -89,10 +113,11 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
   };
 
   const suggestionChips = [
+    '現在のペースだと、いつ頃次のレベルに到達できる？',
+    '最近間違えやすい文法・構文の弱点はどこ？',
+    '1日700語読むと何日で今のレベルをコンプリートできる？',
     '「恐縮ですが」って英語でなんて言う？',
-    'look forward to と can\'t wait の違いは？',
-    '「I was wondering if...」の自然な使い方は？',
-    '日常会話でよく使う相槌のバリエーションを教えて！',
+    'look forward to と can't wait の違いは？',
   ];
 
   const containerClasses = isOverlayMode
@@ -101,21 +126,21 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 
   return (
     <div className={containerClasses}>
-      {/* 1. Header */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center space-x-3 min-w-0">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-md shadow-blue-500/20 flex-shrink-0">
+      {/* 1. Top Header */}
+      <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
             <Bot className="w-5 h-5 text-white" />
           </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-1.5 truncate">
-              <span>AI英語メンター</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold border border-blue-500/30 flex-shrink-0">
-                即時語彙回収
+          <div>
+            <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
+              <span>AI英語メンター（ペース調整・質問相談）</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-medium">
+                オンライン
               </span>
             </h2>
-            <p className="text-xs text-slate-400 truncate">
-              {isOverlayMode ? '読書画面のまま質問・疑問を解消できます' : '質問からワンタップでAnki・語彙帳に追加できます'}
+            <p className="text-xs text-slate-400">
+              学習ペースの相談、構文・語彙のニュアンス、自然な言い回しを何でも質問できます
             </p>
           </div>
         </div>
