@@ -6,7 +6,9 @@ import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones,
 import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
-import { recordPatternStatus, recordVocabMasteryStatus, recordDailyReadingActivity } from '../services/storage';
+import { recordPatternMasteryBatch, recordVocabMasteryBatch, recordDailyReadingActivity, recordVocabLapse } from '../services/storage';
+import { extractStoryVocabs, ExtractedStoryVocab } from '../utils/storyVocabExtractor';
+import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
 
 interface ReaderViewProps {
   currentStory: Story;
@@ -62,6 +64,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isFinished, setIsFinished] = useState(false);
   const [startTime] = useState<number>(Date.now());
   const [calculatedWpm, setCalculatedWpm] = useState<number | null>(null);
+  // 読了時パッシブ同期モーダル用
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [extractedVocabs, setExtractedVocabs] = useState<ExtractedStoryVocab[]>([]);
+  const [pendingWpm, setPendingWpm] = useState<number>(150);
 
   // 今回の読書セッションでマークされた「訳せなかった文」の理由編集用
   const [sessionSentenceReasons, setSessionSentenceReasons] = useState<Record<string, { category: DifficultyReasonCategory; note: string }>>({});
@@ -378,9 +384,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
   };
 
-  // 読了ハンドラー ＆ 純粋ターゲット評価 ＆ WPM計算
+  // 読了ハンドラー ＆ パッシブ同期モーダル起動
   const handleFinishStory = () => {
-    setIsFinished(true);
     stopSpeech();
     setIsPlayingAudio(false);
 
@@ -389,34 +394,83 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const wordCount = currentStory.actualWordCount || currentStory.targetWordCount || 700;
     const wpm = Math.round(wordCount / durationMinutes);
     setCalculatedWpm(wpm);
+    setPendingWpm(wpm);
 
-    // 1. 純粋なターゲットバインディングのみを評価（足場ワードは一切除外）
-    if (currentStory.targetEmbeddings && currentStory.targetEmbeddings.length > 0) {
-      currentStory.targetEmbeddings.forEach(emb => {
-        if (emb.type === 'pattern' && emb.targetId) {
-          if (!lapsedTargetIdsRef.current.has(emb.targetId)) {
-            recordPatternStatus(emb.targetId, 'mastered');
-          }
-        } else if (emb.type === 'vocab' && emb.targetId) {
-          if (!lapsedTargetIdsRef.current.has(emb.targetId)) {
-            recordVocabMasteryStatus(emb.targetId, 'mastered');
-          }
-        }
+    // 本文の全単語をOxford 5000 CEFR辞書と突合して抽出
+    const extracted = extractStoryVocabs(currentStory.storyContent, currentStory.cefrLevel);
+    setExtractedVocabs(extracted);
+
+    setIsSyncModalOpen(true);
+  };
+
+  const handleConfirmSync = (
+    masteredVocabs: ExtractedStoryVocab[],
+    lapsedVocabs: ExtractedStoryVocab[],
+    masteredPatternIds: string[],
+    lapsedPatternIds: string[]
+  ) => {
+    // 1. 習得済み単語の一括同期
+    if (masteredVocabs.length > 0) {
+      recordVocabMasteryBatch(masteredVocabs.map(v => ({ phrase: v.phrase, status: 'mastered' })));
+    }
+
+    // 2. 要復習単語の同期 & 単語帳登録
+    if (lapsedVocabs.length > 0) {
+      recordVocabMasteryBatch(lapsedVocabs.map(v => ({ phrase: v.phrase, status: 'lapsed' })));
+      lapsedVocabs.forEach(v => {
+        recordVocabLapse({
+          phrase: v.phrase,
+          meaning: v.meaning,
+          part_of_speech: v.partOfSpeech,
+          explanation: '',
+          context_sentence: '',
+        }, currentStory.id);
       });
     }
 
-    // 2. 読書量とWPMを記録
-    recordDailyReadingActivity(wordCount, wpm);
+    // 3. 構文ステータスの一括同期
+    if (masteredPatternIds.length > 0) {
+      recordPatternMasteryBatch(masteredPatternIds.map(id => ({ patternId: id, status: 'mastered' })));
+    }
+    if (lapsedPatternIds.length > 0) {
+      recordPatternMasteryBatch(lapsedPatternIds.map(id => ({ patternId: id, status: 'lapsed' })));
+    }
+
+    // 4. 読書量とWPMを記録
+    const wordCount = currentStory.actualWordCount || currentStory.targetWordCount || 700;
+    recordDailyReadingActivity(wordCount, pendingWpm);
 
     if (onRecordStoryRead) {
-      onRecordStoryRead(currentStory.id, wpm);
+      onRecordStoryRead(currentStory.id, pendingWpm);
     }
+
+    setIsFinished(true);
+    setIsSyncModalOpen(false);
 
     confetti({
       particleCount: 80,
       spread: 70,
       origin: { y: 0.7 },
       colors: ['#3b82f6', '#60a5fa', '#38bdf8', '#fbbf24', '#818cf8']
+    });
+  };
+
+  const handleSkipSync = () => {
+    const wordCount = currentStory.actualWordCount || currentStory.targetWordCount || 700;
+    recordDailyReadingActivity(wordCount, pendingWpm);
+
+    if (onRecordStoryRead) {
+      onRecordStoryRead(currentStory.id, pendingWpm);
+    }
+
+    setIsFinished(true);
+    setIsSyncModalOpen(false);
+
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.7 },
+      colors: ['#3b82f6', '#60a5fa', '#38bdf8']
     });
   };
 
@@ -852,6 +906,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Story Completion Passive Sync Modal */}
+      {isSyncModalOpen && (
+        <StoryCompletionSyncModal
+          story={currentStory}
+          calculatedWpm={pendingWpm}
+          extractedVocabs={extractedVocabs}
+          initialLapsedPhrases={new Set(vocabs.map(v => v.phrase.toLowerCase()))}
+          onConfirmSync={handleConfirmSync}
+          onSkipSync={handleSkipSync}
+        />
+      )}
     </div>
   );
 };

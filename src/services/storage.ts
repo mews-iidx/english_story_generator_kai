@@ -972,6 +972,63 @@ export function recordPatternStatus(patternId: string, status: MasteryStatus): v
   saveMasteryState(state);
 }
 
+export function recordVocabMasteryBatch(updates: { phrase: string; status: MasteryStatus }[]): void {
+  if (!updates || updates.length === 0) return;
+  const state = loadMasteryState();
+  const now = new Date().toISOString();
+
+  updates.forEach(({ phrase, status }) => {
+    const key = phrase.trim().toLowerCase();
+    const prev = state.vocabs[key] || {
+      status: 'unseen',
+      encounterCount: 0,
+      firstSeenAt: now,
+    };
+
+    if (status === 'unseen') {
+      delete state.vocabs[key];
+    } else {
+      state.vocabs[key] = {
+        ...prev,
+        status,
+        lastSeenAt: now,
+        encounterCount: Math.max(1, prev.encounterCount + 1),
+        masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
+      };
+    }
+  });
+
+  saveMasteryState(state);
+}
+
+export function recordPatternMasteryBatch(updates: { patternId: string; status: MasteryStatus }[]): void {
+  if (!updates || updates.length === 0) return;
+  const state = loadMasteryState();
+  const now = new Date().toISOString();
+
+  updates.forEach(({ patternId, status }) => {
+    const prev = state.patterns[patternId] || {
+      status: 'unseen',
+      encounterCount: 0,
+      firstSeenAt: now,
+    };
+
+    if (status === 'unseen') {
+      delete state.patterns[patternId];
+    } else {
+      state.patterns[patternId] = {
+        ...prev,
+        status,
+        lastSeenAt: now,
+        encounterCount: Math.max(1, prev.encounterCount + 1),
+        masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
+      };
+    }
+  });
+
+  saveMasteryState(state);
+}
+
 export function recordVocabMasteryStatus(phraseOrId: string, status: MasteryStatus): void {
   const state = loadMasteryState();
   const now = new Date().toISOString();
