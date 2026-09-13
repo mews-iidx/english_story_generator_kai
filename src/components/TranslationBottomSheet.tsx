@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
-import { Volume2, Sparkles, Plus, Check, BookmarkPlus, BookmarkCheck, Bot, Lightbulb, AlertCircle, CheckCircle } from 'lucide-react';
-import { speakText } from '../utils/speech';
+import React, { useState, useEffect } from 'react';
 import { TargetEmbedding } from '../types/story';
+import { Volume2, Plus, BookmarkPlus, Check, Sparkles, Lightbulb, CheckCircle, AlertCircle, Bot } from 'lucide-react';
+import { speakText } from '../utils/speech';
 
 interface TranslationBottomSheetProps {
   isOpen: boolean;
-  onClose?: () => void;
+  onClose: () => void;
   originalText: string;
   translatedText: string;
   contextSentence?: string;
@@ -13,34 +13,48 @@ interface TranslationBottomSheetProps {
   isLoading?: boolean;
   isSavedAsVocab?: boolean;
   isSavedAsSentence?: boolean;
-  onAddToVocab: (phrase: string, meaning: string, contextSentence?: string, note?: string) => void;
+  onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
   onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onFetchDetailedNuance?: () => Promise<string>;
+  onFetchContextualMeaning?: () => Promise<{ meaning: string; partOfSpeech?: string }>;
   onOpenChatMentor?: (text: string) => void;
   onRecordPatternFeedback?: (patternId: string, status: 'lapsed' | 'mastered') => void;
 }
 
 export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   isOpen,
+  onClose,
   originalText,
   translatedText,
   contextSentence,
   targetEmbedding,
-  isLoading,
-  isSavedAsVocab,
-  isSavedAsSentence,
+  isLoading = false,
+  isSavedAsVocab = false,
+  isSavedAsSentence = false,
   onAddToVocab,
   onSaveDifficultSentence,
   onFetchDetailedNuance,
+  onFetchContextualMeaning,
   onOpenChatMentor,
   onRecordPatternFeedback,
 }) => {
   const [nuanceNote, setNuanceNote] = useState<string | null>(null);
   const [isFetchingNuance, setIsFetchingNuance] = useState(false);
+  const [contextualMeaning, setContextualMeaning] = useState<string | null>(null);
+  const [isFetchingContext, setIsFetchingContext] = useState(false);
   const [activeTab, setActiveTab] = useState<'word' | 'syntax'>('word');
   const [feedbackStatus, setFeedbackStatus] = useState<'lapsed' | 'mastered' | null>(null);
 
+  useEffect(() => {
+    setNuanceNote(null);
+    setContextualMeaning(null);
+    setFeedbackStatus(null);
+    setActiveTab(targetEmbedding ? 'syntax' : 'word');
+  }, [originalText, targetEmbedding]);
+
   if (!isOpen || !originalText) return null;
+
+  const currentDisplayMeaning = contextualMeaning || translatedText || '';
 
   const handleFetchNuance = async () => {
     if (!onFetchDetailedNuance || isFetchingNuance) return;
@@ -49,17 +63,30 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
       const note = await onFetchDetailedNuance();
       setNuanceNote(note);
       if (isSavedAsVocab) {
-        onAddToVocab(originalText, translatedText, contextSentence, note);
+        onAddToVocab(originalText, currentDisplayMeaning, contextSentence, note);
       }
     } finally {
       setIsFetchingNuance(false);
     }
   };
 
+  const handleFetchContextual = async () => {
+    if (!onFetchContextualMeaning || isFetchingContext) return;
+    setIsFetchingContext(true);
+    try {
+      const res = await onFetchContextualMeaning();
+      if (res?.meaning) {
+        setContextualMeaning(res.meaning);
+      }
+    } finally {
+      setIsFetchingContext(false);
+    }
+  };
+
   const handleSaveSentence = () => {
     if (!onSaveDifficultSentence) return;
     const sentenceToSave = (originalText.split(' ').length > 4 || !contextSentence) ? originalText : contextSentence;
-    onSaveDifficultSentence(sentenceToSave, translatedText, originalText);
+    onSaveDifficultSentence(sentenceToSave, currentDisplayMeaning, originalText);
   };
 
   const handlePatternFeedback = (status: 'lapsed' | 'mastered') => {
@@ -73,13 +100,12 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
       className="fixed inset-x-0 bottom-0 z-50 p-3 sm:p-4 animate-slideUp pointer-events-none"
     >
       <div 
-        className="max-w-2xl mx-auto bg-slate-900/95 border border-slate-700/80 rounded-2xl shadow-2xl backdrop-blur-xl p-4 sm:p-5 text-slate-100 pointer-events-auto transition-all space-y-3"
+        className="pointer-events-auto max-w-xl mx-auto bg-slate-900/95 border border-slate-750 backdrop-blur-xl rounded-3xl shadow-2xl p-4 sm:p-5 space-y-3.5 text-slate-100"
         onClick={(e) => e.stopPropagation()}
-        onTouchEnd={(e) => e.stopPropagation()}
       >
-        {/* Header: Tabs if target pattern is present */}
+        {/* Header Bar: Tabs & Close */}
         {targetEmbedding ? (
-          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setActiveTab('word')}
@@ -103,9 +129,12 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
                 <span>💡 構文: {targetEmbedding.targetName}</span>
               </button>
             </div>
-            <span className="text-[11px] text-slate-500">
-              外側をタップで閉じる
-            </span>
+            <button
+              onClick={onClose}
+              className="text-[11px] text-slate-400 hover:text-white px-2 py-1 rounded-lg bg-slate-950/80 hover:bg-slate-800 transition-colors"
+            >
+              閉じる
+            </button>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2.5">
@@ -121,41 +150,32 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
                 <Volume2 className="w-4 h-4" />
               </button>
             </div>
-            <span className="text-[11px] text-slate-500">
-              外側をタップで閉じる
-            </span>
+            <button
+              onClick={onClose}
+              className="text-[11px] text-slate-400 hover:text-white px-2.5 py-1 rounded-lg bg-slate-950/80 hover:bg-slate-800 transition-colors"
+            >
+              閉じる
+            </button>
           </div>
         )}
 
-        {/* Content Body: Word Mode vs Syntax Mode */}
+        {/* Content Body */}
         {activeTab === 'syntax' && targetEmbedding ? (
-          <div className="space-y-3 bg-slate-950/70 p-3.5 rounded-xl border border-amber-500/30 animate-fadeIn">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-extrabold text-amber-400 flex items-center gap-1.5">
-                <Lightbulb className="w-4 h-4" />
-                【重要構文ターゲット】
-              </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                {targetEmbedding.targetId}
-              </span>
-            </div>
-
-            <div className="space-y-1">
-              <div className="text-base font-bold text-white">
-                {targetEmbedding.targetName}
+          <div className="space-y-3">
+            <div className="p-3 bg-amber-950/30 border border-amber-500/30 rounded-2xl space-y-1.5 text-xs">
+              <div className="flex items-center justify-between text-amber-300 font-bold">
+                <span>🎯 出題ターゲット構文</span>
+                <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded border border-amber-500/40">
+                  {targetEmbedding.targetName}
+                </span>
               </div>
               {targetEmbedding.focusPoint && (
-                <div className="text-xs text-amber-200/90 leading-relaxed font-medium">
-                  要点: {targetEmbedding.focusPoint}
-                </div>
-              )}
-              {targetEmbedding.textSpan && (
-                <div className="text-xs text-slate-300 italic pt-1">
-                  用例: "{targetEmbedding.textSpan}"
+                <div className="text-slate-300 font-medium">
+                  {targetEmbedding.focusPoint}
                 </div>
               )}
               {targetEmbedding.translation && (
-                <div className="text-xs text-slate-300">
+                <div className="text-amber-200/90 text-[11px] pt-0.5 border-t border-amber-500/20">
                   訳: {targetEmbedding.translation}
                 </div>
               )}
@@ -189,7 +209,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
             </div>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {targetEmbedding && (
               <div className="flex items-center space-x-2">
                 <h3 className="text-lg sm:text-xl font-bold text-sky-400 tracking-tight">
@@ -205,15 +225,39 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
               </div>
             )}
 
+            {/* Translation Output Area + On-demand AI Context Button */}
             {isLoading ? (
               <div className="flex items-center space-x-2 text-slate-400 text-sm py-1">
                 <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
                 <span>翻訳中...</span>
               </div>
             ) : (
-              <p className="text-base sm:text-lg font-semibold text-white">
-                {translatedText || '（翻訳なし）'}
-              </p>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                  <p className="text-base sm:text-lg font-semibold text-white">
+                    {currentDisplayMeaning || '（翻訳なし）'}
+                  </p>
+                  {contextualMeaning && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
+                      AI文脈一致
+                    </span>
+                  )}
+                </div>
+
+                {/* オンデマンドAI文脈取得ボタン */}
+                {onFetchContextualMeaning && !contextualMeaning && (
+                  <button
+                    type="button"
+                    onClick={handleFetchContextual}
+                    disabled={isFetchingContext}
+                    className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-semibold text-amber-300 bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 rounded-xl transition-all shadow-sm active:scale-95"
+                    title="文脈に沿った正確な日本語訳をAIで取得"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${isFetchingContext ? 'animate-spin' : ''}`} />
+                    <span>{isFetchingContext ? 'AI解釈中...' : '🤖 AI文脈訳'}</span>
+                  </button>
+                )}
+              </div>
             )}
 
             {nuanceNote && (
@@ -233,7 +277,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
           <div className="flex items-center space-x-2 flex-wrap gap-y-1.5">
             {/* 1. 弱点単語帳に追加 */}
             <button
-              onClick={() => onAddToVocab(originalText, translatedText, contextSentence, nuanceNote || undefined)}
+              onClick={() => onAddToVocab(originalText, currentDisplayMeaning, contextSentence, nuanceNote || undefined)}
               className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                 isSavedAsVocab
                   ? 'bg-blue-950/70 text-blue-300 border border-blue-500/40'
@@ -266,8 +310,8 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
               >
                 {isSavedAsSentence ? (
                   <>
-                    <BookmarkCheck className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>訳せなかった文に保存済み</span>
+                    <Check className="w-3.5 h-3.5 text-indigo-300" />
+                    <span>文を保存済み</span>
                   </>
                 ) : (
                   <>
@@ -280,7 +324,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
-            {/* 3. AIメンターに質問ボタン（リーダー上のチャットオーバーレイを開く） */}
+            {/* 3. AIメンターに質問ボタン */}
             {onOpenChatMentor && (
               <button
                 onClick={() => onOpenChatMentor(originalText)}
@@ -300,7 +344,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
                 className="flex items-center space-x-1 px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors border border-slate-700/60"
               >
                 <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${isFetchingNuance ? 'animate-spin' : ''}`} />
-                <span>{isFetchingNuance ? '取得中...' : 'AI簡易解説'}</span>
+                <span>{isFetchingNuance ? '取得中...' : 'AI解説'}</span>
               </button>
             )}
           </div>

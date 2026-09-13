@@ -60,7 +60,7 @@ import {
   recordPatternStatus,
 } from './services/storage';
 
-import { generateStorySeriesWithGemini, getDetailedNuanceWithGemini } from './services/gemini';
+import { generateStorySeriesWithGemini, getDetailedNuanceWithGemini, fetchContextualWordMeaning } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
 import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
@@ -543,6 +543,26 @@ export const App: React.FC = () => {
     });
   };
 
+  // AIによる文脈に即した単語の意味取得
+  const handleFetchContextualMeaning = async (): Promise<{ meaning: string; partOfSpeech?: string }> => {
+    if (!settings.geminiApiKey) {
+      alert('Gemini APIキーを設定してください');
+      return { meaning: '' };
+    }
+    const res = await fetchContextualWordMeaning(
+      selectedText,
+      contextSentence,
+      settings.geminiApiKey,
+      settings.geminiModel
+    );
+
+    if (res.tokenUsage) {
+      handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
+    }
+
+    return { meaning: res.meaning, partOfSpeech: res.partOfSpeech };
+  };
+
   // AIによる詳細ニュアンス取得
   const handleFetchDetailedNuance = async (): Promise<string> => {
     if (!settings.geminiApiKey) {
@@ -905,6 +925,7 @@ export const App: React.FC = () => {
         onAddToVocab={handleAddToVocab}
         onSaveDifficultSentence={handleSaveDifficultSentence}
         onFetchDetailedNuance={handleFetchDetailedNuance}
+        onFetchContextualMeaning={handleFetchContextualMeaning}
         onOpenChatMentor={(text) => handleOpenChatWithSelection(text)}
         onRecordPatternFeedback={(patternId, status) => {
           recordPatternStatus(patternId, status);

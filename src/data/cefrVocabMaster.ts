@@ -89,7 +89,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0013",
     "phrase": "address",
-    "meaning": "『あて名』, 住所",
+    "meaning": "住所, あて名",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -726,7 +726,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0104",
     "phrase": "book",
-    "meaning": "『本』, 書物",
+    "meaning": "本, 書物",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -2105,7 +2105,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0301",
     "phrase": "face",
-    "meaning": "『顔』, 表情",
+    "meaning": "顔, 表情",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -2322,7 +2322,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0332",
     "phrase": "fine",
-    "meaning": "罰金, に罰金を科する",
+    "meaning": "元気な, すばらしい, 晴れた",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
@@ -2406,7 +2406,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0344",
     "phrase": "fly",
-    "meaning": "『飛ぶ』, 『飛行機で飛ぶ』",
+    "meaning": "飛ぶ, 飛行機で行く",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -3463,21 +3463,21 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0495",
     "phrase": "left",
-    "meaning": "leaveの過去・過去分詞, 『左の』",
+    "meaning": "左の, 左側の",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_a1_0496",
     "phrase": "left",
-    "meaning": "leaveの過去・過去分詞, 『左の』",
+    "meaning": "左へ",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0497",
     "phrase": "left",
-    "meaning": "leaveの過去・過去分詞, 『左の』",
+    "meaning": "左, 左側",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -3533,28 +3533,28 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0505",
     "phrase": "light",
-    "meaning": "『光, 光線』",
+    "meaning": "明るい, 軽い",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_a1_0506",
     "phrase": "light",
-    "meaning": "『光, 光線』",
+    "meaning": "光, 明かり, 電灯",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0507",
     "phrase": "like",
-    "meaning": "…を『好む』, が好きである",
+    "meaning": "〜のような, 〜のように",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
   {
     "id": "vocab_a1_0508",
     "phrase": "like",
-    "meaning": "…を『好む』, が好きである",
+    "meaning": "好きである, 好む",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -4611,14 +4611,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0659",
     "phrase": "order",
-    "meaning": "『命令』, 指図",
+    "meaning": "注文, 順序, 秩序",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0660",
     "phrase": "order",
-    "meaning": "『命令』, 指図",
+    "meaning": "注文する, 命令する",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -4751,7 +4751,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0679",
     "phrase": "park",
-    "meaning": "『公園』, 庭園",
+    "meaning": "公園, 広場",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -4982,7 +4982,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0712",
     "phrase": "plant",
-    "meaning": "『植物』, 草木・『草』",
+    "meaning": "植物, 草木, 工場",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -5136,7 +5136,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0734",
     "phrase": "present",
-    "meaning": "『出席している, 居合わせている』",
+    "meaning": "プレゼント, 贈り物, 現在",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -5969,14 +5969,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0853",
     "phrase": "sound",
-    "meaning": "『音』, 『音響』",
+    "meaning": "音, 響き",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0854",
     "phrase": "sound",
-    "meaning": "『音』, 『音響』",
+    "meaning": "〜のように聞こえる, 音が鳴る",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -6746,7 +6746,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0964",
     "phrase": "train",
-    "meaning": "『列車』, 汽車",
+    "meaning": "電車, 列車",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -7089,21 +7089,21 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1013",
     "phrase": "watch",
-    "meaning": "…を『じっと見つめる』, 凝視する",
+    "meaning": "腕時計, 見張り",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_1014",
     "phrase": "watch",
-    "meaning": "…を『じっと見つめる』, 凝視する",
+    "meaning": "見る, 見守る, 警戒する",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
   {
     "id": "vocab_a1_1015",
     "phrase": "water",
-    "meaning": "水, 『海』『の水』",
+    "meaning": "水",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -8323,7 +8323,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0113",
     "phrase": "book",
-    "meaning": "『本』, 書物",
+    "meaning": "予約する, 記入する",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -10010,7 +10010,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0354",
     "phrase": "fly",
-    "meaning": "『飛ぶ』, 『飛行機で飛ぶ』",
+    "meaning": "ハエ (昆虫)",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -11102,7 +11102,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0510",
     "phrase": "light",
-    "meaning": "『光, 光線』",
+    "meaning": "照らす, 火をつける",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -12033,7 +12033,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0643",
     "phrase": "plant",
-    "meaning": "『植物』, 草木・『草』",
+    "meaning": "植える, まく",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -14021,7 +14021,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0927",
     "phrase": "train",
-    "meaning": "『列車』, 汽車",
+    "meaning": "訓練する, トレーニングする",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -20962,7 +20962,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0027",
     "phrase": "address",
-    "meaning": "『あて名』, 住所",
+    "meaning": "（問題に）取り組む, 対処する, 演説する",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -27815,14 +27815,14 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1006",
     "phrase": "pace",
-    "meaning": "『1歩』, 歩幅",
+    "meaning": "歩調, ペース, 速度, 一歩",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_b2_1007",
     "phrase": "pace",
-    "meaning": "『1歩』, 歩幅",
+    "meaning": "（不安そうに）行ったり来たりする, 歩調を合わせる",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },

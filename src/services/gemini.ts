@@ -965,3 +965,75 @@ export async function chatWithPersona(params: {
 
   throw new Error('メッセージの送信に失敗しました');
 }
+
+/**
+ * 単語・フレーズの文脈に即した自然な日本語訳をオンデマンドで取得
+ */
+export async function fetchContextualWordMeaning(
+  word: string,
+  contextSentence: string,
+  apiKey: string,
+  preferredModel?: string
+): Promise<{ meaning: string; partOfSpeech?: string; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
+  if (!apiKey) {
+    throw new Error('Gemini APIキーが設定されていません。');
+  }
+
+  const promptText = `あなたはプロの英語辞書編纂者兼英語講師です。
+以下の英文におけるターゲット単語・フレーズ「${word}」の、**この文脈に完全に即した自然で簡潔な日本語訳（単語帳の見出し用）**を出力してください。
+機械翻訳のような直訳や多義語の不自然な訳（例: pacedを「ペースのある」とする等）は避け、文脈で実際に意図されている生きた意味を端的に返してください。
+
+【文】: "${contextSentence || word}"
+【対象単語】: "${word}"
+
+必ず以下のJSONフォーマットのみを出力してください：
+{
+  "meaning": "文脈に即した自然な日本語訳（例: （不安で）行ったり来たりした、予約する）",
+  "partOfSpeech": "品詞（動詞、名詞、形容詞、句動詞など）"
+}`;
+
+  const candidateModels = preferredModel
+    ? [preferredModel, 'gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.6-flash']
+    : ['gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.6-flash'];
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 120,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+        if (rawText) {
+          const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+          if (parsed?.meaning) {
+            return {
+              meaning: parsed.meaning.trim(),
+              partOfSpeech: parsed.partOfSpeech?.trim(),
+              tokenUsage: {
+                promptTokens: usage?.promptTokenCount || 0,
+                candidatesTokens: usage?.candidatesTokenCount || 0,
+              },
+            };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`fetchContextualWordMeaning error on ${currentModel}:`, e);
+    }
+  }
+
+  throw new Error('文脈訳の取得に失敗しました');
+}
