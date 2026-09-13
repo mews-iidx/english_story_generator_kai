@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Story, TargetEmbedding } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Tag, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, ChevronLeft, ChevronRight, BookmarkPlus, Zap, Sparkles, Film } from 'lucide-react';
+import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, ChevronLeft, ChevronRight, BookmarkPlus, Film } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
@@ -810,7 +810,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     { id: 'word', label: '🔤 単語・熟語' },
                     { id: 'modifier', label: '⛓️ 修飾関係・文構造' },
                     { id: 'grammar', label: '📚 文法・構文' },
-                    { id: 'nuance', label: '💭 ニュアンス・慣用句' },
+                    { id: 'other', label: '💭 ニュアンス・その他' },
                   ];
 
                   return (

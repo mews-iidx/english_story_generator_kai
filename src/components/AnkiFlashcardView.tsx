@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Zap, Filter, Layers, ArrowRight, Undo2, Lightbulb, Repeat } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, Star, Zap, Filter, Undo2, Lightbulb, Repeat } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
@@ -185,11 +185,8 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const [reviewQueue, setReviewQueue] = useState<VocabItem[]>([]);
   const [learningPool, setLearningPool] = useState<VocabItem[]>([]);
   const [activeCard, setActiveCard] = useState<VocabItem | null>(null);
-  const [totalSessionCardsCount, setTotalSessionCardsCount] = useState<number>(0);
-  const [isCustomStudyMode, setIsCustomStudyMode] = useState(false);
 
   const [isFlipped, setIsFlipped] = useState(false);
-  const [showExample, setShowExample] = useState(false);
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
   const [graduatedIds, setGraduatedIds] = useState<Set<string>>(new Set());
 
@@ -208,27 +205,22 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       // 今日の復習期日・学習中カードのみを出題
       initialReviews = shuffleArray(dueReviewCards);
       initialLearning = learningCards;
-      setIsCustomStudyMode(false);
-    } else if (allowExtraStudy) {
+      } else if (allowExtraStudy) {
       // 追加練習
       const unmastered = targetVocabs.filter(v => (v.repetitionCount ?? 0) < 4);
       initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
       initialLearning = [];
-      setIsCustomStudyMode(true);
-    } else {
+      } else {
       initialReviews = [];
       initialLearning = [];
-      setIsCustomStudyMode(false);
-    }
+      }
 
     const firstCard = pickNextCard(initialLearning, initialReviews);
 
     setReviewQueue(initialReviews);
     setLearningPool(initialLearning);
     setActiveCard(firstCard);
-    setTotalSessionCardsCount(initialReviews.length + initialLearning.length);
     setIsFlipped(false);
-    setShowExample(false);
     setSessionReviewedCount(0);
     setGraduatedIds(new Set());
     setHistoryStack([]);
@@ -290,7 +282,6 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setSessionReviewedCount(lastSnapshot.previousReviewedCount);
     setActiveCard(lastSnapshot.activeCardBefore);
     setIsFlipped(false);
-    setShowExample(false);
   };
 
   // 解答評価ハンドラー (Again / Hard / Good / Easy)
@@ -347,7 +338,6 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setSessionReviewedCount(prev => prev + 1);
     setActiveCard(nextPick);
     setIsFlipped(false);
-    setShowExample(false);
 
     if (!nextPick) {
       confetti({

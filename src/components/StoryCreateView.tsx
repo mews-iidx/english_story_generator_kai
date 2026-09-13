@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
 import { ContentType, SeriesType } from '../types/story';
-import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, Clock, Mic, MessageSquare, BookMarked, Film, Library, CheckCircle2 } from 'lucide-react';
-import { getUnmasteredTargetPatterns, getUnmasteredTargetVocabs, loadMasteryState } from '../services/storage';
+import { Sparkles, RefreshCw, Minus, Plus, FileJson, BookOpen, Layers, Clock, Mic, MessageSquare, BookMarked, Film, Library } from 'lucide-react';
+import { getUnmasteredTargetPatterns, getUnmasteredTargetVocabs } from '../services/storage';
 
 interface StoryCreateViewProps {
   currentLevel: CefrLevel;

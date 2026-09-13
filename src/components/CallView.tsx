@@ -345,7 +345,7 @@ export const CallView: React.FC<CallViewProps> = ({
           {
             newLikes: analysis.newLikes,
             newDislikes: analysis.newDislikes,
-            newTopic: analysis.newTopic,
+            newTopic: analysis.newTopic ? { topic: analysis.newTopic, summary: analysis.recapSummary || analysis.newTopic } : undefined,
             newUserNotes: analysis.newUserNotes,
             newPromises: analysis.newPromises,
           },
@@ -362,7 +362,7 @@ export const CallView: React.FC<CallViewProps> = ({
         endedAt: new Date().toISOString(),
         durationSeconds: duration,
         messages: finalMessages,
-        extractedVocabs: analysis.extractedVocabs,
+        extractedVocabs: analysis.extractedVocabs || [],
         recapSummary: analysis.recapSummary,
         newLearnedFacts: [
           ...analysis.newLikes.map((l) => `好きなもの: ${l}`),
@@ -1284,7 +1284,7 @@ export const CallView: React.FC<CallViewProps> = ({
                           💡 本質パターン: {errItem.corePattern}
                         </span>
                         <span className="text-[10px] text-amber-400 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-500/20">
-                          {(causeLabels as any)[errItem.suggestedCause] || '構文・語順'}
+                          {(causeLabels as any)[errItem.suggestedCause || 'grammar'] || '構文・語順'}
                         </span>
                       </div>
                       <p className="text-slate-300 text-[11px] leading-relaxed">

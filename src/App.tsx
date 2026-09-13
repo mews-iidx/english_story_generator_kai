@@ -62,7 +62,7 @@ import {
   recordPatternStatus,
 } from './services/storage';
 
-import { generateStoryWithGemini, generateStorySeriesWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
+import { generateStorySeriesWithGemini, getDetailedNuanceWithGemini, rankVocabImportanceWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
 import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';

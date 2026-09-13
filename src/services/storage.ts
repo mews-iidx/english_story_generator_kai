@@ -1,6 +1,6 @@
 import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress } from '../types/mastery';
-import { CEFR_PATTERNS_MASTER, getPatternById, getPatternsByLevel } from '../data/cefrPatternsMaster';
-import { CEFR_VOCAB_MASTER, getVocabMasterById, getVocabMasterByLevel } from '../data/cefrVocabMaster';
+import { CEFR_PATTERNS_MASTER, getPatternsByLevel } from '../data/cefrPatternsMaster';
+import { CEFR_VOCAB_MASTER, getVocabMasterByLevel } from '../data/cefrVocabMaster';
 import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { VocabItem, VocabLookupResult } from '../types/vocab';
@@ -1132,32 +1132,31 @@ export function loadAnkiUnifiedDeck(): VocabItem[] {
 
   const patternCards: VocabItem[] = [];
 
-  // マスター構文のうち、ユーザーが要復習(lapsed)または遭遇(exposed)したものをカード化
   CEFR_PATTERNS_MASTER.forEach(pat => {
     const pState = mastery.patterns[pat.id];
     if (pState && (pState.status === 'lapsed' || pState.status === 'exposed')) {
-      const rotIdx = (pState.reviewCount || 0) % pat.variations.length;
+      const rotIdx = (pState.encounterCount || 0) % pat.variations.length;
       const currentVar = pat.variations[rotIdx];
 
       patternCards.push({
         id: pat.id,
         phrase: pat.name,
-        meaning: pat.meaningJa,
-        partOfSpeech: pat.category,
-        contextNote: pat.focusPoint,
+        meaning: pat.meaning,
+        partOfSpeech: pat.categoryLabel,
+        contextNote: pat.focus,
         exampleSentence: currentVar.sentence,
         lapseCount: pState.status === 'lapsed' ? 1 : 0,
-        repetitionCount: pState.reviewCount || 0,
-        intervalDays: pState.interval || 1,
-        nextReviewDate: pState.nextReviewDate || today,
-        lastReviewedAt: pState.lastTested || new Date().toISOString(),
-        createdAt: new Date().toISOString(),
+        repetitionCount: pState.encounterCount || 0,
+        intervalDays: 1,
+        nextReviewDate: today,
+        lastReviewedAt: pState.lastSeenAt || new Date().toISOString(),
+        createdAt: pState.firstSeenAt || new Date().toISOString(),
         importance: 5,
-        easeFactor: pState.easeFactor || 2.5,
+        easeFactor: 2.5,
         cardState: pState.status === 'lapsed' ? 'relearning' : 'review',
         cardType: 'pattern',
         patternId: pat.id,
-        level: pat.level,
+        level: pat.cefr,
         variations: pat.variations,
       });
     }

@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
-import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle, X, BookOpen, Compass, TrendingUp } from 'lucide-react';
+import { Bot, Send, User, Sparkles, Plus, Check, Trash2, HelpCircle, X, BookOpen } from 'lucide-react';
 import { chatWithAiMentor } from '../services/gemini';
 import { speakText } from '../utils/speech';
-import { loadMasteryState, computeLevelProgress, loadDailySnapshots, loadMyGoal } from '../services/storage';
+import { computeLevelProgress, loadDailySnapshots, loadMyGoal } from '../services/storage';
 
 interface AiMentorChatViewProps {
   apiKey: string;
@@ -70,14 +70,13 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       }));
 
       // テレメトリ情報の収集
-      const masteryState = loadMasteryState();
       const snapshots = loadDailySnapshots();
       const latestSnapshot = snapshots[snapshots.length - 1];
       const myGoal = loadMyGoal();
-      const targetLevel = myGoal?.targetLevel || 'B1';
+      const targetLevel = (myGoal?.targetCefr || 'B1') as 'A1' | 'A2' | 'B1' | 'B2';
       const progress = computeLevelProgress(targetLevel);
-      const remaining = (progress.totalPatterns - progress.masteredPatterns) + (progress.totalVocabs - progress.masteredVocabs);
-      const itemsPerDay = Math.max(1, Math.round((myGoal?.dailyWordsTarget || 700) / 350));
+      const remaining = (progress.patternTotal - progress.patternMastered) + (progress.vocabTotal - progress.vocabMastered);
+      const itemsPerDay = Math.max(1, Math.round(remaining / Math.max(1, myGoal?.targetDays || 60)));
       const estimatedDays = Math.ceil(remaining / itemsPerDay);
 
       const res = await chatWithAiMentor({
@@ -85,13 +84,13 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         currentQuery: query,
         contextInfo: {
           cefrLevel: targetLevel,
-          levelProgressSummary: `構文: ${Math.round(progress.patternPercentage)}%, 語彙: ${Math.round(progress.vocabPercentage)}%`,
+          levelProgressSummary: `構文: ${Math.round(progress.patternPct)}%, 語彙: ${Math.round(progress.vocabPct)}%`,
           masteryStats: {
             level: targetLevel,
-            patternProgress: progress.patternPercentage / 100,
-            vocabProgress: progress.vocabPercentage / 100,
-            totalMastered: progress.masteredPatterns + progress.masteredVocabs,
-            dailyReadingWords: latestSnapshot?.wordsReadToday || 0,
+            patternProgress: progress.patternPct / 100,
+            vocabProgress: progress.vocabPct / 100,
+            totalMastered: progress.patternMastered + progress.vocabMastered,
+            dailyReadingWords: latestSnapshot?.wordsRead || 0,
             estimatedDaysToTarget: estimatedDays,
           },
         },
@@ -117,7 +116,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     '最近間違えやすい文法・構文の弱点はどこ？',
     '1日700語読むと何日で今のレベルをコンプリートできる？',
     '「恐縮ですが」って英語でなんて言う？',
-    'look forward to と can't wait の違いは？',
+    "look forward to と can't wait の違いは？",
   ];
 
   const containerClasses = isOverlayMode

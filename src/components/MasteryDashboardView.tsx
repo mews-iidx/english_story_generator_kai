@@ -2,7 +2,6 @@ import React, { useState, useMemo } from 'react';
 import {
   loadMasteryState,
   computeAllLevelProgress,
-  computeLevelProgress,
   loadDailySnapshots,
   loadMyGoal,
   saveMyGoal,
@@ -10,10 +9,10 @@ import {
   recordPatternStatus,
   recordVocabMasteryStatus
 } from '../services/storage';
-import { CEFR_PATTERNS_MASTER, getPatternsByLevel } from '../data/cefrPatternsMaster';
-import { CEFR_VOCAB_MASTER, getVocabMasterByLevel } from '../data/cefrVocabMaster';
-import { PatternMasterItem, VocabMasterItem, MasteryStatus, MyGoal } from '../types/mastery';
-import { Target, Sparkles, CheckCircle2, AlertCircle, Circle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Clock, Zap, Award, Layers, Volume2, ArrowRight } from 'lucide-react';
+import { getPatternsByLevel } from '../data/cefrPatternsMaster';
+import { getVocabMasterByLevel } from '../data/cefrVocabMaster';
+import { MasteryStatus, MyGoal } from '../types/mastery';
+import { Target, Sparkles, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Award, Layers, Volume2 } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { addDaysToDate } from '../utils/srs';
 
@@ -36,8 +35,8 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   // 目標設定状態
   const [myGoal, setMyGoal] = useState<MyGoal | null>(() => loadMyGoal());
   const [isEditingGoal, setIsEditingGoal] = useState(false);
-  const [goalTargetLevel, setGoalTargetLevel] = useState<'A1' | 'A2' | 'B1' | 'B2'>(myGoal?.targetLevel || 'B1');
-  const [goalDailyWords, setGoalDailyWords] = useState<number>(myGoal?.dailyWordsTarget || 700);
+  const [goalTargetLevel, setGoalTargetLevel] = useState<'A1' | 'A2' | 'B1' | 'B2'>(myGoal?.targetCefr as any || 'B1');
+  const [goalTargetDays, setGoalTargetDays] = useState<number>(myGoal?.targetDays || 60);
 
   // マスターステートと進捗の読み込み
   const [masteryState, setMasteryState] = useState(() => loadMasteryState());
@@ -93,10 +92,11 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   // 目標保存
   const handleSaveGoal = () => {
     const goal: MyGoal = {
-      targetLevel: goalTargetLevel,
-      targetDate: addDaysToDate(60),
-      dailyWordsTarget: goalDailyWords,
-      createdAt: new Date().toISOString(),
+      targetCefr: goalTargetLevel,
+      targetDays: goalTargetDays,
+      startDate: new Date().toISOString().substring(0, 10),
+      targetDate: addDaysToDate(goalTargetDays),
+      isActive: true,
     };
     saveMyGoal(goal);
     setMyGoal(goal);
@@ -111,16 +111,15 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
   // 目標達成予測 (ETA) 計算
   const etaCalculation = useMemo(() => {
-    const targetLvl = myGoal?.targetLevel || 'B1';
+    const targetLvl = (myGoal?.targetCefr || 'B1') as CefrTab;
     const p = allProgress[targetLvl];
     if (!p) return null;
 
-    const remainingPatterns = p.totalPatterns - p.masteredPatterns;
-    const remainingVocabs = p.totalVocabs - p.masteredVocabs;
+    const remainingPatterns = p.patternTotal - p.patternMastered;
+    const remainingVocabs = p.vocabTotal - p.vocabMastered;
     const totalRemaining = remainingPatterns + remainingVocabs;
 
-    // 1日あたりの平均習得ペース（デフォルト2項目/日、または目標読書量に応じて）
-    const itemsPerDay = Math.max(1, Math.round((myGoal?.dailyWordsTarget || 700) / 350));
+    const itemsPerDay = Math.max(1, Math.round(totalRemaining / Math.max(1, myGoal?.targetDays || 60)));
     const estimatedDays = Math.ceil(totalRemaining / itemsPerDay);
     const estimatedDate = addDaysToDate(estimatedDays);
 
@@ -131,7 +130,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       totalRemaining,
       estimatedDays,
       estimatedDate,
-      progressPercent: Math.round(p.overallPercentage),
+      progressPercent: Math.round(p.overallPct),
     };
   }, [allProgress, myGoal]);
 
@@ -207,20 +206,20 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
               </div>
 
               <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
-                <span className="text-slate-400">1日の目標読書ボリューム:</span>
+                <span className="text-slate-400">目標達成期間:</span>
                 <div className="flex items-center space-x-1.5">
-                  {[300, 500, 700, 1000].map(cnt => (
+                  {[30, 60, 90, 180].map(days => (
                     <button
-                      key={cnt}
+                      key={days}
                       type="button"
-                      onClick={() => setGoalDailyWords(cnt)}
+                      onClick={() => setGoalTargetDays(days)}
                       className={`px-2.5 py-1 rounded-lg font-bold ${
-                        goalDailyWords === cnt
+                        goalTargetDays === days
                           ? 'bg-blue-600/30 text-sky-300 border border-blue-500/40'
                           : 'bg-slate-900 text-slate-400 border border-slate-800'
                       }`}
                     >
-                      {cnt}語
+                      {days}日
                     </button>
                   ))}
                 </div>
@@ -289,7 +288,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                   <span className="text-[10px] text-slate-400 block">{levelNames[lvl].name.split(' ')[0]}</span>
                 </div>
                 <span className="text-lg font-black text-sky-400">
-                  {Math.round(prog.overallPercentage)}%
+                  {Math.round(prog.overallPct)}%
                 </span>
               </div>
 
@@ -298,13 +297,13 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                 {/* Patterns */}
                 <div className="space-y-0.5">
                   <div className="flex justify-between text-[10px] text-slate-400 font-semibold">
-                    <span>💡 構文 ({prog.masteredPatterns}/{prog.totalPatterns})</span>
-                    <span>{Math.round(prog.patternPercentage)}%</span>
+                    <span>💡 構文 ({prog.patternMastered}/{prog.patternTotal})</span>
+                    <span>{Math.round(prog.patternPct)}%</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-500"
-                      style={{ width: `${prog.patternPercentage}%` }}
+                      style={{ width: `${prog.patternPct}%` }}
                     />
                   </div>
                 </div>
@@ -312,13 +311,13 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                 {/* Vocabs */}
                 <div className="space-y-0.5">
                   <div className="flex justify-between text-[10px] text-slate-400 font-semibold">
-                    <span>🔤 語彙 ({prog.masteredVocabs}/{prog.totalVocabs})</span>
-                    <span>{Math.round(prog.vocabPercentage)}%</span>
+                    <span>🔤 語彙 ({prog.vocabMastered}/{prog.vocabTotal})</span>
+                    <span>{Math.round(prog.vocabPct)}%</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500"
-                      style={{ width: `${prog.vocabPercentage}%` }}
+                      style={{ width: `${prog.vocabPct}%` }}
                     />
                   </div>
                 </div>
@@ -342,14 +341,14 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {recentSnapshots.map((snap, i) => (
+            {recentSnapshots.map(snap => (
               <div key={snap.date} className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-1">
                 <span className="text-[10px] font-bold text-slate-400">{snap.date.substring(5)}</span>
                 <div className="text-sm font-extrabold text-white">
-                  {snap.wordsReadToday} <span className="text-[10px] font-normal text-slate-400">語読了</span>
+                  {snap.wordsRead} <span className="text-[10px] font-normal text-slate-400">語読了</span>
                 </div>
                 <div className="text-xs font-semibold text-emerald-400">
-                  {snap.totalMasteredCount} 項目定着
+                  +{snap.newMasteredPatternsCount + snap.newMasteredVocabsCount} 項目定着
                 </div>
               </div>
             ))}
@@ -435,17 +434,17 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                       <div className="space-y-1 flex-1">
                         <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                            {p.category}
+                            {p.categoryLabel}
                           </span>
                           <span className="text-base font-bold text-white tracking-tight">
                             {p.name}
                           </span>
                         </div>
                         <div className="text-xs text-slate-300 font-medium">
-                          {p.meaningJa}
+                          {p.meaning}
                         </div>
                         <div className="text-[11px] text-slate-400">
-                          💡 要点: {p.focusPoint}
+                          💡 要点: {p.focus}
                         </div>
                       </div>
 
@@ -456,7 +455,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                           className={`p-1.5 rounded-lg text-xs transition-colors ${
                             status === 'lapsed'
                               ? 'bg-rose-600 text-white shadow-md'
-                              : 'bg-slate-900 text-slate-400 hover:text-rose-300 hover:bg-slate-850'
+                              : 'bg-slate-900 text-slate-400 hover:text-rose-300 hover:bg-slate-855'
                           }`}
                           title="要復習に設定"
                         >
@@ -467,7 +466,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                           className={`p-1.5 rounded-lg text-xs transition-colors ${
                             status === 'mastered'
                               ? 'bg-emerald-600 text-white shadow-md'
-                              : 'bg-slate-900 text-slate-400 hover:text-emerald-300 hover:bg-slate-850'
+                              : 'bg-slate-900 text-slate-400 hover:text-emerald-300 hover:bg-slate-855'
                           }`}
                           title="習得済みに設定"
                         >

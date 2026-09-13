@@ -117,7 +117,7 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
     promptText += `【★最重要：習得対象のCEFR文法・構文パターン（ターゲットバインディング）】\n`;
     promptText += `学習者が身につけるべき重要構文です。**以下の構文パターンをストーリーの本文（セリフや地の文）の中に必ず自然な文脈で登場させてください**：\n`;
     targetPatterns.forEach((p, idx) => {
-      promptText += `${idx + 1}. [ID: ${p.id}] "${p.name}" (要点: ${p.focusPoint}${p.meaningJa ? ` / 意味: ${p.meaningJa}` : ''})\n`;
+      promptText += `${idx + 1}. [ID: ${p.id}] "${p.name}" (要点: ${p.focus}${p.meaning ? ` / 意味: ${p.meaning}` : ''})\n`;
     });
     promptText += `\n※登場させた構文は、後述の target_embeddings JSON 配列にそのID・使用フレーズ・訳・解説を必ず明記してください。\n\n`;
   }
@@ -227,8 +227,8 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
           targetId: p.id,
           type: 'pattern' as const,
           targetName: p.name,
-          focusPoint: p.focusPoint,
-          translation: p.meaningJa,
+          focusPoint: p.focus,
+          translation: p.meaning,
         }));
       }
 
@@ -637,19 +637,21 @@ ${s.estimatedDaysToTarget ? `- 現在ペースでの目標達成予測: 約 ${s.
 }
 
 export interface DetectedExpressionError {
-  mistake: string;
-  corrected: string;
+  userUtterance: string;
+  naturalExpression: string;
   corePattern: string;
+  suggestedCause?: string;
   explanation: string;
 }
 
 export interface CallAnalysisResult {
-  memoryUpdates: {
-    likes?: string[];
-    dislikes?: string[];
-    userNotes?: string[];
-    topicSummary?: string;
-  };
+  newLikes: string[];
+  newDislikes: string[];
+  newTopic?: string;
+  newUserNotes?: string[];
+  newPromises?: string[];
+  recapSummary?: string;
+  extractedVocabs?: ExtractedCallVocab[];
   detectedErrors?: DetectedExpressionError[];
   tokenUsage?: {
     promptTokens: number;
@@ -666,29 +668,31 @@ export interface CallAnalysisResult {
 export async function analyzeCallSessionAndExtractMemory(params: {
   apiKey: string;
   model?: string;
-  persona: Persona;
+  personaName?: string;
+  persona?: Persona;
   messages: CallMessage[];
   extractedVocabs?: ExtractedCallVocab[];
 }): Promise<CallAnalysisResult> {
-  const { apiKey, model = 'gemini-3.7-flash', persona, messages } = params;
+  const { apiKey, model = 'gemini-3.7-flash', persona, personaName = 'AI Partner', messages, extractedVocabs } = params;
+  const pName = persona?.name || personaName;
 
   if (!apiKey || messages.length < 2) {
-    return { memoryUpdates: {} };
+    return { newLikes: [], newDislikes: [] };
   }
 
   const conversationText = messages
-    .map(m => `${m.role === 'user' ? 'User' : persona.name}: ${m.text}`)
+    .map(m => `${m.role === 'user' ? 'User' : pName}: ${m.text}`)
     .join('\n');
 
   const prompt = `あなたは卓越した言語交換AIエージェントおよび英語指導のプロです。
-以下の「ユーザーとネイティブキャラクター(${persona.name})の英会話通話ログ」を分析し、2つのタスクを行ってください。
+以下の「ユーザーとネイティブキャラクター(${pName})の英会話通話ログ」を分析し、2つのタスクを行ってください。
 
 【会話ログ】
 ${conversationText}
 
 ---
 【タスク1: ペルソナの記憶更新 (Memory Update)】
-会話を通じて${persona.name}が新たに知ったユーザーの好み(likes)、苦手なもの(dislikes)、ユーザーに関する重要メモ(userNotes)、および今回の会話トピックの1文要約(topicSummary)を抽出してください。新規情報がない項目は空配列にしてください。
+会話を通じて${pName}が新たに知ったユーザーの好み(likes)、苦手なもの(dislikes)、ユーザーに関する重要メモ(userNotes)、および今回の会話トピックの1文要約(topicSummary)を抽出してください。新規情報がない項目は空配列にしてください。
 
 【タスク2: 発話カルテ・文法語法パターンの抽出 (Expression Error Analysis)】
 ユーザーの発言の中に、不自然な英語、文法ミス、和製英語、意図が伝わりにくい表現があれば最大3個まで抽出してください。
@@ -737,9 +741,24 @@ ${conversationText}
         const cleanJson = rawText.replace(/^```json\s*/, '').replace(/```\s*$/, '').trim();
         const parsed = JSON.parse(cleanJson);
 
+        const mem = parsed.memoryUpdates || parsed;
+        const errors: DetectedExpressionError[] = (parsed.detectedErrors || []).map((e: any) => ({
+          userUtterance: e.userUtterance || e.mistake || '',
+          naturalExpression: e.naturalExpression || e.corrected || '',
+          corePattern: e.corePattern || '',
+          suggestedCause: e.suggestedCause || e.causeCategory || 'grammar',
+          explanation: e.explanation || '',
+        }));
+
         return {
-          memoryUpdates: parsed.memoryUpdates || {},
-          detectedErrors: parsed.detectedErrors || [],
+          newLikes: mem.likes || mem.newLikes || [],
+          newDislikes: mem.dislikes || mem.newDislikes || [],
+          newTopic: mem.topicSummary || mem.newTopic || '',
+          newUserNotes: mem.userNotes || mem.newUserNotes || [],
+          newPromises: mem.promises || mem.newPromises || [],
+          recapSummary: mem.topicSummary || mem.recapSummary || '',
+          extractedVocabs: extractedVocabs || [],
+          detectedErrors: errors,
           tokenUsage: {
             promptTokens: usage?.promptTokenCount || 0,
             candidatesTokens: usage?.candidatesTokenCount || 0,
@@ -751,7 +770,7 @@ ${conversationText}
     }
   }
 
-  return { memoryUpdates: {} };
+  return { newLikes: [], newDislikes: [] };
 }
 
 /**
