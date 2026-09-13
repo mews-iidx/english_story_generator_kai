@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
 import { CefrLevel } from '../types/settings';
 import { ExtractedStoryVocab } from '../utils/storyVocabExtractor';
-import { Check, AlertCircle, Sparkles, BookOpen, ChevronRight, ChevronDown, ChevronUp, CheckCircle2 } from 'lucide-react';
+import { Check, AlertCircle, Sparkles, BookOpen, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, BookmarkCheck } from 'lucide-react';
 
 export type SyncVocabStatus = 'mastered' | 'lapsed' | 'unseen';
 
@@ -31,13 +31,46 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
   // パッシブ抽出単語リストの展開・折りたたみ（デフォルト: 折りたたみ）
   const [isVocabsExpanded, setIsVocabsExpanded] = useState(false);
 
-  // 単語ごとのステータス管理: デフォルトは「未遭遇/スキップ(unseen)」、読書中に追加されたものは「要復習(lapsed)」
+  // AI出題ターゲット単語のセット
+  const targetVocabs = useMemo(() => {
+    const targetSet = new Set<string>();
+    (story.targetVocabList || []).forEach(w => targetSet.add(w.toLowerCase().trim()));
+    (story.targetEmbeddings || []).filter(e => e.type === 'vocab').forEach(e => {
+      if (e.targetName) targetSet.add(e.targetName.toLowerCase().trim());
+    });
+
+    return extractedVocabs.filter(v => {
+      const isTarget = targetSet.has(v.phrase.toLowerCase()) || targetSet.has(v.matchedText.toLowerCase());
+      const isLapsed = initialLapsedPhrases.has(v.phrase.toLowerCase()) || initialLapsedPhrases.has(v.matchedText.toLowerCase());
+      return isTarget || isLapsed;
+    });
+  }, [story.targetVocabList, story.targetEmbeddings, extractedVocabs, initialLapsedPhrases]);
+
+  // 単語ごとのステータス管理:
+  // - ターゲット単語（かつ読書中に未追加）: デフォルト「習得済(mastered)」
+  // - 読書中に追加された単語: 「要復習(lapsed)」
+  // - その他のパッシブ単語: 「未遭遇/スキップ(unseen)」
   const [vocabStatusMap, setVocabStatusMap] = useState<Record<string, SyncVocabStatus>>(() => {
+    const targetSet = new Set<string>();
+    (story.targetVocabList || []).forEach(w => targetSet.add(w.toLowerCase().trim()));
+    (story.targetEmbeddings || []).filter(e => e.type === 'vocab').forEach(e => {
+      if (e.targetName) targetSet.add(e.targetName.toLowerCase().trim());
+    });
+
     const initial: Record<string, SyncVocabStatus> = {};
     extractedVocabs.forEach(v => {
       const isLapsed = initialLapsedPhrases.has(v.phrase.toLowerCase()) || 
                        initialLapsedPhrases.has(v.matchedText.toLowerCase());
-      initial[v.id] = isLapsed ? 'lapsed' : 'unseen';
+      const isTarget = targetSet.has(v.phrase.toLowerCase()) || 
+                       targetSet.has(v.matchedText.toLowerCase());
+
+      if (isLapsed) {
+        initial[v.id] = 'lapsed';
+      } else if (isTarget) {
+        initial[v.id] = 'mastered';
+      } else {
+        initial[v.id] = 'unseen';
+      }
     });
     return initial;
   });
@@ -55,7 +88,7 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
     return initial;
   });
 
-  // 選択中レベルフィルター
+  // 選択中レベルフィルター（パッシブ一覧用）
   const [selectedLevelFilter, setSelectedLevelFilter] = useState<'ALL' | CefrLevel>('ALL');
 
   // 単語ステータスの3段階トグル: unseen -> mastered -> lapsed -> unseen
@@ -65,6 +98,15 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
       const nextStatus: SyncVocabStatus = 
         cur === 'unseen' ? 'mastered' : 
         cur === 'mastered' ? 'lapsed' : 'unseen';
+      return { ...prev, [id]: nextStatus };
+    });
+  };
+
+  // ターゲット単語用の簡易2段階トグル: mastered <-> lapsed
+  const toggleTargetVocabStatus = (id: string) => {
+    setVocabStatusMap(prev => {
+      const cur = prev[id];
+      const nextStatus: SyncVocabStatus = cur === 'mastered' ? 'lapsed' : 'mastered';
       return { ...prev, [id]: nextStatus };
     });
   };
@@ -167,15 +209,15 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
 
         {/* Modal Scrollable Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
-          {/* Section 1: AI出題ターゲット構文（主役機能） */}
-          {targetPatterns.length > 0 ? (
+          {/* 1. 出題ターゲット構文プレビュー（主役機能） */}
+          {targetPatterns.length > 0 && (
             <div className="space-y-2.5 bg-slate-950/70 border border-purple-500/30 rounded-2xl p-4">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-xs sm:text-sm text-purple-300 flex items-center gap-1.5">
                   <Sparkles className="w-4 h-4 text-purple-400" />
-                  今回の出題ターゲット構文（{targetPatterns.length}件）
+                  今回のターゲット構文（{targetPatterns.length}件）
                 </span>
-                <span className="text-[11px] text-slate-400">タップで習得 / 要復習を切替</span>
+                <span className="text-[11px] text-slate-400">タップで切替</span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
@@ -226,7 +268,68 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
                 })}
               </div>
             </div>
-          ) : (
+          )}
+
+          {/* 2. 出題ターゲット単語プレビュー（デフォルト表示） */}
+          {targetVocabs.length > 0 && (
+            <div className="space-y-2.5 bg-slate-950/70 border border-sky-500/30 rounded-2xl p-4">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs sm:text-sm text-sky-300 flex items-center gap-1.5">
+                  <BookmarkCheck className="w-4 h-4 text-sky-400" />
+                  今回のターゲット単語（{targetVocabs.length}件）
+                </span>
+                <span className="text-[11px] text-slate-400">タップで切替</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {targetVocabs.map(v => {
+                  const status = vocabStatusMap[v.id] || 'unseen';
+                  const isMastered = status === 'mastered';
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => toggleTargetVocabStatus(v.id)}
+                      className={`p-3 rounded-2xl border text-left transition-all flex items-start justify-between gap-2 ${
+                        isMastered
+                          ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-100 hover:bg-emerald-900/40 shadow-sm'
+                          : 'bg-rose-950/30 border-rose-500/40 text-rose-200 hover:bg-rose-900/40'
+                      }`}
+                    >
+                      <div className="space-y-0.5 pr-1 flex-1">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="font-bold text-xs sm:text-sm text-white">{v.phrase}</span>
+                          <span className={`text-[9px] px-1 py-0.2 rounded font-bold border ${levelBadgeColors[v.cefr] || 'text-slate-400'}`}>
+                            {v.cefr}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-300 leading-tight">
+                          {v.meaning}
+                        </div>
+                      </div>
+
+                      <div className="flex-shrink-0 pt-0.5">
+                        {isMastered ? (
+                          <span className="flex items-center space-x-1 text-[11px] font-bold text-emerald-300 bg-emerald-950 px-2.5 py-1 rounded-xl border border-emerald-500/30 shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                            <span>習得済</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center space-x-1 text-[11px] font-bold text-rose-300 bg-rose-950 px-2.5 py-1 rounded-xl border border-rose-500/30">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            <span>要復習</span>
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 出題ターゲットも何もない場合の基本案内 */}
+          {targetPatterns.length === 0 && targetVocabs.length === 0 && (
             <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-2xl text-xs text-slate-300 space-y-1">
               <span className="font-bold text-white block">📖 今回の読書実績が記録されます</span>
               <span className="text-slate-400 text-[11px]">
@@ -235,13 +338,13 @@ export const StoryCompletionSyncModal: React.FC<StoryCompletionSyncModalProps> =
             </div>
           )}
 
-          {/* Section 2: 本文の出現単語（パッシブ一括登録・完全オプション） */}
+          {/* 3. 本文の出現単語（パッシブ一括登録・完全オプション） */}
           <div className="space-y-2 bg-slate-950/50 border border-slate-800/60 rounded-2xl p-3.5">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center space-x-2">
                 <BookOpen className="w-4 h-4 text-slate-400" />
                 <span className="text-xs sm:text-sm text-slate-300 font-semibold">
-                  本文の出現単語を一括登録（オプション）
+                  本文の全単語を一括登録（オプション）
                 </span>
                 {(masteredVocabs.length > 0 || lapsedVocabs.length > 0) && (
                   <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">

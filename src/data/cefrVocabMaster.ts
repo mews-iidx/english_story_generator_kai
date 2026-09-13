@@ -12,14 +12,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0002",
     "phrase": "about",
-    "meaning": "…について, に関して",
+    "meaning": "〜について, およそ",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0003",
     "phrase": "about",
-    "meaning": "…について, に関して",
+    "meaning": "〜について, およそ",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -89,7 +89,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0013",
     "phrase": "address",
-    "meaning": "住所, あて名",
+    "meaning": "『あて名』, 住所",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -117,7 +117,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0017",
     "phrase": "after",
-    "meaning": "…『の後に』, …後に",
+    "meaning": "〜の後に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -271,7 +271,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0039",
     "phrase": "anyone",
-    "meaning": "=anybody",
+    "meaning": "だれか, だれも, だれでも",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -362,7 +362,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0052",
     "phrase": "as",
-    "meaning": "Anglo-Saxon",
+    "meaning": "〜として, 〜のように, 〜するとき",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -376,14 +376,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0054",
     "phrase": "at",
-    "meaning": "astatineの化学記号",
+    "meaning": "〜で, 〜に, 〜において",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
   {
     "id": "vocab_a1_0055",
     "phrase": "august",
-    "meaning": "『8月』, 『August heat wave』{名}8月の熱波『August vacation』{名}8月の休暇",
+    "meaning": "『8月』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -474,7 +474,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0068",
     "phrase": "bath",
-    "meaning": "バス",
+    "meaning": "『入浴』, 水浴び",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -488,14 +488,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0070",
     "phrase": "be",
-    "meaning": "berylliumの化学記号",
+    "meaning": "〜である, 存在する, なる",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
   {
     "id": "vocab_a1_0071",
     "phrase": "be",
-    "meaning": "berylliumの化学記号",
+    "meaning": "〜である, 存在する, なる",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -551,7 +551,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0079",
     "phrase": "before",
-    "meaning": "…『の前に』, を前にして",
+    "meaning": "〜の前に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -621,7 +621,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0089",
     "phrase": "between",
-    "meaning": "…『の間に』, …『の間に』",
+    "meaning": "〜の間に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -642,7 +642,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0092",
     "phrase": "bike",
-    "meaning": "=bicycle",
+    "meaning": "自転車, バイク",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -656,7 +656,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0094",
     "phrase": "bird",
-    "meaning": "『鳥』, =shuttlecock",
+    "meaning": "鳥, 小鳥",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -726,7 +726,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0104",
     "phrase": "book",
-    "meaning": "本, 書物",
+    "meaning": "『本』, 書物",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -915,7 +915,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0131",
     "phrase": "by",
-    "meaning": "…『のそばに』, の近くに",
+    "meaning": "〜によって, 〜のそばに, 〜までに",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -964,7 +964,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0138",
     "phrase": "can",
-    "meaning": "Canada, Canadian",
+    "meaning": "〜できる, 〜してもよい",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -1027,14 +1027,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0147",
     "phrase": "cat",
-    "meaning": "clear air turbulence晴天乱流",
+    "meaning": "『猫』, ネコ科の動物",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0148",
     "phrase": "cd",
-    "meaning": "certificate of deposit, Civil Defense民間防衛",
+    "meaning": "CD, コンパクトディスク",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -1048,7 +1048,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0150",
     "phrase": "centre",
-    "meaning": "中心、センター",
+    "meaning": "中心, 中央, センター",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -1251,7 +1251,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0179",
     "phrase": "colour",
-    "meaning": "色",
+    "meaning": "色, 色彩",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -1370,7 +1370,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0196",
     "phrase": "could",
-    "meaning": "canの過去形, …『することができた』",
+    "meaning": "〜できた, 〜できるかもしれない",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -1559,14 +1559,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0223",
     "phrase": "design",
-    "meaning": "略図, 見取り図",
+    "meaning": "デザイン, 設計, 構想",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0224",
     "phrase": "design",
-    "meaning": "略図, 見取り図",
+    "meaning": "をデザインする, 設計する",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -1664,14 +1664,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0238",
     "phrase": "do",
-    "meaning": "…を『する』, 行う",
+    "meaning": "〜をする, 行う",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
   {
     "id": "vocab_a1_0239",
     "phrase": "do",
-    "meaning": "…を『する』, 行う",
+    "meaning": "〜をする, 行う",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -1706,14 +1706,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0244",
     "phrase": "down",
-    "meaning": "『下へ』, 降りて",
+    "meaning": "下へ, 下に",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0245",
     "phrase": "down",
-    "meaning": "『下へ』, 降りて",
+    "meaning": "下へ, 下に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -2105,7 +2105,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0301",
     "phrase": "face",
-    "meaning": "顔, 表情",
+    "meaning": "『顔』, 表情",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -2322,7 +2322,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0332",
     "phrase": "fine",
-    "meaning": "元気な, すばらしい, 晴れた",
+    "meaning": "罰金, に罰金を科する",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
@@ -2406,7 +2406,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0344",
     "phrase": "fly",
-    "meaning": "飛ぶ, 飛行機で行く",
+    "meaning": "『飛ぶ』, 『飛行機で飛ぶ』",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -2434,14 +2434,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0348",
     "phrase": "football",
-    "meaning": "『フットボール』, =soccer",
+    "meaning": "サッカー, フットボール",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0349",
     "phrase": "for",
-    "meaning": "『…の間』, 『…のために』",
+    "meaning": "〜のために, 〜に向かって, 〜の間",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -2525,7 +2525,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0361",
     "phrase": "from",
-    "meaning": "…『から』, …『から』",
+    "meaning": "〜から, 〜出身の",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -2707,14 +2707,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0387",
     "phrase": "grey",
-    "meaning": "=gray",
+    "meaning": "灰色の, グレーの",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_a1_0388",
     "phrase": "grey",
-    "meaning": "=gray",
+    "meaning": "灰色, グレー",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -2756,7 +2756,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0394",
     "phrase": "gym",
-    "meaning": "=gymnasium 1, 体操",
+    "meaning": "ジム, 体育館, トレーニング施設",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -2840,7 +2840,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0406",
     "phrase": "have",
-    "meaning": "を『持っている』, 所有している・が『いる』",
+    "meaning": "を持っている, 経験する",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -2854,7 +2854,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0408",
     "phrase": "he",
-    "meaning": "heliumの化学記号",
+    "meaning": "『彼』, あの男の人",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -2917,14 +2917,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0417",
     "phrase": "her",
-    "meaning": "『彼女の』, 『彼女に』",
+    "meaning": "『彼女を, 彼女に』, 彼女の",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
   {
     "id": "vocab_a1_0418",
     "phrase": "her",
-    "meaning": "『彼女の』, 『彼女に』",
+    "meaning": "『彼女を, 彼女に』, 彼女の",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -2945,7 +2945,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0421",
     "phrase": "hi",
-    "meaning": "Hawaii",
+    "meaning": "『やあ』, こんにちは",
     "cefr": "A1",
     "partOfSpeech": "感動詞"
   },
@@ -2959,14 +2959,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0423",
     "phrase": "him",
-    "meaning": "『彼を』, 『彼に』",
+    "meaning": "『彼を, 彼に』",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
   {
     "id": "vocab_a1_0424",
     "phrase": "his",
-    "meaning": "『彼の』, 『彼のもの』",
+    "meaning": "『彼の』, 彼のもの",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
@@ -3099,7 +3099,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0443",
     "phrase": "i",
-    "meaning": "『私は』, 私が",
+    "meaning": "『私, 僕』",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -3127,7 +3127,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0447",
     "phrase": "if",
-    "meaning": "intermediate frequency 中間周波",
+    "meaning": "『もし』…『ならば』, もし…したら",
     "cefr": "A1",
     "partOfSpeech": "接続詞"
   },
@@ -3155,14 +3155,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0451",
     "phrase": "in",
-    "meaning": "Indiana",
+    "meaning": "〜の中に, 〜において",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0452",
     "phrase": "in",
-    "meaning": "Indiana",
+    "meaning": "〜の中に, 〜において",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -3232,7 +3232,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0462",
     "phrase": "into",
-    "meaning": "…『の中へ』, …に突きあたって",
+    "meaning": "〜の中へ",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -3253,14 +3253,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0465",
     "phrase": "it",
-    "meaning": "『それは』, そのものは",
+    "meaning": "『それ』, そのこと",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
   {
     "id": "vocab_a1_0466",
     "phrase": "its",
-    "meaning": "『それの』, その",
+    "meaning": "『それの, その』",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
@@ -3288,7 +3288,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0470",
     "phrase": "job",
-    "meaning": "ヨブ, ヨブ記",
+    "meaning": "『職』, 勤め口",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -3463,21 +3463,21 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0495",
     "phrase": "left",
-    "meaning": "左の, 左側の",
+    "meaning": "leaveの過去・過去分詞, 『左の』",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_a1_0496",
     "phrase": "left",
-    "meaning": "左へ",
+    "meaning": "leaveの過去・過去分詞, 『左の』",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0497",
     "phrase": "left",
-    "meaning": "左, 左側",
+    "meaning": "leaveの過去・過去分詞, 『左の』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -3533,28 +3533,28 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0505",
     "phrase": "light",
-    "meaning": "明るい, 軽い",
+    "meaning": "『光, 光線』",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_a1_0506",
     "phrase": "light",
-    "meaning": "光, 明かり, 電灯",
+    "meaning": "『光, 光線』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0507",
     "phrase": "like",
-    "meaning": "〜のような, 〜のように",
+    "meaning": "…を『好む』, が好きである",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
   {
     "id": "vocab_a1_0508",
     "phrase": "like",
-    "meaning": "好きである, 好む",
+    "meaning": "…を『好む』, が好きである",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -3729,7 +3729,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0533",
     "phrase": "man",
-    "meaning": "マン島",
+    "meaning": "『男』, 男子",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -3757,7 +3757,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0537",
     "phrase": "march",
-    "meaning": "『3月』",
+    "meaning": "『行進する』, 行軍する",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -3792,7 +3792,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0542",
     "phrase": "may",
-    "meaning": "『5月』",
+    "meaning": "〜してもよい, 〜かもしれない",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -3806,7 +3806,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0544",
     "phrase": "me",
-    "meaning": "Maine, Middle English",
+    "meaning": "『私を, 私に』",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -3876,7 +3876,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0554",
     "phrase": "metre",
-    "meaning": "=meter, =meter",
+    "meaning": "メートル (長さの単位)",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -4107,14 +4107,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0587",
     "phrase": "must",
-    "meaning": "…『ねばならない』, すべきである",
+    "meaning": "〜しなければならない, 〜に違いない",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
   {
     "id": "vocab_a1_0588",
     "phrase": "my",
-    "meaning": "『私の』, おや",
+    "meaning": "『私の, 僕の』",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
@@ -4233,7 +4233,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0605",
     "phrase": "nice",
-    "meaning": "ニース",
+    "meaning": "『良い, 気持ちよい』",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
@@ -4268,14 +4268,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0610",
     "phrase": "no",
-    "meaning": "nobeliumの化学記号",
+    "meaning": "『一つも』…『ない』, 『決して…でない』",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
   {
     "id": "vocab_a1_0611",
     "phrase": "no",
-    "meaning": "nobeliumの化学記号",
+    "meaning": "『一つも』…『ない』, 『決して…でない』",
     "cefr": "A1",
     "partOfSpeech": "感動詞"
   },
@@ -4394,21 +4394,21 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0628",
     "phrase": "of",
-    "meaning": "OLD French古フランス語",
+    "meaning": "〜の, 〜に関する",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
   {
     "id": "vocab_a1_0629",
     "phrase": "off",
-    "meaning": "『から』, から離れて",
+    "meaning": "離れて, 落ちて",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0630",
     "phrase": "off",
-    "meaning": "『から』, から離れて",
+    "meaning": "離れて, 落ちて",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -4429,28 +4429,28 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0633",
     "phrase": "oh",
-    "meaning": "Ohio",
+    "meaning": "『おお』, ああ",
     "cefr": "A1",
     "partOfSpeech": "感動詞"
   },
   {
     "id": "vocab_a1_0634",
     "phrase": "ok",
-    "meaning": "Oklahomaの略",
+    "meaning": "オーケーな, 大丈夫な, 申し分のない",
     "cefr": "A1",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_a1_0635",
     "phrase": "ok",
-    "meaning": "Oklahomaの略",
+    "meaning": "オーケー, よく, 無事に",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0636",
     "phrase": "ok",
-    "meaning": "Oklahomaの略",
+    "meaning": "いいよ, 分かった, よし (承諾・同意)",
     "cefr": "A1",
     "partOfSpeech": "感動詞"
   },
@@ -4464,14 +4464,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0638",
     "phrase": "on",
-    "meaning": "…『の上に』, の上で",
+    "meaning": "〜の上に, 〜に接して",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0639",
     "phrase": "on",
-    "meaning": "…『の上に』, の上で",
+    "meaning": "〜の上に, 〜に接して",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -4590,7 +4590,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0656",
     "phrase": "or",
-    "meaning": "Oregon",
+    "meaning": "…『または』…, …か…",
     "cefr": "A1",
     "partOfSpeech": "接続詞"
   },
@@ -4611,14 +4611,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0659",
     "phrase": "order",
-    "meaning": "注文, 順序, 秩序",
+    "meaning": "『命令』, 指図",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0660",
     "phrase": "order",
-    "meaning": "注文する, 命令する",
+    "meaning": "『命令』, 指図",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -4639,21 +4639,21 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0663",
     "phrase": "our",
-    "meaning": "『我々の』, 『私たちの』",
+    "meaning": "『私たちの』, 我々の",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
   {
     "id": "vocab_a1_0664",
     "phrase": "out",
-    "meaning": "『外へ』, 外出して",
+    "meaning": "外へ, 外に",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0665",
     "phrase": "out",
-    "meaning": "『外へ』, 外出して",
+    "meaning": "外へ, 外に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -4667,14 +4667,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0667",
     "phrase": "over",
-    "meaning": "…『の上に』, を覆って",
+    "meaning": "〜を越えて, 〜の上に",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0668",
     "phrase": "over",
-    "meaning": "…『の上に』, を覆って",
+    "meaning": "〜を越えて, 〜の上に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -4751,7 +4751,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0679",
     "phrase": "park",
-    "meaning": "公園, 広場",
+    "meaning": "『公園』, 庭園",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -4821,7 +4821,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0689",
     "phrase": "pen",
-    "meaning": "International Association of Poets, Playwrights",
+    "meaning": "『ペン』, 万年筆",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -4982,7 +4982,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0712",
     "phrase": "plant",
-    "meaning": "植物, 草木, 工場",
+    "meaning": "『植物』, 草木・『草』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -5108,7 +5108,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0730",
     "phrase": "practise",
-    "meaning": "=practice",
+    "meaning": "練習する, 実践する",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -5136,7 +5136,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0734",
     "phrase": "present",
-    "meaning": "プレゼント, 贈り物, 現在",
+    "meaning": "『出席している, 居合わせている』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -5185,7 +5185,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0741",
     "phrase": "programme",
-    "meaning": "=program",
+    "meaning": "番組, プログラム, 計画",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -5500,7 +5500,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0786",
     "phrase": "salt",
-    "meaning": "Strategic Arms Limitation Talks戦略兵器制限交渉",
+    "meaning": "『塩』, 食塩",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -5668,7 +5668,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0810",
     "phrase": "she",
-    "meaning": "『彼女は』, 『彼女が』",
+    "meaning": "『彼女』, あの女の人",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -5724,7 +5724,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0818",
     "phrase": "should",
-    "meaning": "・・・・『すべきである』, するのが当然である",
+    "meaning": "〜すべきである, 〜はずだ",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -5969,14 +5969,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0853",
     "phrase": "sound",
-    "meaning": "音, 響き",
+    "meaning": "『音』, 『音響』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_0854",
     "phrase": "sound",
-    "meaning": "〜のように聞こえる, 音が鳴る",
+    "meaning": "『音』, 『音響』",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -6354,7 +6354,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0908",
     "phrase": "tell",
-    "meaning": "テル",
+    "meaning": "…を『話す』, 語る",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
@@ -6459,7 +6459,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0923",
     "phrase": "the",
-    "meaning": "その (定冠詞)",
+    "meaning": "その、例の (定冠詞)",
     "cefr": "A1",
     "partOfSpeech": "定冠詞"
   },
@@ -6473,14 +6473,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0925",
     "phrase": "their",
-    "meaning": "『彼らの』, 彼女らの",
+    "meaning": "『彼らの, 彼女らの』",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
   {
     "id": "vocab_a1_0926",
     "phrase": "them",
-    "meaning": "『彼らを』, 彼女らを",
+    "meaning": "『彼らを, 彼女らを』, それらを",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -6501,7 +6501,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0929",
     "phrase": "they",
-    "meaning": "『彼らが』, 彼女らが",
+    "meaning": "『彼ら, 彼女ら』, それら",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -6578,14 +6578,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0940",
     "phrase": "through",
-    "meaning": "『…を貫いて, 通って』",
+    "meaning": "〜を通って, 〜を通じて",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0941",
     "phrase": "through",
-    "meaning": "『…を貫いて, 通って』",
+    "meaning": "〜を通って, 〜を通じて",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -6627,14 +6627,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0947",
     "phrase": "to",
-    "meaning": "…『へ』, に",
+    "meaning": "〜へ, 〜に, 〜まで",
     "cefr": "A1",
     "partOfSpeech": "infinitive marker"
   },
   {
     "id": "vocab_a1_0948",
     "phrase": "to",
-    "meaning": "…『へ』, に",
+    "meaning": "〜へ, 〜に, 〜まで",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -6746,7 +6746,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0964",
     "phrase": "train",
-    "meaning": "電車, 列車",
+    "meaning": "『列車』, 汽車",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -6879,14 +6879,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0983",
     "phrase": "under",
-    "meaning": "『…の下に』, に覆われて",
+    "meaning": "〜の下に",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0984",
     "phrase": "under",
-    "meaning": "『…の下に』, に覆われて",
+    "meaning": "〜の下に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -6921,14 +6921,14 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0989",
     "phrase": "up",
-    "meaning": "『上へ』, 上のほうへ",
+    "meaning": "上へ, 上に",
     "cefr": "A1",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a1_0990",
     "phrase": "up",
-    "meaning": "『上へ』, 上のほうへ",
+    "meaning": "上へ, 上に",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -6942,7 +6942,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_0992",
     "phrase": "us",
-    "meaning": "unserviceable",
+    "meaning": "『私たちを, 私たちに』",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -7089,21 +7089,21 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1013",
     "phrase": "watch",
-    "meaning": "腕時計, 見張り",
+    "meaning": "…を『じっと見つめる』, 凝視する",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a1_1014",
     "phrase": "watch",
-    "meaning": "見る, 見守る, 警戒する",
+    "meaning": "…を『じっと見つめる』, 凝視する",
     "cefr": "A1",
     "partOfSpeech": "動詞"
   },
   {
     "id": "vocab_a1_1015",
     "phrase": "water",
-    "meaning": "水",
+    "meaning": "水, 『海』『の水』",
     "cefr": "A1",
     "partOfSpeech": "名詞"
   },
@@ -7117,7 +7117,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1017",
     "phrase": "we",
-    "meaning": "『私たちは』, われわれは",
+    "meaning": "『私たち, 我々』",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -7306,7 +7306,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1044",
     "phrase": "who",
-    "meaning": "世界保健機関",
+    "meaning": "『だれが』, どんな人が",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -7327,7 +7327,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1047",
     "phrase": "will",
-    "meaning": "…『だろう』, でしょう",
+    "meaning": "〜だろう, 〜するつもりだ",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -7362,7 +7362,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1052",
     "phrase": "with",
-    "meaning": "…『と』, と共に",
+    "meaning": "〜と一緒に, 〜を持って",
     "cefr": "A1",
     "partOfSpeech": "前置詞"
   },
@@ -7425,7 +7425,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1061",
     "phrase": "would",
-    "meaning": "『…だろう, 』でしょう",
+    "meaning": "〜だろう, 〜したものだ",
     "cefr": "A1",
     "partOfSpeech": "助動詞"
   },
@@ -7460,7 +7460,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1066",
     "phrase": "yeah",
-    "meaning": "=yes",
+    "meaning": "うん, そう (yesの口語)",
     "cefr": "A1",
     "partOfSpeech": "感動詞"
   },
@@ -7509,7 +7509,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1073",
     "phrase": "you",
-    "meaning": "『あなたは』, 君は",
+    "meaning": "『あなた, あなたたち』",
     "cefr": "A1",
     "partOfSpeech": "代名詞"
   },
@@ -7523,7 +7523,7 @@ export const A1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a1_1075",
     "phrase": "your",
-    "meaning": "『あなたの』, 君の",
+    "meaning": "『あなたの』, あなたたちの",
     "cefr": "A1",
     "partOfSpeech": "限定詞"
   },
@@ -7588,7 +7588,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0008",
     "phrase": "act",
-    "meaning": "American College Testing, Australian Capital Territory",
+    "meaning": "『行い』, 『行為』",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -7658,14 +7658,14 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0018",
     "phrase": "after",
-    "meaning": "…『の後に』, …後に",
+    "meaning": "〜の後に",
     "cefr": "A2",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a2_0019",
     "phrase": "after",
-    "meaning": "…『の後に』, …後に",
+    "meaning": "〜の後に",
     "cefr": "A2",
     "partOfSpeech": "接続詞"
   },
@@ -7840,7 +7840,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0044",
     "phrase": "anyway",
-    "meaning": "=anyhow",
+    "meaning": "とにかく, いずれにしても",
     "cefr": "A2",
     "partOfSpeech": "副詞"
   },
@@ -7938,14 +7938,14 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0058",
     "phrase": "as",
-    "meaning": "Anglo-Saxon",
+    "meaning": "〜として, 〜のように, 〜するとき",
     "cefr": "A2",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a2_0059",
     "phrase": "as",
-    "meaning": "Anglo-Saxon",
+    "meaning": "〜として, 〜のように, 〜するとき",
     "cefr": "A2",
     "partOfSpeech": "接続詞"
   },
@@ -8155,14 +8155,14 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0089",
     "phrase": "before",
-    "meaning": "…『の前に』, を前にして",
+    "meaning": "〜の前に",
     "cefr": "A2",
     "partOfSpeech": "副詞"
   },
   {
     "id": "vocab_a2_0090",
     "phrase": "before",
-    "meaning": "…『の前に』, を前にして",
+    "meaning": "〜の前に",
     "cefr": "A2",
     "partOfSpeech": "接続詞"
   },
@@ -8225,7 +8225,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0099",
     "phrase": "between",
-    "meaning": "…『の間に』, …『の間に』",
+    "meaning": "〜の間に",
     "cefr": "A2",
     "partOfSpeech": "副詞"
   },
@@ -8323,7 +8323,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0113",
     "phrase": "book",
-    "meaning": "予約する, 記入する",
+    "meaning": "『本』, 書物",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -8456,7 +8456,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0132",
     "phrase": "can",
-    "meaning": "Canada, Canadian",
+    "meaning": "〜できる, 〜してもよい",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -10010,7 +10010,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0354",
     "phrase": "fly",
-    "meaning": "ハエ (昆虫)",
+    "meaning": "『飛ぶ』, 『飛行機で飛ぶ』",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -10325,7 +10325,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0399",
     "phrase": "have",
-    "meaning": "を『持っている』, 所有している・が『いる』",
+    "meaning": "を持っている, 経験する",
     "cefr": "A2",
     "partOfSpeech": "助動詞"
   },
@@ -10430,7 +10430,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0414",
     "phrase": "his",
-    "meaning": "『彼の』, 『彼のもの』",
+    "meaning": "『彼の』, 彼のもの",
     "cefr": "A2",
     "partOfSpeech": "代名詞"
   },
@@ -10633,7 +10633,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0443",
     "phrase": "informal",
-    "meaning": "『正式でない』, 略式の",
+    "meaning": "形式ばらない, 略式の, くだけた",
     "cefr": "A2",
     "partOfSpeech": "形容詞"
   },
@@ -10717,7 +10717,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0455",
     "phrase": "international",
-    "meaning": "インターナショナル",
+    "meaning": "『国際的な』, 国家間の",
     "cefr": "A2",
     "partOfSpeech": "形容詞"
   },
@@ -10885,7 +10885,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0479",
     "phrase": "lab",
-    "meaning": "Labour Party労働党",
+    "meaning": "実験室",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -11102,7 +11102,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0510",
     "phrase": "light",
-    "meaning": "照らす, 火をつける",
+    "meaning": "『光, 光線』",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -11291,14 +11291,14 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0537",
     "phrase": "mark",
-    "meaning": "聖マルコ, 新約聖書の「マルコによる福音書」",
+    "meaning": "『跡』, 汚れ",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_a2_0538",
     "phrase": "mark",
-    "meaning": "聖マルコ, 新約聖書の「マルコによる福音書」",
+    "meaning": "『跡』, 汚れ",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -11347,7 +11347,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0545",
     "phrase": "may",
-    "meaning": "『5月』",
+    "meaning": "〜してもよい, 〜かもしれない",
     "cefr": "A2",
     "partOfSpeech": "助動詞"
   },
@@ -11417,7 +11417,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0555",
     "phrase": "might",
-    "meaning": "mayの過去形, …『かもしれないのだが』",
+    "meaning": "〜かもしれない",
     "cefr": "A2",
     "partOfSpeech": "助動詞"
   },
@@ -11984,7 +11984,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0636",
     "phrase": "petrol",
-    "meaning": "=gasoline",
+    "meaning": "ガソリン (英)",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -12033,7 +12033,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0643",
     "phrase": "plant",
-    "meaning": "植える, まく",
+    "meaning": "『植物』, 草木・『草』",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -12397,7 +12397,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0695",
     "phrase": "railway",
-    "meaning": "=railroad, 線路",
+    "meaning": "鉄道, 線路",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -12558,7 +12558,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0718",
     "phrase": "relationship",
-    "meaning": "=relation 1, 血縁関係",
+    "meaning": "関係, 間柄, つながり",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -13034,7 +13034,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0786",
     "phrase": "shall",
-    "meaning": "…『でしょう』, だろう",
+    "meaning": "〜しましょうか",
     "cefr": "A2",
     "partOfSpeech": "助動詞"
   },
@@ -13307,7 +13307,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0825",
     "phrase": "soap",
-    "meaning": "『石けん』, =soap opera",
+    "meaning": "石けん, せっけん",
     "cefr": "A2",
     "partOfSpeech": "名詞"
   },
@@ -14021,7 +14021,7 @@ export const A2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_a2_0927",
     "phrase": "train",
-    "meaning": "訓練する, トレーニングする",
+    "meaning": "『列車』, 汽車",
     "cefr": "A2",
     "partOfSpeech": "動詞"
   },
@@ -14520,14 +14520,14 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0008",
     "phrase": "act",
-    "meaning": "American College Testing, Australian Capital Territory",
+    "meaning": "『行い』, 『行為』",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_b1_0009",
     "phrase": "ad",
-    "meaning": "西暦…年, 広告",
+    "meaning": "広告",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -14681,7 +14681,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0031",
     "phrase": "analyse",
-    "meaning": "=analyze",
+    "meaning": "を分析する, 詳しく調べる",
     "cefr": "B1",
     "partOfSpeech": "動詞"
   },
@@ -14870,7 +14870,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0058",
     "phrase": "backwards",
-    "meaning": "=backward",
+    "meaning": "後ろへ, 逆に, さかのぼって",
     "cefr": "B1",
     "partOfSpeech": "副詞"
   },
@@ -14975,7 +14975,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0073",
     "phrase": "bell",
-    "meaning": "ベル",
+    "meaning": "『鐘』, 釣り鐘",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -15143,7 +15143,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0097",
     "phrase": "by",
-    "meaning": "…『のそばに』, の近くに",
+    "meaning": "〜によって, 〜のそばに, 〜までに",
     "cefr": "B1",
     "partOfSpeech": "副詞"
   },
@@ -15199,7 +15199,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0105",
     "phrase": "cap",
-    "meaning": "Civil Air Patrol民間航空巡視員",
+    "meaning": "『帽子』, 制帽",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -15248,7 +15248,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0112",
     "phrase": "centre",
-    "meaning": "中心、センター",
+    "meaning": "集中させる, 中心に置く",
     "cefr": "B1",
     "partOfSpeech": "動詞"
   },
@@ -15955,7 +15955,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0213",
     "phrase": "diagram",
-    "meaning": "説明図, 略図",
+    "meaning": "図, 図表, ダイヤグラム",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -16592,7 +16592,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0304",
     "phrase": "favour",
-    "meaning": "好意、恩恵",
+    "meaning": "好意, 親切な行為, 支持",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -17152,7 +17152,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0384",
     "phrase": "host",
-    "meaning": "ホスチア, 聖餐式のパン",
+    "meaning": "大群, 大勢",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -17432,7 +17432,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0424",
     "phrase": "it",
-    "meaning": "『それは』, そのものは",
+    "meaning": "『それ』, そのこと",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -17845,7 +17845,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0483",
     "phrase": "meanwhile",
-    "meaning": "=meantime",
+    "meaning": "その間に, 一方では",
     "cefr": "B1",
     "partOfSpeech": "副詞"
   },
@@ -18069,7 +18069,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0515",
     "phrase": "net",
-    "meaning": "National Educational Television 米教育テレビジョン",
+    "meaning": "『網』, 網",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -18279,7 +18279,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0545",
     "phrase": "pan",
-    "meaning": "牧羊神, パン",
+    "meaning": "『平なべ』, 平なべ状の物",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -18517,7 +18517,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0579",
     "phrase": "politician",
-    "meaning": "『政治家』, 政略家",
+    "meaning": "政治家",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -20309,7 +20309,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0835",
     "phrase": "tyre",
-    "meaning": "=tire",
+    "meaning": "タイヤ",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -20652,7 +20652,7 @@ export const B1_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b1_0884",
     "phrase": "will",
-    "meaning": "…『だろう』, でしょう",
+    "meaning": "〜だろう, 〜するつもりだ",
     "cefr": "B1",
     "partOfSpeech": "名詞"
   },
@@ -20962,7 +20962,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0027",
     "phrase": "address",
-    "meaning": "（問題に）取り組む, 対処する, 演説する",
+    "meaning": "『あて名』, 住所",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -21060,7 +21060,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0041",
     "phrase": "aggressive",
-    "meaning": "侵略的な, 攻撃的な",
+    "meaning": "攻撃的な, 積極的な",
     "cefr": "B2",
     "partOfSpeech": "形容詞"
   },
@@ -21074,14 +21074,14 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0043",
     "phrase": "aid",
-    "meaning": "artificial insemination by donor 非配偶者間人工受精",
+    "meaning": "…を『助ける』, 援助する",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_b2_0044",
     "phrase": "aid",
-    "meaning": "artificial insemination by donor 非配偶者間人工受精",
+    "meaning": "…を『助ける』, 援助する",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -21662,7 +21662,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0127",
     "phrase": "being",
-    "meaning": "存在, 実在",
+    "meaning": "be動詞の現在分詞・動名詞",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -22922,14 +22922,14 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0307",
     "phrase": "core",
-    "meaning": "Congress of Racial Equality人種平等会議",
+    "meaning": "『しん』, 核心",
     "cefr": "B2",
     "partOfSpeech": "形容詞"
   },
   {
     "id": "vocab_b2_0308",
     "phrase": "core",
-    "meaning": "Congress of Racial Equality人種平等会議",
+    "meaning": "『しん』, 核心",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -23377,7 +23377,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0372",
     "phrase": "defence",
-    "meaning": "=defense",
+    "meaning": "防衛, 防御, 弁護",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -23699,7 +23699,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0418",
     "phrase": "disc",
-    "meaning": "=record, =disk",
+    "meaning": "円盤, ディスク, レコード",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -23916,7 +23916,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0449",
     "phrase": "dot",
-    "meaning": "Department of Transportation運輸省",
+    "meaning": "『点』, ぽち",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -23944,7 +23944,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0453",
     "phrase": "downwards",
-    "meaning": "=downward",
+    "meaning": "下向きに, 下方へ",
     "cefr": "B2",
     "partOfSpeech": "副詞"
   },
@@ -24238,7 +24238,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0495",
     "phrase": "enquiry",
-    "meaning": "=inquiry",
+    "meaning": "問い合わせ, 照会, 調査",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -24329,7 +24329,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0508",
     "phrase": "era",
-    "meaning": "Equal Rights Amendment合衆国憲法の男女同権修正条項",
+    "meaning": "時代, 紀元",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -24749,7 +24749,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0568",
     "phrase": "favour",
-    "meaning": "好意、恩恵",
+    "meaning": "を好む, 支持する, 賛成する",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -24847,7 +24847,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0582",
     "phrase": "firefighter",
-    "meaning": "=fireman",
+    "meaning": "消防士",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -25022,7 +25022,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0607",
     "phrase": "fortunate",
-    "meaning": "『幸運な』, 幸せな",
+    "meaning": "風味, 味, 趣",
     "cefr": "B2",
     "partOfSpeech": "形容詞"
   },
@@ -25414,14 +25414,14 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0663",
     "phrase": "grant",
-    "meaning": "グラント",
+    "meaning": "を『かなえる』, 聞き入れる",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_b2_0664",
     "phrase": "grant",
-    "meaning": "グラント",
+    "meaning": "を『かなえる』, 聞き入れる",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -25435,7 +25435,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0666",
     "phrase": "graphics",
-    "meaning": "製図法, =graphic arts",
+    "meaning": "画像, グラフィックス, 視覚表現",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -25694,14 +25694,14 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0703",
     "phrase": "honour",
-    "meaning": "名誉、栄誉",
+    "meaning": "名誉, 栄誉, 敬意",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_b2_0704",
     "phrase": "honour",
-    "meaning": "名誉、栄誉",
+    "meaning": "を称える, 敬う, 守る",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -25722,7 +25722,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0707",
     "phrase": "host",
-    "meaning": "ホスチア, 聖餐式のパン",
+    "meaning": "大群, 大勢",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -25757,7 +25757,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0712",
     "phrase": "humour",
-    "meaning": "ユーモア",
+    "meaning": "ユーモア, おかしさ, 機嫌",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -26030,7 +26030,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0751",
     "phrase": "info",
-    "meaning": "=information",
+    "meaning": "情報 (informationの略)",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -26156,7 +26156,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0769",
     "phrase": "inspire",
-    "meaning": "を『鼓舞する』, を霊感を与えて生み出させる",
+    "meaning": "労働, 勤労, 陣痛",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -26401,7 +26401,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0804",
     "phrase": "judgement",
-    "meaning": "=judgment",
+    "meaning": "判断, 判決, 評価",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -26443,7 +26443,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0810",
     "phrase": "labour",
-    "meaning": "労働、勤労",
+    "meaning": "労働, 勤労, 陣痛",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -26632,7 +26632,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0837",
     "phrase": "litre",
-    "meaning": "=liter",
+    "meaning": "リットル (体積の単位)",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -27031,7 +27031,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0894",
     "phrase": "miner",
-    "meaning": "鉱夫, 坑夫",
+    "meaning": "隣人, 近所の人",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -27353,7 +27353,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0940",
     "phrase": "negotiate",
-    "meaning": "を『取り決める』, 『協定する』",
+    "meaning": "組織, 団体, 機関",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -27556,7 +27556,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_0969",
     "phrase": "offence",
-    "meaning": "=offense",
+    "meaning": "違反, 犯罪, 気分を害すること",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -27815,14 +27815,14 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1006",
     "phrase": "pace",
-    "meaning": "歩調, ペース, 速度, 一歩",
+    "meaning": "『1歩』, 歩幅",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
   {
     "id": "vocab_b2_1007",
     "phrase": "pace",
-    "meaning": "（不安そうに）行ったり来たりする, 歩調を合わせる",
+    "meaning": "『1歩』, 歩幅",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -28361,7 +28361,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1084",
     "phrase": "print",
-    "meaning": "…を『印刷する』, を『出版する』",
+    "meaning": "番組, 計画, プログラム",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -28753,7 +28753,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1140",
     "phrase": "rate",
-    "meaning": "『割合』, 『率』",
+    "meaning": "を実感する, 実現する, 悟る",
     "cefr": "B2",
     "partOfSpeech": "動詞"
   },
@@ -28823,7 +28823,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1150",
     "phrase": "recession",
-    "meaning": "景気後退, 不況",
+    "meaning": "を認識する, 認める, 見分ける",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -29306,7 +29306,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1219",
     "phrase": "romance",
-    "meaning": "ロマンス語系の",
+    "meaning": "『伝奇物語』, 冒険物語",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -30783,7 +30783,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1430",
     "phrase": "territory",
-    "meaning": "『地域』, 地方",
+    "meaning": "劇場, 演劇",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -30937,7 +30937,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1452",
     "phrase": "tonne",
-    "meaning": "=metric ton メートルトン",
+    "meaning": "トン (1000kg)",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -31070,7 +31070,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1471",
     "phrase": "tribe",
-    "meaning": "『部族』, 仲間",
+    "meaning": "旅行者, 旅人",
     "cefr": "B2",
     "partOfSpeech": "名詞"
   },
@@ -31287,7 +31287,7 @@ export const B2_VOCABS: VocabMasterItem[] = [
   {
     "id": "vocab_b2_1502",
     "phrase": "upwards",
-    "meaning": "=upward",
+    "meaning": "上向きに, 上方へ, それ以上に",
     "cefr": "B2",
     "partOfSpeech": "副詞"
   },
