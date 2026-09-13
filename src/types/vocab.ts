@@ -8,6 +8,12 @@ export interface VocabLookupResult {
 
 export type CardState = 'new' | 'learning' | 'review' | 'relearning';
 
+export interface PatternVariationData {
+  sentence: string;
+  translation: string;
+  targetTokens: string[];
+}
+
 export interface VocabItem {
   id: string;
   phrase: string;
@@ -29,6 +35,12 @@ export interface VocabItem {
   cardState?: CardState;      // 'new' | 'learning' | 'review' | 'relearning'
   learningStep?: number;      // 0 (Step 1: 1分), 1 (Step 2: 10分)
   dueTimestamp?: number | null; // 当日内再出題のミリ秒タイムスタンプ
+
+  // 構文カード (Syntax Pattern Cards) 拡張フィールド
+  cardType?: 'vocab' | 'pattern';
+  patternId?: string;
+  level?: string;
+  variations?: PatternVariationData[];
 }
 
 export type VocabFilterStatus = 'all' | 'due' | 'learning' | 'mastered';

@@ -1121,3 +1121,47 @@ export function getUnmasteredTargetVocabs(level: 'A1' | 'A2' | 'B1' | 'B2', coun
 
   return pool.slice(0, count);
 }
+
+/**
+ * 語彙アイテムとマスターDBの構文パターンカード（要復習・遭遇済み）を統合したAnkiデッキを生成
+ */
+export function loadAnkiUnifiedDeck(): VocabItem[] {
+  const vocabs = loadVocabs();
+  const mastery = loadMasteryState();
+  const today = getTodayDateString();
+
+  const patternCards: VocabItem[] = [];
+
+  // マスター構文のうち、ユーザーが要復習(lapsed)または遭遇(exposed)したものをカード化
+  CEFR_PATTERNS_MASTER.forEach(pat => {
+    const pState = mastery.patterns[pat.id];
+    if (pState && (pState.status === 'lapsed' || pState.status === 'exposed')) {
+      const rotIdx = (pState.reviewCount || 0) % pat.variations.length;
+      const currentVar = pat.variations[rotIdx];
+
+      patternCards.push({
+        id: pat.id,
+        phrase: pat.name,
+        meaning: pat.meaningJa,
+        partOfSpeech: pat.category,
+        contextNote: pat.focusPoint,
+        exampleSentence: currentVar.sentence,
+        lapseCount: pState.status === 'lapsed' ? 1 : 0,
+        repetitionCount: pState.reviewCount || 0,
+        intervalDays: pState.interval || 1,
+        nextReviewDate: pState.nextReviewDate || today,
+        lastReviewedAt: pState.lastTested || new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        importance: 5,
+        easeFactor: pState.easeFactor || 2.5,
+        cardState: pState.status === 'lapsed' ? 'relearning' : 'review',
+        cardType: 'pattern',
+        patternId: pat.id,
+        level: pat.level,
+        variations: pat.variations,
+      });
+    }
+  });
+
+  return [...vocabs, ...patternCards];
+}

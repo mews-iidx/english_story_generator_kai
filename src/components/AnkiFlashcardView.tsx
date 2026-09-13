@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Zap, Filter, Layers, ArrowRight, Undo2 } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, RotateCcw, Star, ChevronDown, ChevronUp, BookOpen, Shuffle, Zap, Filter, Layers, ArrowRight, Undo2, Lightbulb, Repeat } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
 
-export type AnkiImportanceFilter = 'ge4' | 'ge3' | 'all' | 'only5' | 'only4' | 'only3' | 'low';
+export type AnkiImportanceFilter = 'ge4' | 'ge3' | 'all' | 'syntax' | 'only5' | 'only4' | 'only3' | 'low';
 
 interface FilterOption {
   id: AnkiImportanceFilter;
@@ -24,6 +24,13 @@ const FILTER_OPTIONS: FilterOption[] = [
     filterFn: (v) => (v.importance ?? 3) >= 4,
   },
   {
+    id: 'syntax',
+    label: '💡 構文カード (3文ローテーション)',
+    badgeLabel: '💡 構文マスター',
+    description: '文脈依存を防ぐ3パターン回転出題の構文カード',
+    filterFn: (v) => v.cardType === 'pattern',
+  },
+  {
     id: 'ge3',
     label: '★3以上 (標準〜重要)',
     badgeLabel: '★3以上 ⭐',
@@ -32,9 +39,9 @@ const FILTER_OPTIONS: FilterOption[] = [
   },
   {
     id: 'all',
-    label: 'すべて (全重要度)',
+    label: 'すべて (全語彙・構文)',
     badgeLabel: 'すべて 📚',
-    description: '登録された全語彙をまとめて復習',
+    description: '登録された全語彙と構文カードをまとめて復習',
     filterFn: () => true,
   },
   {
@@ -42,7 +49,7 @@ const FILTER_OPTIONS: FilterOption[] = [
     label: '★5 (超重要・日常必須)',
     badgeLabel: '★5 日常必須',
     description: '最優先で身につけるべき基礎語彙',
-    filterFn: (v) => (v.importance ?? 3) === 5,
+    filterFn: (v) => (v.importance ?? 3) === 5 && v.cardType !== 'pattern',
   },
   {
     id: 'only4',
@@ -139,6 +146,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const filterStats = useMemo(() => {
     const stats: Record<AnkiImportanceFilter, { total: number; due: number }> = {
       ge4: { total: 0, due: 0 },
+      syntax: { total: 0, due: 0 },
       ge3: { total: 0, due: 0 },
       all: { total: 0, due: 0 },
       only5: { total: 0, due: 0 },
@@ -188,7 +196,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   // 操作取り消し（Undo）履歴スタック
   const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
 
-  // セッション初期化ヘルパー（本家Anki準拠：allowExtraStudy=false時は本日の期日/学習中カードのみ出題）
+  // セッション初期化ヘルパー
   const initSession = useCallback((targetVocabs: VocabItem[], allowExtraStudy: boolean = false) => {
     const learningCards = targetVocabs.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
     const dueReviewCards = targetVocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
@@ -197,18 +205,17 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     let initialLearning: VocabItem[] = [];
 
     if (dueReviewCards.length > 0 || learningCards.length > 0) {
-      // 🟢 本家Anki: 今日の復習期日・学習中カードのみを出題
+      // 今日の復習期日・学習中カードのみを出題
       initialReviews = shuffleArray(dueReviewCards);
       initialLearning = learningCards;
       setIsCustomStudyMode(false);
     } else if (allowExtraStudy) {
-      // 🔵 ユーザーが「追加で練習する」を明示的にクリックした場合のみ、未定着カードを演習
+      // 追加練習
       const unmastered = targetVocabs.filter(v => (v.repetitionCount ?? 0) < 4);
       initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
       initialLearning = [];
       setIsCustomStudyMode(true);
     } else {
-      // 🛑 本家Anki: 今日の復習分が0件なら、勝手にカードを追加せず完了画面を表示
       initialReviews = [];
       initialLearning = [];
       setIsCustomStudyMode(false);
@@ -220,626 +227,508 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setLearningPool(initialLearning);
     setActiveCard(firstCard);
     setTotalSessionCardsCount(initialReviews.length + initialLearning.length);
-    setGraduatedIds(new Set());
-    setSessionReviewedCount(0);
-    setHistoryStack([]);
     setIsFlipped(false);
     setShowExample(false);
+    setSessionReviewedCount(0);
+    setGraduatedIds(new Set());
+    setHistoryStack([]);
   }, [today]);
 
-  // 初回マウント時のみ初期化（期日カードのみロード）
-  const isInitializedRef = useRef(false);
   useEffect(() => {
-    if (!isInitializedRef.current && filteredVocabs.length > 0) {
-      initSession(filteredVocabs, false);
-      isInitializedRef.current = true;
-    }
-  }, [filteredVocabs, initSession]);
+    initSession(filteredVocabs, false);
+  }, [importanceFilter, initSession]);
 
-  // フィルター変更ハンドラー
-  const handleSelectFilter = useCallback((newFilter: AnkiImportanceFilter) => {
+  const handleFilterChange = (newFilter: AnkiImportanceFilter) => {
+    if (newFilter === importanceFilter) return;
     setImportanceFilter(newFilter);
     localStorage.setItem('anki_importance_filter', newFilter);
+  };
 
-    const targetDef = FILTER_OPTIONS.find(f => f.id === newFilter) || FILTER_OPTIONS[0];
-    const targetVocabs = vocabs.filter(targetDef.filterFn);
-    initSession(targetVocabs, false);
-  }, [vocabs, initSession]);
-
-  // 次回間隔プレビュー（Anki本家同様に各ボタンに表示）
-  const nextIntervals = useMemo(() => {
-    return getNextReviewIntervals(activeCard ?? undefined);
+  // 次回復習間隔のプレビュー
+  const intervals = useMemo(() => {
+    if (!activeCard) return { again: '1分', hard: '6分', good: '10分', easy: '4日' };
+    return getNextReviewIntervals(activeCard);
   }, [activeCard]);
 
-  // 新しいカードになった時の読み上げ
-  useEffect(() => {
+  // 構文カード用のローテーション文取得
+  const patternVariationData = useMemo(() => {
+    if (!activeCard || !activeCard.variations || activeCard.variations.length === 0) return null;
+    const rotIdx = (activeCard.repetitionCount || 0) % activeCard.variations.length;
+    const currentVar = activeCard.variations[rotIdx];
+    return {
+      rotIdx,
+      currentVar,
+      allVariations: activeCard.variations,
+    };
+  }, [activeCard]);
+
+  // フリップ（回答表示）
+  const handleFlip = () => {
+    setIsFlipped(true);
+    if (activeCard) {
+      const textToSpeak = activeCard.cardType === 'pattern' && patternVariationData
+        ? patternVariationData.currentVar.sentence
+        : activeCard.phrase;
+      speakText(textToSpeak);
+    }
+  };
+
+  // Undo (直前の評価を取り消す)
+  const handleUndo = () => {
+    if (historyStack.length === 0) return;
+
+    const lastSnapshot = historyStack[historyStack.length - 1];
+    setHistoryStack(prev => prev.slice(0, -1));
+
+    if (onRevertCard) {
+      onRevertCard(lastSnapshot.ratedCard);
+    }
+
+    setReviewQueue(lastSnapshot.previousReviewQueue);
+    setLearningPool(lastSnapshot.previousLearningPool);
+    setGraduatedIds(lastSnapshot.previousGraduatedIds);
+    setSessionReviewedCount(lastSnapshot.previousReviewedCount);
+    setActiveCard(lastSnapshot.activeCardBefore);
     setIsFlipped(false);
     setShowExample(false);
-    if (activeCard) {
-      speakText(activeCard.phrase, 0.95);
-    }
-  }, [activeCard?.id]);
+  };
 
-  // レーティング評価処理（Anki SM-2 & Learning Steps 1m/10m 完全準拠）
-  const handleRating = useCallback((rating: 'again' | 'hard' | 'good' | 'easy') => {
+  // 解答評価ハンドラー (Again / Hard / Good / Easy)
+  const handleRate = (rating: 'again' | 'hard' | 'good' | 'easy') => {
     if (!activeCard) return;
 
-    const cardId = activeCard.id;
+    const currentCard = activeCard;
 
-    // Undo 用のスナップショットを保存
+    // Undoスナップショットの保存
     const snapshot: HistorySnapshot = {
-      ratedCard: activeCard,
+      ratedCard: { ...currentCard },
       previousReviewQueue: [...reviewQueue],
       previousLearningPool: [...learningPool],
       previousGraduatedIds: new Set(graduatedIds),
       previousReviewedCount: sessionReviewedCount,
-      activeCardBefore: activeCard,
+      activeCardBefore: currentCard,
     };
-    setHistoryStack(prev => [...prev, snapshot]);
+    setHistoryStack(prev => [...prev.slice(-10), snapshot]);
 
-    // 1. 永続ストレージへの記録
-    onRateCard(cardId, rating);
-    setSessionReviewedCount(prev => prev + 1);
+    // SM-2 SRS 計算
+    const srsResult = calculateAnkiSRS(currentCard, rating, true);
 
-    // 2. 次状態の算出
-    const nextSRS = calculateAnkiSRS(activeCard, rating);
     const updatedCard: VocabItem = {
-      ...activeCard,
-      ...nextSRS,
+      ...currentCard,
+      easeFactor: srsResult.easeFactor,
+      intervalDays: srsResult.intervalDays,
+      repetitionCount: srsResult.repetitionCount,
+      lapseCount: srsResult.lapseCount,
+      nextReviewDate: srsResult.nextReviewDate,
+      lastReviewedAt: srsResult.lastReviewedAt,
+      cardState: srsResult.cardState,
+      learningStep: srsResult.learningStep,
+      dueTimestamp: srsResult.dueTimestamp,
     };
 
-    const isStillLearning = nextSRS.cardState === 'learning' || nextSRS.cardState === 'relearning';
+    onRateCard(currentCard.id, rating);
 
-    // 次のキュー状態を計算
-    let nextReviews = reviewQueue.filter(c => c.id !== cardId);
-    let nextLearning: VocabItem[];
+    // キュー更新
+    const nextReviewQ = reviewQueue.filter(c => c.id !== currentCard.id);
+    const nextLearningP = learningPool.filter(c => c.id !== currentCard.id);
+    const nextGraduated = new Set(graduatedIds);
 
-    if (isStillLearning) {
-      // 🔴 学習中 / 再学習中: learningPool に配置
-      nextLearning = [...learningPool.filter(c => c.id !== cardId), updatedCard];
+    if (srsResult.cardState === 'learning' || srsResult.cardState === 'relearning') {
+      nextLearningP.push(updatedCard);
     } else {
-      // 🟢 卒業（合格）: 両方から除外
-      nextLearning = learningPool.filter(c => c.id !== cardId);
-      setGraduatedIds(prev => new Set(prev).add(cardId));
+      nextGraduated.add(currentCard.id);
     }
 
-    setReviewQueue(nextReviews);
-    setLearningPool(nextLearning);
+    const nextPick = pickNextCard(nextLearningP, nextReviewQ);
 
-    // ユーザーがボタンを押した「この瞬間」にだけ次のカードを選出
-    const nextCard = pickNextCard(nextLearning, nextReviews);
-    setActiveCard(nextCard);
+    setReviewQueue(nextReviewQ);
+    setLearningPool(nextLearningP);
+    setGraduatedIds(nextGraduated);
+    setSessionReviewedCount(prev => prev + 1);
+    setActiveCard(nextPick);
+    setIsFlipped(false);
+    setShowExample(false);
 
-    if (!nextCard && !isStillLearning && nextReviews.length === 0 && nextLearning.length === 0) {
+    if (!nextPick) {
       confetti({
         particleCount: 100,
         spread: 80,
         origin: { y: 0.6 },
-        colors: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']
+        colors: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899']
       });
     }
+  };
 
-    setIsFlipped(false);
-    setShowExample(false);
-  }, [activeCard, onRateCard, reviewQueue, learningPool, graduatedIds, sessionReviewedCount]);
-
-  // 間違えた時の取り消し（Undo）処理
-  const handleUndo = useCallback(() => {
-    if (historyStack.length === 0) return;
-
-    const last = historyStack[historyStack.length - 1];
-    setHistoryStack(prev => prev.slice(0, -1));
-
-    // ストレージ上のカード状態を元に戻す
-    if (onRevertCard) {
-      onRevertCard(last.ratedCard);
-    }
-
-    // キュー・プール・卒業状態を完全に復元
-    setReviewQueue(last.previousReviewQueue);
-    setLearningPool(last.previousLearningPool);
-    setGraduatedIds(last.previousGraduatedIds);
-    setSessionReviewedCount(last.previousReviewedCount);
-    setActiveCard(last.activeCardBefore);
-    setIsFlipped(true); // 裏返した状態で復元し、すぐに正しい評価を選べるようにする
-    setShowExample(false);
-  }, [historyStack, onRevertCard]);
-
-  // 残り復習キューのシャッフル
-  const handleShuffleRemaining = useCallback(() => {
-    setReviewQueue(prev => shuffleArray(prev));
-  }, []);
-
-  // キーボードショートカット (Space, 1, 2, 3, 4, Ctrl+Z / z)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
-        return;
-      }
-
-      // Ctrl+Z or Cmd+Z or 'z' or 'u' で Undo
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        handleUndo();
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        if (!isFlipped) {
-          setIsFlipped(true);
-        } else {
-          handleRating('good');
-        }
-      } else if (isFlipped) {
-        if (e.key === '1') {
-          e.preventDefault();
-          handleRating('again');
-        } else if (e.key === '2') {
-          e.preventDefault();
-          handleRating('hard');
-        } else if (e.key === '3') {
-          e.preventDefault();
-          handleRating('good');
-        } else if (e.key === '4') {
-          e.preventDefault();
-          handleRating('easy');
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFlipped, handleRating, handleUndo]);
-
-  // 追加練習（前倒し・カスタム演習：期日に関係なく未定着カードを練習）
-  const handleStartExtraStudy = useCallback(() => {
-    initSession(filteredVocabs, true);
-  }, [filteredVocabs, initSession]);
-
-  // 3色ステータスカウンタ（本家Anki標準）
-  const freshDueCount = reviewQueue.length;
-  const inRelearnCount = learningPool.length;
-  const graduatedCount = graduatedIds.size;
-
-  // 全カード完了または対象語彙0件画面
+  // 全問完了時の表示
   if (!activeCard) {
-    const currentStats = filterStats[importanceFilter];
-
     return (
-      <div className="space-y-4 max-w-xl mx-auto">
-        {/* 重要度フィルター切替セレクター */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 shadow-lg">
-          <div className="flex items-center justify-between gap-2 mb-2 px-1">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
-              <Filter className="w-3.5 h-3.5 text-cyan-400" />
-              <span>学習する重要度を選択:</span>
-            </div>
-            <span className="text-[11px] text-slate-400">
-              {activeFilterDef.description}
-            </span>
+      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+        {/* Filter Bar */}
+        <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
+          <div className="flex items-center space-x-2 text-xs text-slate-400">
+            <Filter className="w-4 h-4 text-blue-400" />
+            <span className="font-semibold">重要度フィルター:</span>
           </div>
-
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
-            {FILTER_OPTIONS.map((opt) => {
+          <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+            {FILTER_OPTIONS.map(opt => {
               const stat = filterStats[opt.id];
               const isSelected = importanceFilter === opt.id;
               return (
                 <button
                   key={opt.id}
-                  onClick={() => handleSelectFilter(opt.id)}
-                  className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  onClick={() => handleFilterChange(opt.id)}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
                     isSelected
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800/80'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
                   }`}
                 >
                   <span>{opt.badgeLabel}</span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                    isSelected
-                      ? 'bg-blue-900/80 text-cyan-200 border border-blue-400/40'
-                      : stat.due > 0
-                      ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
-                      : 'bg-slate-900 text-slate-500'
-                  }`}>
-                    {stat.due > 0 ? `${stat.due}要復習` : `${stat.total}語`}
-                  </span>
+                  {stat.due > 0 && (
+                    <span className="ml-1.5 px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px]">
+                      {stat.due}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* 完了カード */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-7 sm:p-10 text-center space-y-5 shadow-2xl animate-fadeIn">
-          <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center">
-            <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+        {/* Completion Card */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-10 shadow-2xl text-center space-y-6 animate-fadeIn">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/25">
+            <CheckCircle2 className="w-9 h-9 text-white" />
           </div>
 
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 text-xs font-bold">
-              <span>{activeFilterDef.label}</span>
-            </div>
-
-            <h3 className="text-xl sm:text-2xl font-bold text-white">
-              {totalSessionCardsCount > 0 ? '本日の復習セッション完了！🎉' : '本日の復習はすべて完了しています！🎉'}
-            </h3>
-            
-            <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
-              {totalSessionCardsCount > 0 ? (
-                <>
-                  合計 <strong className="text-cyan-300">{sessionReviewedCount}回</strong> の解答で、本日の全 <strong className="text-white">{totalSessionCardsCount}語</strong> を完全にクリアしました！
-                </>
-              ) : currentStats.total > 0 ? (
-                `この重要度（${activeFilterDef.label}）の語彙（全 ${currentStats.total}語）はすべて定着済み、または本日復習期日のものはありません！`
-              ) : (
-                `この重要度レベルの単語はまだ登録されていません。`
-              )}
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+              今日の復習が完了しました！ 🎉
+            </h2>
+            <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+              選択中のフィルター【{activeFilterDef.label}】における本日の復習期日カードはすべて完了しました。素晴らしい継続力です！
             </p>
           </div>
 
-          {/* 次の学習ステップ提案アクション */}
-          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2.5">
-            {historyStack.length > 0 && (
-              <button
-                onClick={handleUndo}
-                className="w-full sm:w-auto flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-xl text-xs sm:text-sm font-bold transition-all"
-                title="最後の解答を取り消して戻す (Ctrl+Z)"
-              >
-                <Undo2 className="w-4 h-4" />
-                <span>1つ戻す (Undo)</span>
-              </button>
-            )}
+          <div className="grid grid-cols-2 gap-3 max-w-sm mx-auto text-left">
+            <div className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl">
+              <span className="text-[11px] font-semibold text-slate-400 block">本日の回答数</span>
+              <strong className="text-xl font-bold text-white">{sessionReviewedCount} 回</strong>
+            </div>
+            <div className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl">
+              <span className="text-[11px] font-semibold text-slate-400 block">定着・卒業カード</span>
+              <strong className="text-xl font-bold text-emerald-400">{graduatedIds.size} 語</strong>
+            </div>
+          </div>
 
-            {importanceFilter === 'ge4' && filterStats.ge3.due > 0 && (
-              <button
-                onClick={() => handleSelectFilter('ge3')}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/30 transition-all"
-              >
-                <Layers className="w-4 h-4" />
-                <span>★3以上に広げて学習 (要復習: {filterStats.ge3.due}語)</span>
-                <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
-              </button>
-            )}
-
-            {filterStats.low.due > 0 && importanceFilter !== 'low' && (
-              <button
-                onClick={() => handleSelectFilter('low')}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded-xl text-xs sm:text-sm font-bold transition-all"
-              >
-                <span>★1〜2 (発展) をまとめて演習 ({filterStats.low.due}語)</span>
-              </button>
-            )}
-
-            {importanceFilter !== 'all' && filterStats.all.due > 0 && (
-              <button
-                onClick={() => handleSelectFilter('all')}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs sm:text-sm font-bold transition-all"
-              >
-                <span>全単語を復習 ({filterStats.all.due}語)</span>
-              </button>
-            )}
-
-            {filteredVocabs.length > 0 && (
-              <button
-                onClick={handleStartExtraStudy}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2.5 bg-blue-950/80 hover:bg-blue-900/90 text-cyan-300 hover:text-white border border-cyan-500/40 rounded-xl text-xs sm:text-sm font-bold transition-all shadow-sm"
-                title="期日に関係なく未定着カードをシャッフル演習"
-              >
-                <RotateCcw className="w-4 h-4 text-cyan-400" />
-                <span>追加で練習する（カスタム演習）</span>
-              </button>
-            )}
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => initSession(filteredVocabs, true)}
+              className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-sm font-bold shadow-lg shadow-blue-600/25 transition-all"
+            >
+              <Zap className="w-4 h-4 text-amber-300" />
+              <span>追加で練習する（未定着カード）</span>
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  const importance = activeCard.importance ?? 3;
-  const easePercent = Math.round((activeCard.easeFactor ?? 2.5) * 100);
+  // Cloze マスキング表示ヘルパー
+  const renderCloze = (sentence: string, tokens: string[]) => {
+    if (!tokens || tokens.length === 0) return sentence;
+    let parts = [sentence];
+    tokens.forEach(tok => {
+      const nextParts: string[] = [];
+      const regex = new RegExp(`(${tok})`, 'gi');
+      parts.forEach(p => {
+        const split = p.split(regex);
+        nextParts.push(...split);
+      });
+      parts = nextParts;
+    });
+
+    return parts.map((part, idx) => {
+      const isTarget = tokens.some(t => t.toLowerCase() === part.toLowerCase());
+      if (isTarget) {
+        return (
+          <span key={idx} className="px-2 py-0.5 mx-1 bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold rounded-md">
+            [ ___ ]
+          </span>
+        );
+      }
+      return <span key={idx}>{part}</span>;
+    });
+  };
 
   return (
-    <div className="max-w-xl mx-auto space-y-3">
-      {/* 1. 重要度（難易度）選択フィルターバー */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-2.5 sm:p-3 shadow-lg space-y-2">
-        <div className="flex items-center justify-between px-1 text-xs">
-          <div className="flex items-center gap-1.5 font-bold text-slate-300">
-            <Filter className="w-3.5 h-3.5 text-cyan-400" />
-            <span>重要度レベル切替:</span>
-          </div>
-          <span className="text-[11px] text-cyan-400 font-medium hidden sm:inline">
-            {activeFilterDef.description}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-thin">
-          {FILTER_OPTIONS.map((opt) => {
+    <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+      {/* 1. Header: Filter & Anki 3-Counter Progress Bar */}
+      <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
+        {/* Importance Filter Pills */}
+        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+          {FILTER_OPTIONS.map(opt => {
             const stat = filterStats[opt.id];
             const isSelected = importanceFilter === opt.id;
             return (
               <button
                 key={opt.id}
-                onClick={() => handleSelectFilter(opt.id)}
-                className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                onClick={() => handleFilterChange(opt.id)}
+                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
                   isSelected
                     ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 hover:bg-slate-850 border border-slate-800/80'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
                 }`}
-                title={opt.description}
               >
                 <span>{opt.badgeLabel}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                  isSelected
-                    ? 'bg-blue-900/90 text-cyan-200 border border-blue-400/40'
-                    : stat.due > 0
-                    ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
-                    : 'bg-slate-900 text-slate-500'
-                }`}>
-                  {stat.due > 0 ? `${stat.due}` : `${stat.total}`}
-                </span>
+                {stat.due > 0 && (
+                  <span className="ml-1 px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px]">
+                    {stat.due}
+                  </span>
+                )}
               </button>
             );
           })}
         </div>
+
+        {/* Undo Button */}
+        {historyStack.length > 0 && (
+          <button
+            onClick={handleUndo}
+            className="flex items-center space-x-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-800 transition-colors"
+            title="直前の評価を取り消す"
+          >
+            <Undo2 className="w-3.5 h-3.5 text-amber-400" />
+            <span>取り消し</span>
+          </button>
+        )}
       </div>
 
-      {/* 2. Progress Header: Ankiステータスカウンタ ＆ Undo ＆ シャッフル */}
-      <div className="flex items-center justify-between text-xs px-2 text-slate-400 flex-wrap gap-2">
-        <div className="flex items-center gap-1.5 font-semibold text-cyan-400">
-          <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-          <span>{isCustomStudyMode ? '🎯 カスタム演習（前倒し学習）' : 'Anki 一問一答（忘却曲線SRS）'}</span>
-        </div>
+      {/* 2. Anki Three-Counter Display: [🔴 学習中] [🔵 新規] [🟢 復習] */}
+      <div className="flex items-center justify-between bg-slate-900/90 border border-slate-800 rounded-2xl p-3 shadow-lg text-xs">
+        <div className="flex items-center space-x-4">
+          {/* 赤: 学習中・再学習プール */}
+          <div className="flex items-center space-x-1.5" title="学習中・再学習ステップ中（1分/10分待機）">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+            <span className="font-extrabold text-rose-400">{learningPool.length}</span>
+            <span className="text-slate-400 text-[11px]">学習中</span>
+          </div>
 
-        <div className="flex items-center gap-2 text-[11px] font-medium flex-wrap">
-          {/* Undo (取り消し) ボタン */}
-          {historyStack.length > 0 && (
-            <button
-              onClick={handleUndo}
-              className="flex items-center space-x-1 px-2.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border border-amber-500/30 rounded-lg transition-colors shadow-sm"
-              title="直前の解答を取り消して戻す (Ctrl+Z)"
-            >
-              <Undo2 className="w-3 h-3 text-amber-400" />
-              <span>戻す</span>
-            </button>
-          )}
+          {/* 青: 新規・初回 */}
+          <div className="flex items-center space-x-1.5" title="未学習・新規カード">
+            <span className="w-2.5 h-2.5 rounded-full bg-sky-500" />
+            <span className="font-extrabold text-sky-400">
+              {reviewQueue.filter(c => !c.cardState || c.cardState === 'new' || (c.repetitionCount ?? 0) === 0).length}
+            </span>
+            <span className="text-slate-400 text-[11px]">新規</span>
+          </div>
 
-          {/* シャッフル */}
-          {reviewQueue.length > 1 && (
-            <button
-              onClick={handleShuffleRemaining}
-              className="flex items-center space-x-1 px-2.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 border border-slate-800 rounded-lg transition-colors shadow-sm"
-              title="残りの復習カードをランダムシャッフル"
-            >
-              <Shuffle className="w-3 h-3 text-cyan-400" />
-              <span>シャッフル</span>
-            </button>
-          )}
-
-          {/* 右側カウンタ：Anki標準の3色バッジ (青:未着手・復習 / 赤:再学習待機 / 緑:卒業) */}
-          <div className="flex items-center bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800 space-x-2.5 shadow-sm">
-            <span className="text-blue-400 font-bold" title="未着手・期日の復習カード">
-              🔵 {freshDueCount}
+          {/* 緑: 本日の復習期日 */}
+          <div className="flex items-center space-x-1.5" title="期日到来の復習カード">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+            <span className="font-extrabold text-emerald-400">
+              {reviewQueue.filter(c => c.cardState === 'review' || (c.repetitionCount ?? 0) > 0).length}
             </span>
-            <span className="text-red-400 font-bold" title="学習中・再学習中（1分/10分ステップ待機中）のカード">
-              🔴 {inRelearnCount}
-            </span>
-            <span className="text-emerald-400 font-bold" title="本日卒業（習得完了）のカード">
-              🟢 {graduatedCount}
-            </span>
+            <span className="text-slate-400 text-[11px]">復習</span>
           </div>
         </div>
+
+        <div className="text-[11px] text-slate-400">
+          本日回答: <strong className="text-white">{sessionReviewedCount}</strong> 件
+        </div>
       </div>
 
-      {/* 3. Main Flashcard: Fixed height footprint */}
-      <div
-        onClick={() => setIsFlipped(!isFlipped)}
-        className={`bg-slate-900/95 border rounded-3xl p-5 sm:p-7 shadow-2xl h-[270px] sm:h-[290px] flex flex-col justify-between cursor-pointer select-none transition-all duration-200 hover:border-cyan-500/50 relative overflow-hidden ${
-          isFlipped
-            ? 'border-cyan-500/60 bg-gradient-to-br from-slate-900 via-blue-950/40 to-slate-900'
-            : 'border-slate-800 hover:shadow-cyan-500/10'
-        }`}
-      >
-        {/* Card Header: Meta badges */}
-        <div className="flex items-center justify-between flex-shrink-0">
+      {/* 3. Main Flashcard */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 min-h-[320px] flex flex-col justify-between transition-all">
+        {/* Card Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center space-x-2">
-            <span className="text-[10px] uppercase font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-              {activeCard.partOfSpeech || '語彙'}
-            </span>
-            <span className="text-[10px] font-bold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/30 flex items-center gap-0.5">
-              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-              重要度 {importance}
-            </span>
-
-            {/* ラーニング状態バッジ */}
-            {activeCard.cardState === 'learning' && (
-              <span className="text-[10px] font-bold text-red-300 bg-red-950/80 px-2 py-0.5 rounded-md border border-red-500/40 flex items-center gap-1">
-                <Zap className="w-2.5 h-2.5 text-yellow-400" />
-                学習中 (Step {activeCard.learningStep === 1 ? '2: 10分' : '1: 1分'})
+            {activeCard.cardType === 'pattern' ? (
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+                CEFR {activeCard.level || 'B1'} 構文マスター
+              </span>
+            ) : (
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                {activeCard.partOfSpeech || '語彙・表現'}
               </span>
             )}
-            {activeCard.cardState === 'relearning' && (
-              <span className="text-[10px] font-bold text-red-300 bg-red-950/80 px-2 py-0.5 rounded-md border border-red-500/40 flex items-center gap-1">
-                <RotateCcw className="w-2.5 h-2.5 text-red-400" />
-                再学習中 (10分)
+
+            {patternVariationData && (
+              <span className="text-[11px] font-semibold text-amber-300/80 flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+                <Repeat className="w-3 h-3" />
+                文脈ローテーション #{patternVariationData.rotIdx + 1}/3
               </span>
             )}
           </div>
 
-          <div className="flex items-center space-x-1.5">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                speakText(activeCard.phrase, 0.95);
-              }}
-              className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
-              title="発音を再生"
-            >
-              <Volume2 className="w-4 h-4" />
-            </button>
+          <div className="flex items-center space-x-1.5 text-amber-400">
+            {Array.from({ length: activeCard.importance ?? 3 }).map((_, i) => (
+              <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />
+            ))}
           </div>
         </div>
 
-        {/* Card Center Content */}
-        <div className="flex-1 flex flex-col items-center justify-center text-center px-2 min-h-0 overflow-y-auto">
-          {/* Phrase */}
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-            {activeCard.phrase}
-          </h2>
+        {/* Card Body: Front vs Back */}
+        <div className="space-y-4 text-center my-auto py-2">
+          {activeCard.cardType === 'pattern' && patternVariationData ? (
+            /* Syntax Pattern Card UI */
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <span className="text-xs font-bold text-slate-400">【この日本語の意味・構文は？】</span>
+                <div className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+                  「{patternVariationData.currentVar.translation}」
+                </div>
+              </div>
 
-          {/* Back: Meaning & Collapsible Example */}
-          {isFlipped ? (
-            <div className="mt-3 space-y-2 animate-fadeIn w-full">
-              <p className="text-lg sm:text-xl font-bold text-cyan-300">
-                {activeCard.meaning}
-              </p>
+              {/* Context Cloze Sentence on Front */}
+              <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl text-base sm:text-lg text-slate-200 leading-relaxed font-serif">
+                {isFlipped ? (
+                  <span className="text-white font-bold">
+                    {patternVariationData.currentVar.sentence}
+                  </span>
+                ) : (
+                  renderCloze(patternVariationData.currentVar.sentence, patternVariationData.currentVar.targetTokens)
+                )}
+              </div>
 
-              {/* Collapsible Example Accordion (デフォルト折りたたみ) */}
-              {(activeCard.exampleSentence || activeCard.contextNote) && (
-                <div className="pt-1">
-                  {!showExample ? (
+              {/* Flipped: Reveal Target Structure & Focus Point */}
+              {isFlipped && (
+                <div className="p-4 bg-amber-950/30 border border-amber-500/30 rounded-2xl text-left space-y-3 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      正解の構文パターン:
+                    </span>
                     <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowExample(true);
-                      }}
-                      className="inline-flex items-center space-x-1 px-3 py-1 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 border border-slate-800 rounded-full text-[11px] font-semibold transition-all"
+                      onClick={() => speakText(patternVariationData.currentVar.sentence)}
+                      className="p-1 text-sky-400 hover:text-sky-300"
+                      title="音声を再生"
                     >
-                      <BookOpen className="w-3 h-3" />
-                      <span>例文・解説を表示</span>
-                      <ChevronDown className="w-3 h-3 ml-0.5" />
+                      <Volume2 className="w-4 h-4" />
                     </button>
-                  ) : (
-                    <div 
-                      onClick={(e) => e.stopPropagation()} 
-                      className="bg-slate-950/90 border border-slate-800 p-2.5 rounded-xl text-xs text-slate-300 text-left space-y-1.5 animate-fadeIn max-h-[90px] overflow-y-auto"
-                    >
-                      <div className="flex items-center justify-between text-[10px] text-cyan-400 font-bold">
-                        <span>📖 例文:</span>
-                        <div className="flex items-center space-x-1">
-                          <button
-                            type="button"
-                            onClick={() => speakText(activeCard.exampleSentence || '')}
-                            className="p-0.5 text-slate-400 hover:text-cyan-300"
-                            title="例文を再生"
-                          >
-                            <Volume2 className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowExample(false)}
-                            className="p-0.5 text-slate-400 hover:text-white"
-                            title="閉じる"
-                          >
-                            <ChevronUp className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                      {activeCard.exampleSentence && (
-                        <p className="font-serif leading-tight text-[11px]">
-                          "{activeCard.exampleSentence}"
-                        </p>
-                      )}
-                      {activeCard.contextNote && (
-                        <p className="text-[10px] text-slate-400">
-                          💡 {activeCard.contextNote}
-                        </p>
-                      )}
+                  </div>
+                  <div className="text-lg font-bold text-white">
+                    {activeCard.phrase}
+                  </div>
+                  {activeCard.contextNote && (
+                    <div className="text-xs text-amber-200/90 leading-relaxed">
+                      💡 {activeCard.contextNote}
                     </div>
                   )}
+
+                  {/* 3 Variations List */}
+                  <div className="pt-2 border-t border-amber-500/20 space-y-1.5">
+                    <span className="text-[11px] font-bold text-slate-400">3つの文脈バリエーション:</span>
+                    {patternVariationData.allVariations.map((v, i) => (
+                      <div
+                        key={i}
+                        className={`text-xs p-2 rounded-xl transition-all ${
+                          i === patternVariationData.rotIdx
+                            ? 'bg-amber-500/20 border border-amber-500/40 text-amber-200 font-medium'
+                            : 'bg-slate-950/50 text-slate-400'
+                        }`}
+                      >
+                        <div className="font-semibold text-white">{i + 1}. {v.sentence}</div>
+                        <div className="text-[11px] text-slate-400">{v.translation}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
           ) : (
-            <div className="mt-4 text-xs text-slate-500 flex items-center justify-center gap-1.5 animate-pulse">
-              <span>👆 カードをタップして答えを表示</span>
+            /* Standard Vocab Card UI */
+            <div className="space-y-3">
+              <div className="flex items-center justify-center space-x-2">
+                <h3 className="text-2xl sm:text-3xl font-extrabold text-sky-400 tracking-tight">
+                  {activeCard.phrase}
+                </h3>
+                <button
+                  onClick={() => speakText(activeCard.phrase)}
+                  className="p-2 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors border border-sky-500/30"
+                  title="発音を再生"
+                >
+                  <Volume2 className="w-4 h-4" />
+                </button>
+              </div>
+
+              {isFlipped ? (
+                <div className="space-y-3 animate-fadeIn">
+                  <div className="text-xl sm:text-2xl font-bold text-white">
+                    {activeCard.meaning}
+                  </div>
+                  {activeCard.contextNote && (
+                    <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                      {activeCard.contextNote}
+                    </p>
+                  )}
+                  {activeCard.exampleSentence && (
+                    <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl text-xs text-slate-300 text-left font-serif leading-relaxed">
+                      <span className="font-bold text-sky-400 block mb-0.5">例文:</span>
+                      "{activeCard.exampleSentence}"
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="py-8">
+                  <span className="text-xs text-slate-500">タップして日本語訳を表示</span>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Card Footer info: Repetition, Interval, and Ease Factor */}
-        <div className="text-center text-[10px] text-slate-500 flex-shrink-0 flex items-center justify-center gap-2">
-          <span>定着回数: <strong className="text-slate-400">{activeCard.repetitionCount}回</strong></span>
-          <span>•</span>
-          <span>現在間隔: <strong className="text-slate-400">{activeCard.intervalDays}日</strong></span>
-          <span>•</span>
-          <span>Ease: <strong className="text-slate-400">{easePercent}%</strong></span>
+        {/* 4. Action Buttons (Flip vs Rate) */}
+        <div className="pt-3 border-t border-slate-800">
+          {!isFlipped ? (
+            <button
+              onClick={handleFlip}
+              className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-xl shadow-blue-600/30 transition-all"
+            >
+              答えを表示 (Space / タップ)
+            </button>
+          ) : (
+            <div className="grid grid-cols-4 gap-2 sm:gap-3 animate-fadeIn">
+              {/* 1. Again (もう一度) */}
+              <button
+                onClick={() => handleRate('again')}
+                className="flex flex-col items-center justify-center p-3 bg-rose-950/60 hover:bg-rose-900/70 active:scale-[0.98] border border-rose-500/40 text-rose-300 rounded-2xl transition-all group"
+              >
+                <span className="text-[10px] text-rose-400/80 font-bold">{intervals.again}</span>
+                <span className="text-xs sm:text-sm font-extrabold text-rose-200 mt-0.5">もう一度</span>
+              </button>
+
+              {/* 2. Hard (難しい) */}
+              <button
+                onClick={() => handleRate('hard')}
+                className="flex flex-col items-center justify-center p-3 bg-amber-950/60 hover:bg-amber-900/70 active:scale-[0.98] border border-amber-500/40 text-amber-300 rounded-2xl transition-all group"
+              >
+                <span className="text-[10px] text-amber-400/80 font-bold">{intervals.hard}</span>
+                <span className="text-xs sm:text-sm font-extrabold text-amber-200 mt-0.5">難しい</span>
+              </button>
+
+              {/* 3. Good (正解) */}
+              <button
+                onClick={() => handleRate('good')}
+                className="flex flex-col items-center justify-center p-3 bg-emerald-950/60 hover:bg-emerald-900/70 active:scale-[0.98] border border-emerald-500/40 text-emerald-300 rounded-2xl transition-all group shadow-md shadow-emerald-500/10"
+              >
+                <span className="text-[10px] text-emerald-400/80 font-bold">{intervals.good}</span>
+                <span className="text-xs sm:text-sm font-extrabold text-emerald-200 mt-0.5">正解</span>
+              </button>
+
+              {/* 4. Easy (簡単) */}
+              <button
+                onClick={() => handleRate('easy')}
+                className="flex flex-col items-center justify-center p-3 bg-sky-950/60 hover:bg-sky-900/70 active:scale-[0.98] border border-sky-500/40 text-sky-300 rounded-2xl transition-all group shadow-md shadow-sky-500/10"
+              >
+                <span className="text-[10px] text-sky-400/80 font-bold">{intervals.easy}</span>
+                <span className="text-xs sm:text-sm font-extrabold text-sky-200 mt-0.5">簡単</span>
+              </button>
+            </div>
+          )}
         </div>
-      </div>
-
-      {/* 4. Fixed-Height Action Buttons Area (高さ64pxで完全固定。各ボタンに次回期日を動的バッジ表示 ＆ キーボードショートカットガイド) */}
-      <div className="h-[64px] flex items-center">
-        {isFlipped ? (
-          <div className="grid grid-cols-4 gap-2 w-full animate-fadeIn">
-            {/* 1. Again (もう一度: 1分ステップへ) */}
-            <button
-              type="button"
-              onClick={() => handleRating('again')}
-              className="flex flex-col items-center justify-center h-[58px] bg-red-950/60 hover:bg-red-900/80 active:scale-95 text-red-400 border border-red-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-red-950/30 group"
-            >
-              <div className="flex items-center gap-1">
-                <span className="text-sm">🔴</span>
-                <span>Again</span>
-                <kbd className="hidden sm:inline text-[9px] bg-red-950 px-1 rounded text-red-400 border border-red-800">1</kbd>
-              </div>
-              <span className="text-[9px] text-red-300 font-semibold bg-red-900/40 px-1.5 py-0.2 rounded mt-0.5">
-                {nextIntervals.again}
-              </span>
-            </button>
-
-            {/* 2. Hard (難しい: 6分/10分ステップまたは1.2倍) */}
-            <button
-              type="button"
-              onClick={() => handleRating('hard')}
-              className="flex flex-col items-center justify-center h-[58px] bg-amber-950/60 hover:bg-amber-900/80 active:scale-95 text-amber-400 border border-amber-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-amber-950/30 group"
-            >
-              <div className="flex items-center gap-1">
-                <span className="text-sm">🟠</span>
-                <span>Hard</span>
-                <kbd className="hidden sm:inline text-[9px] bg-amber-950 px-1 rounded text-amber-400 border border-amber-800">2</kbd>
-              </div>
-              <span className="text-[9px] text-amber-300 font-semibold bg-amber-900/40 px-1.5 py-0.2 rounded mt-0.5">
-                {nextIntervals.hard}
-              </span>
-            </button>
-
-            {/* 3. Good (普通: 10分ステップまたはSM-2期日) */}
-            <button
-              type="button"
-              onClick={() => handleRating('good')}
-              className="flex flex-col items-center justify-center h-[58px] bg-emerald-950/60 hover:bg-emerald-900/80 active:scale-95 text-emerald-400 border border-emerald-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-950/30 group"
-            >
-              <div className="flex items-center gap-1">
-                <span className="text-sm">🟢</span>
-                <span>Good</span>
-                <kbd className="hidden sm:inline text-[9px] bg-emerald-950 px-1 rounded text-emerald-400 border border-emerald-800">3/Space</kbd>
-              </div>
-              <span className="text-[9px] text-emerald-300 font-semibold bg-emerald-900/40 px-1.5 py-0.2 rounded mt-0.5">
-                {nextIntervals.good}
-              </span>
-            </button>
-
-            {/* 4. Easy (簡単: 4日後即時卒業またはボーナス期日) */}
-            <button
-              type="button"
-              onClick={() => handleRating('easy')}
-              className="flex flex-col items-center justify-center h-[58px] bg-blue-950/60 hover:bg-blue-900/80 active:scale-95 text-cyan-300 border border-cyan-500/40 rounded-2xl text-xs font-bold transition-all shadow-md shadow-blue-950/30 group"
-            >
-              <div className="flex items-center gap-1">
-                <span className="text-sm">🔵</span>
-                <span>Easy</span>
-                <kbd className="hidden sm:inline text-[9px] bg-blue-950 px-1 rounded text-cyan-300 border border-cyan-800">4</kbd>
-              </div>
-              <span className="text-[9px] text-cyan-200 font-semibold bg-blue-900/40 px-1.5 py-0.2 rounded mt-0.5">
-                {nextIntervals.easy}
-              </span>
-            </button>
-          </div>
-        ) : (
-          <div className="w-full h-full" />
-        )}
       </div>
     </div>
   );
