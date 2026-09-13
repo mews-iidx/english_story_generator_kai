@@ -8,14 +8,20 @@ export const EASY_BONUS = 1.3;          // Easy選択時のボーナス倍率
 export const HARD_FACTOR = 1.2;         // Hard選択時の間隔倍率
 
 export function getTodayDateString(): string {
-  const now = new Date();
-  return now.toISOString().split('T')[0];
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function addDaysToDate(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /**
