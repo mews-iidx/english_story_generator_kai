@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
-import { BookOpen, Calendar, Trash2, Search, Sparkles, Filter, RefreshCw, PlusCircle, CheckCircle2, Headphones } from 'lucide-react';
+import { BookOpen, Calendar, Trash2, Search, Sparkles, Filter, RefreshCw, PlusCircle, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface HistoryViewProps {
   stories: Story[];
@@ -19,16 +19,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   isGenerating,
   generatingTheme,
 }) => {
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [levelFilter, setLevelFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
 
-  // 読書統計の計算
-  const readStories = useMemo(() => stories.filter(s => s.isRead), [stories]);
-  const totalWordsRead = useMemo(() => {
-    return readStories.reduce((acc, s) => acc + (s.actualWordCount || s.targetWordCount || 700), 0);
-  }, [readStories]);
+  // アクティブなフィルター数
+  const activeFilterCount = (searchTerm.trim() ? 1 : 0) + (levelFilter !== 'all' ? 1 : 0) + (typeFilter !== 'all' ? 1 : 0);
 
   // 検索・フィルタリング・ソート
   const filteredStories = useMemo(() => {
@@ -79,28 +77,51 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* 1. Header & Reading Stats Tracker */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-4">
+      {/* 1. Compact Header Bar */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-2xl space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center space-x-3">
-            <div className="w-11 h-11 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-              <BookOpen className="w-6 h-6 text-blue-400" />
+            <div className="w-10 h-10 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+              <BookOpen className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                ストーリー本棚 📚
+              <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                <span>ストーリー本棚 📚</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-semibold border border-slate-700">
+                  {stories.length} 冊
+                </span>
               </h2>
-              <p className="text-xs sm:text-sm text-slate-400">
-                生成したストーリーやポッドキャストをタップして読書・リスニング
+              <p className="text-xs text-slate-400">
+                本をタップして読書・リスニングを開始
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2">
+            {/* Filter Toggle Button */}
+            <button
+              onClick={() => setIsFilterOpen(!isFilterOpen)}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                isFilterOpen || activeFilterCount > 0
+                  ? 'bg-slate-850 text-sky-300 border-sky-500/40 shadow-sm'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span>検索・絞り込み</span>
+              {activeFilterCount > 0 && (
+                <span className="w-4 h-4 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">
+                  {activeFilterCount}
+                </span>
+              )}
+              {isFilterOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+
+            {/* Create Story Button */}
             {onNavigateToCreate && (
               <button
                 onClick={onNavigateToCreate}
-                className="flex items-center space-x-1.5 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/25 transition-all"
+                className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/25 transition-all"
               >
                 <PlusCircle className="w-4 h-4" />
                 <span>新しい本を作成</span>
@@ -109,138 +130,102 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           </div>
         </div>
 
-        {/* Reading Stat Badges */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
-          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-2xl flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center flex-shrink-0">
-              <CheckCircle2 className="w-4 h-4" />
-            </div>
-            <div>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">読了冊数</span>
-              <span className="text-base sm:text-lg font-bold text-white">
-                {readStories.length} <span className="text-xs font-normal text-slate-400">/ {stories.length} 冊</span>
-              </span>
-            </div>
-          </div>
+        {/* Collapsible Search & Filter Panel (Default Closed) */}
+        {isFilterOpen && (
+          <div className="pt-3 border-t border-slate-800/80 space-y-3 animate-fadeIn">
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-2.5" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="タイトル、日本語名、あらすじ、英文を検索..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-4 py-1.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none"
+                />
+              </div>
 
-          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-2xl flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-xl bg-emerald-600/20 text-emerald-400 flex items-center justify-center flex-shrink-0">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <div>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">累計読破語数</span>
-              <span className="text-base sm:text-lg font-bold text-emerald-400">
-                {totalWordsRead.toLocaleString()} <span className="text-xs font-normal text-slate-400">words</span>
-              </span>
-            </div>
-          </div>
+              <div className="flex items-center space-x-2">
+                <select
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value as any)}
+                  className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-3 py-1.5 outline-none"
+                >
+                  <option value="newest">📅 新しい順</option>
+                  <option value="oldest">📅 古い順</option>
+                </select>
 
-          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-2xl flex items-center space-x-3 col-span-2 sm:col-span-1">
-            <div className="w-8 h-8 rounded-xl bg-purple-600/20 text-purple-400 flex items-center justify-center flex-shrink-0">
-              <Headphones className="w-4 h-4" />
-            </div>
-            <div>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">所蔵コンテンツ</span>
-              <span className="text-base sm:text-lg font-bold text-purple-400">
-                {stories.length} <span className="text-xs font-normal text-slate-400">本</span>
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Search Bar & Filters */}
-        <div className="space-y-3 pt-2 border-t border-slate-800/80">
-          <div className="flex flex-col sm:flex-row gap-2.5">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="タイトル、日本語名、あらすじ、英文を検索..."
-                className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none"
-              />
+                {activeFilterCount > 0 && (
+                  <button
+                    onClick={() => {
+                      setSearchTerm('');
+                      setLevelFilter('all');
+                      setTypeFilter('all');
+                    }}
+                    className="text-[11px] text-rose-400 hover:text-rose-300 px-2.5 py-1 rounded-lg bg-rose-950/40 border border-rose-500/30 font-semibold transition-colors"
+                  >
+                    リセット
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <select
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as any)}
-                className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-3 py-2 outline-none"
-              >
-                <option value="newest">📅 新しい順</option>
-                <option value="oldest">📅 古い順</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Level & Type Filter Pills */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
-            {/* Format Type Filter */}
-            <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
-              <button
-                onClick={() => setTypeFilter('all')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                  typeFilter === 'all'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                全タイプ
-              </button>
-              <button
-                onClick={() => setTypeFilter('podcast')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                  typeFilter === 'podcast'
-                    ? 'bg-purple-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                🎙️ Podcast
-              </button>
-              <button
-                onClick={() => setTypeFilter('story')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                  typeFilter === 'story'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                📖 Story
-              </button>
-              <button
-                onClick={() => setTypeFilter('dialogue')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                  typeFilter === 'dialogue'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                💬 Dialogue
-              </button>
-            </div>
-
-            {/* Level Filter */}
-            <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
-              <span className="text-slate-500 mr-1 flex items-center gap-1 font-semibold">
-                <Filter className="w-3 h-3" /> レベル:
-              </span>
-              {['all', 'A1', 'A2', 'B1', 'B2', 'C1'].map((lvl) => (
+            {/* Level & Type Filter Pills */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+              <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
                 <button
-                  key={lvl}
-                  onClick={() => setLevelFilter(lvl)}
-                  className={`px-2 py-0.5 rounded-lg font-bold transition-all ${
-                    levelFilter === lvl
+                  onClick={() => setTypeFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                    typeFilter === 'all'
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
                   }`}
                 >
-                  {lvl === 'all' ? 'すべて' : lvl}
+                  全タイプ
                 </button>
-              ))}
+                <button
+                  onClick={() => setTypeFilter('podcast')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                    typeFilter === 'podcast'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  🎙️ Podcast
+                </button>
+                <button
+                  onClick={() => setTypeFilter('dialogue')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                    typeFilter === 'dialogue'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  💬 Dialogue
+                </button>
+              </div>
+
+              <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
+                <span className="text-slate-500 mr-1 flex items-center gap-1 font-semibold">
+                  <Filter className="w-3 h-3" /> レベル:
+                </span>
+                {['all', 'A1', 'A2', 'B1', 'B2', 'C1'].map((lvl) => (
+                  <button
+                    key={lvl}
+                    onClick={() => setLevelFilter(lvl)}
+                    className={`px-2 py-0.5 rounded-lg font-bold transition-all ${
+                      levelFilter === lvl
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    {lvl === 'all' ? 'すべて' : lvl}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Background Generating Notification Card */}
