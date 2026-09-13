@@ -79,6 +79,7 @@ export const App: React.FC = () => {
   const [callSessions, setCallSessions] = useState<CallSession[]>([]);
   const [expressionErrors, setExpressionErrors] = useState<ExpressionErrorItem[]>([]);
   const [initialChatInput, setInitialChatInput] = useState('');
+  const [dataVersion, setDataVersion] = useState(0);
 
   // リーダー画面上でのオーバーレイチャット状態
   const [isReaderChatOverlayOpen, setIsReaderChatOverlayOpen] = useState(false);
@@ -679,6 +680,7 @@ export const App: React.FC = () => {
   };
 
   const handleDataImported = () => {
+    setDataVersion(v => v + 1);
     setStories(loadStories());
     setVocabs(loadVocabs());
     setDifficultSentences(loadDifficultSentences());
@@ -691,6 +693,7 @@ export const App: React.FC = () => {
 
   const handleResetAllData = () => {
     resetAllData();
+    setDataVersion(v => v + 1);
     setStories([]);
     setVocabs([]);
     setDifficultSentences([]);
@@ -803,6 +806,7 @@ export const App: React.FC = () => {
             {/* Mastery & Integrated Vocab Bank Tab */}
             {activeTab === 'mastery' && (
               <MasteryDashboardView
+                key={dataVersion}
                 onNavigateToCreate={() => setActiveTab('create')}
                 savedVocabs={vocabs}
                 difficultSentences={difficultSentences}

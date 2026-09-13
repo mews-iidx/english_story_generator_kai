@@ -502,6 +502,14 @@ export function resetAllData(): void {
     localStorage.removeItem('reader_show_targets');
     localStorage.removeItem('anki_importance_filter');
 
+    // 明示的に空のクリーンデータを書き込み
+    localStorage.setItem(STORAGE_KEYS.MASTERY_STATE, JSON.stringify({
+      patterns: {},
+      vocabs: {},
+      lastUpdatedAt: new Date().toISOString()
+    }));
+    localStorage.setItem(STORAGE_KEYS.DAILY_SNAPSHOTS, JSON.stringify([]));
+
     const s = loadSettings();
     saveSettings({
       ...s,
