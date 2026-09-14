@@ -5,6 +5,7 @@ import { DifficultSentenceItem } from '../types/sentence';
 import { BookMarked, Search, Volume2, Trash2, CheckCircle2, ChevronDown, ChevronUp, FileText, Calendar, Sparkles, RefreshCw, Star } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
+import { cleanTranslationText } from '../services/storage';
 
 interface VocabBankViewProps {
   vocabs: VocabItem[];
@@ -350,7 +351,7 @@ export const VocabBankView: React.FC<VocabBankViewProps> = ({
                             )}
                           </div>
                           <p className="text-xs sm:text-sm text-slate-300 font-medium truncate mt-0.5">
-                            {vocab.meaning}
+                            {cleanTranslationText(vocab.meaning)}
                           </p>
                         </div>
                       </div>

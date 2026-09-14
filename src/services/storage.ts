@@ -1,5 +1,5 @@
 import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress } from '../types/mastery';
-import { CEFR_PATTERNS_MASTER, getPatternsByLevel } from '../data/cefrPatternsMaster';
+import { getPatternsByLevel } from '../data/cefrPatternsMaster';
 import { CEFR_VOCAB_MASTER, getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
 import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
@@ -221,7 +221,7 @@ export function loadVocabs(): VocabItem[] {
     let vocabs: VocabItem[] = JSON.parse(raw);
     let modified = false;
 
-    // 最新マスタ辞書と自動同期（過去の誤データやヘリウム等のクレンジング）
+    // 1. 最新マスタ辞書と自動同期（過去の誤データやヘリウム等のクレンジング）
     vocabs = vocabs.map(v => {
       const masterItem = getVocabByPhrase(v.phrase);
       if (masterItem && (
@@ -243,20 +243,51 @@ export function loadVocabs(): VocabItem[] {
       return v;
     });
 
-    // センテンスが段落単位になっている古いカードを1文単位にトリム
+    // 2. センテンスが段落単位になっている古いカードを1文単位にトリム & 【例文】プレフィックスの除去
     vocabs = vocabs.map(v => {
-      if (v.sentence && (v.sentence.includes('\n') || v.sentence.includes('. ') || v.sentence.includes('! ') || v.sentence.includes('? '))) {
-        const clean = extractSingleSentence(v.sentence, v.focusWord || v.phrase);
-        if (clean && clean !== v.sentence && clean.length < v.sentence.length) {
-          modified = true;
-          return {
-            ...v,
-            sentence: clean,
-            exampleSentence: clean,
-          };
+      let item = { ...v };
+      let itemMod = false;
+
+      if (item.meaning && (item.meaning.startsWith('【例文】') || item.meaning.startsWith('(例文)') || item.meaning.startsWith('例文:'))) {
+        item.meaning = cleanTranslationText(item.meaning);
+        itemMod = true;
+      }
+      if (item.translation && (item.translation.startsWith('【例文】') || item.translation.startsWith('(例文)') || item.translation.startsWith('例文:'))) {
+        item.translation = cleanTranslationText(item.translation);
+        itemMod = true;
+      }
+
+      // 単語カードで meaning が sentence と完全一致、または英語長文になっている場合の自動修復
+      const isWord = item.focusType === 'word' || (item.focusWord && item.focusWord.length > 0) || (item.phrase && item.phrase.trim().split(/\s+/).length <= 2 && item.focusType !== 'pattern');
+      if (isWord && item.meaning && item.sentence && (item.meaning.trim() === item.sentence.trim() || (!/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(item.meaning) && item.meaning.length > 30))) {
+        const targetPhrase = item.focusWord || item.phrase;
+        const masterItem = getVocabByPhrase(targetPhrase);
+        if (masterItem && masterItem.meaning) {
+          item.meaning = masterItem.meaning;
+          if (item.focusMeaning) item.focusMeaning = masterItem.meaning;
+          itemMod = true;
         }
       }
-      return v;
+
+      if (item.sentence && (item.sentence.includes('\n') || item.sentence.includes('. ') || item.sentence.includes('! ') || item.sentence.includes('? '))) {
+        const clean = extractSingleSentence(item.sentence, item.focusWord || item.phrase);
+        if (clean && clean !== item.sentence && clean.length < item.sentence.length) {
+          item.sentence = clean;
+          item.exampleSentence = clean;
+          itemMod = true;
+        }
+      }
+
+      // 初回登録時の埋没フラグをクリアして即時出題可能に
+      if (item.buriedUntilDate) {
+        item.buriedUntilDate = undefined;
+        itemMod = true;
+      }
+
+      if (itemMod) {
+        modified = true;
+      }
+      return item;
     });
 
     if (modified) {
@@ -1397,45 +1428,8 @@ export function getUnmasteredTargetVocabs(level: 'A1' | 'A2' | 'B1' | 'B2', coun
  * 語彙アイテムとマスターDBの構文パターンカード（要復習・遭遇済み）を統合したAnkiデッキを生成
  */
 export function loadAnkiUnifiedDeck(): VocabItem[] {
-  const vocabs = loadVocabs();
-  const mastery = loadMasteryState();
-  const today = getTodayDateString();
-
-  const patternCards: VocabItem[] = [];
-
-  CEFR_PATTERNS_MASTER.forEach(pat => {
-    const pState = mastery.patterns[pat.id];
-    if (pState && (pState.status === 'lapsed' || pState.status === 'exposed')) {
-      const rotIdx = (pState.encounterCount || 0) % pat.variations.length;
-      const currentVar = pat.variations[rotIdx];
-
-      patternCards.push({
-        id: pat.id,
-        phrase: pat.name,
-        meaning: pat.meaning,
-        partOfSpeech: pat.categoryLabel,
-        contextNote: pat.focus,
-        exampleSentence: currentVar.sentence,
-        lapseCount: pState.status === 'lapsed' ? 1 : 0,
-        repetitionCount: pState.encounterCount || 0,
-        intervalDays: 1,
-        nextReviewDate: today,
-        lastReviewedAt: pState.lastSeenAt || new Date().toISOString(),
-        createdAt: pState.firstSeenAt || new Date().toISOString(),
-        importance: 5,
-        easeFactor: 2.5,
-        cardState: pState.status === 'lapsed' ? 'relearning' : 'review',
-        cardType: 'pattern',
-        patternId: pat.id,
-        level: pat.cefr,
-        variations: pat.variations,
-      });
-    }
-  });
-
-  return [...vocabs, ...patternCards];
+  return loadVocabs();
 }
-
 
 export interface SaveSentenceCardParams {
   sentence: string;
@@ -1454,6 +1448,19 @@ export interface SaveSentenceCardParams {
 /**
  * 複数文を含む段落テキストから、対象の単語・フレーズが含まれる「1文（ピリオド・疑問符・感嘆符・改行で区切られた単位）」を正確に抽出する
  */
+/**
+ * 翻訳テキストや日本語訳から【例文】や(例文)などの不要な接頭辞を除去しサニタイズ
+ */
+export function cleanTranslationText(text?: string): string {
+  if (!text) return '';
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^【例文】\s*/g, '');
+  cleaned = cleaned.replace(/^\(例文\)\s*/g, '');
+  cleaned = cleaned.replace(/^\[例文\]\s*/g, '');
+  cleaned = cleaned.replace(/^例文[:：]\s*/g, '');
+  return cleaned.trim();
+}
+
 export function extractSingleSentence(text: string, focusToken?: string): string {
   if (!text) return '';
   const trimmed = text.trim();
@@ -1480,7 +1487,6 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
   const vocabs = loadVocabs();
   const now = new Date().toISOString();
   const today = getTodayDateString();
-  const tomorrow = addDaysToDate(1);
 
   const id1 = 'voc_en_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const id2 = 'voc_ja_' + (Date.now() + 1) + '_' + Math.random().toString(36).substring(2, 6);
@@ -1489,32 +1495,35 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
   const srs2 = calculateLapseSRS();
 
   const cleanSentence = extractSingleSentence(params.sentence, params.focusWord);
+  const isWord = params.focusType === 'word';
 
-  const phraseText = params.focusType === 'word' && params.focusWord 
-    ? params.focusWord.trim() 
+  const phraseText = isWord && params.focusWord
+    ? params.focusWord.trim()
     : cleanSentence;
 
-  const meaningText = params.focusType === 'word' && params.focusMeaning
-    ? params.focusMeaning.trim()
-    : params.translation.trim();
+  const meaningText = cleanTranslationText(
+    isWord && params.focusMeaning
+      ? params.focusMeaning.trim()
+      : params.translation.trim()
+  );
 
   const primaryNote = params.focusType === 'pattern' && params.corePatterns && params.corePatterns.length > 0
     ? (params.corePatterns[0].briefNote || params.corePatterns[0].meaningTemplate)
-    : (params.focusMeaning || '');
+    : (params.focusMeaning ? cleanTranslationText(params.focusMeaning) : '');
 
   // Card 1: 英 ➔ 和 (読解・コンパイル用)
   const card1: VocabItem = {
     id: id1,
     phrase: phraseText,
     meaning: meaningText,
-    partOfSpeech: params.focusType === 'word' ? '単語・イディオム' : '文・構文',
+    partOfSpeech: isWord ? '単語・イディオム' : (params.focusType === 'pattern' ? '構文・文法' : '1文・表現'),
     contextNote: primaryNote,
     exampleSentence: cleanSentence,
     sentence: cleanSentence,
-    translation: params.translation.trim(),
+    translation: cleanTranslationText(params.translation),
     focusType: params.focusType,
-    focusWord: params.focusWord?.trim(),
-    focusMeaning: params.focusMeaning?.trim(),
+    focusWord: isWord ? params.focusWord?.trim() : undefined,
+    focusMeaning: isWord ? meaningText : undefined,
     corePatterns: params.corePatterns || [],
     cardDirection: 'en_to_ja',
     siblingId: id2,
@@ -1527,25 +1536,25 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
   };
 
-  // Card 2: 和 ➔ 英 (瞬間英作文・組み立て用) - 初回は翌日に延期して同日重複を防止
+  // Card 2: 和 ➔ 英 (瞬間英作文・組み立て用)
+  // 両方のカードを本日復習対象として即時登録し、Ankiのシャッフルでランダムに出題
   const card2: VocabItem = {
     id: id2,
     phrase: phraseText,
     meaning: meaningText,
-    partOfSpeech: params.focusType === 'word' ? '単語・イディオム' : '文・構文',
+    partOfSpeech: isWord ? '単語・イディオム' : (params.focusType === 'pattern' ? '構文・文法' : '1文・表現'),
     contextNote: primaryNote,
     exampleSentence: cleanSentence,
     sentence: cleanSentence,
-    translation: params.translation.trim(),
+    translation: cleanTranslationText(params.translation),
     focusType: params.focusType,
-    focusWord: params.focusWord?.trim(),
-    focusMeaning: params.focusMeaning?.trim(),
+    focusWord: isWord ? params.focusWord?.trim() : undefined,
+    focusMeaning: isWord ? meaningText : undefined,
     corePatterns: params.corePatterns || [],
     cardDirection: 'ja_to_en',
     siblingId: id1,
     ...srs2,
-    nextReviewDate: tomorrow,
-    buriedUntilDate: tomorrow,
+    nextReviewDate: today, // 本日すぐに復習可能
     createdAt: now,
     lastReviewedAt: now,
     sourceStoryId: params.sourceStoryId,
@@ -1553,15 +1562,25 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
   };
 
-  // 重複チェック: 同じ sentence かつ同じ direction があれば更新、なければ先頭追加
-  const existingIdx1 = vocabs.findIndex(v => v.sentence === card1.sentence && v.cardDirection === 'en_to_ja');
+  // 重複チェック:
+  // 単語カードの場合は phrase + cardDirection でチェック
+  // 文・構文カードの場合は sentence + cardDirection でチェック
+  const matchFn1 = isWord
+    ? (v: VocabItem) => v.phrase.toLowerCase() === card1.phrase.toLowerCase() && v.cardDirection === 'en_to_ja'
+    : (v: VocabItem) => v.sentence === card1.sentence && v.cardDirection === 'en_to_ja';
+
+  const existingIdx1 = vocabs.findIndex(matchFn1);
   if (existingIdx1 >= 0) {
     vocabs[existingIdx1] = { ...vocabs[existingIdx1], ...card1, id: vocabs[existingIdx1].id };
   } else {
     vocabs.unshift(card1);
   }
 
-  const existingIdx2 = vocabs.findIndex(v => v.sentence === card2.sentence && v.cardDirection === 'ja_to_en');
+  const matchFn2 = isWord
+    ? (v: VocabItem) => v.phrase.toLowerCase() === card2.phrase.toLowerCase() && v.cardDirection === 'ja_to_en'
+    : (v: VocabItem) => v.sentence === card2.sentence && v.cardDirection === 'ja_to_en';
+
+  const existingIdx2 = vocabs.findIndex(matchFn2);
   if (existingIdx2 >= 0) {
     vocabs[existingIdx2] = { ...vocabs[existingIdx2], ...card2, id: vocabs[existingIdx2].id };
   } else {
