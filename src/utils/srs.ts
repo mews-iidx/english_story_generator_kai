@@ -453,11 +453,16 @@ export function pickTargetVocabsForStory(
 
   // 4. 候補の選定（1日2〜3話生成してもプールの上位から順に重複なく4単語ずつ消化）
   const selected: VocabItem[] = [];
+  const pickedSentences = new Set<string>();
 
-  // まず新鮮な高優先度単語から順に枠を埋める (例: 1回目=上位1..4, 2回目=5..8, 3回目=9..12)
+  // まず新鮮な高優先度単語から順に枠を埋める (兄弟カードの重複を防ぐ)
   for (const item of freshItems) {
     if (selected.length >= count) break;
-    selected.push(item);
+    const sentKey = item.sentence || item.exampleSentence || item.phrase;
+    if (!pickedSentences.has(sentKey)) {
+      pickedSentences.add(sentKey);
+      selected.push(item);
+    }
   }
 
   // 新鮮な単語だけでは count に満たない場合、最も昔に使われた単語から補充
@@ -470,12 +475,14 @@ export function pickTargetVocabsForStory(
     }
   }
 
-  // 5. Geminiプロンプト用フォーマットに整形して返却
+  // 5. Geminiプロンプト用フォーマットに整形して返却（単語または構文骨格）
   return selected.map(item => {
+    const term = item.focusWord || (item.focusType === 'pattern' && item.corePatterns?.[0]?.formula ? item.corePatterns[0].formula : item.phrase);
+    const meaning = item.focusMeaning || item.meaning;
     if (item.contextNote && item.contextNote.length > 0) {
-      return `${item.phrase} (意味/構文: ${item.meaning} - ${item.contextNote.slice(0, 40)})`;
+      return `${term} (意味/構文: ${meaning} - ${item.contextNote.slice(0, 40)})`;
     }
-    return `${item.phrase} (意味: ${item.meaning})`;
+    return `${term} (意味: ${meaning})`;
   });
 }
 

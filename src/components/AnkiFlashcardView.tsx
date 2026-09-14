@@ -157,11 +157,14 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
     FILTER_OPTIONS.forEach(opt => {
       const matched = vocabs.filter(opt.filterFn);
-      const dueCount = matched.filter(v =>
-        v.cardState === 'learning' ||
-        v.cardState === 'relearning' ||
-        ((!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today)
-      ).length;
+      const dueCount = matched.filter(v => {
+        if (v.buriedUntilDate && v.buriedUntilDate > today) return false;
+        return (
+          v.cardState === 'learning' ||
+          v.cardState === 'relearning' ||
+          ((!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today)
+        );
+      }).length;
 
       stats[opt.id] = {
         total: matched.length,
@@ -195,8 +198,10 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
   // セッション初期化ヘルパー
   const initSession = useCallback((targetVocabs: VocabItem[], allowExtraStudy: boolean = false) => {
-    const learningCards = targetVocabs.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
-    const dueReviewCards = targetVocabs.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
+    // Sibling Burying: 今日延期されているカードは除外
+    const activeCards = targetVocabs.filter(v => !v.buriedUntilDate || v.buriedUntilDate <= today);
+    const learningCards = activeCards.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
+    const dueReviewCards = activeCards.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
 
     let initialReviews: VocabItem[] = [];
     let initialLearning: VocabItem[] = [];
@@ -629,41 +634,116 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               )}
             </div>
           ) : (
-            /* Standard Vocab Card UI */
-            <div className="space-y-3">
-              <div className="flex items-center justify-center space-x-2">
-                <h3 className="text-2xl sm:text-3xl font-extrabold text-sky-400 tracking-tight">
-                  {activeCard.phrase}
-                </h3>
-                <button
-                  onClick={() => speakText(activeCard.phrase)}
-                  className="p-2 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors border border-sky-500/30"
-                  title="発音を再生"
-                >
-                  <Volume2 className="w-4 h-4" />
-                </button>
-              </div>
-
-              {isFlipped ? (
-                <div className="space-y-3 animate-fadeIn">
-                  <div className="text-xl sm:text-2xl font-bold text-white">
-                    {activeCard.meaning}
+            /* 1-Sentence Card & Vocab Card UI (両面・兄弟カード対応) */
+            <div className="space-y-4">
+              {activeCard.cardDirection === 'ja_to_en' ? (
+                /* 和 ➔ 英 (瞬間英作文・組み立てモード) */
+                <div className="space-y-3">
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-amber-500/20 border border-amber-500/30 rounded-full text-amber-300 text-xs font-bold">
+                    <span>🗣️ 瞬間英作文 (和 ➔ 英)</span>
                   </div>
-                  {activeCard.contextNote && (
-                    <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-                      {activeCard.contextNote}
-                    </p>
-                  )}
-                  {activeCard.exampleSentence && (
-                    <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl text-xs text-slate-300 text-left font-serif leading-relaxed">
-                      <span className="font-bold text-sky-400 block mb-0.5">例文:</span>
-                      "{activeCard.exampleSentence}"
+
+                  <div className="text-xl sm:text-2xl font-extrabold text-white leading-snug py-2">
+                    「{activeCard.translation || activeCard.meaning}」
+                  </div>
+
+                  {isFlipped ? (
+                    <div className="space-y-3 pt-3 border-t border-slate-800 animate-fadeIn text-left">
+                      <div className="flex items-start justify-between gap-2 p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
+                        <div className="space-y-1">
+                          <span className="text-[11px] font-bold text-sky-400 block">正解の英文:</span>
+                          <p className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
+                            {activeCard.sentence || activeCard.exampleSentence || activeCard.phrase}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => speakText(activeCard.sentence || activeCard.exampleSentence || activeCard.phrase)}
+                          className="p-2 text-sky-400 hover:text-sky-300 bg-sky-950/50 rounded-xl border border-sky-500/30 shrink-0"
+                          title="発音を再生"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {activeCard.focusWord && (
+                        <div className="text-xs text-slate-400 px-1">
+                          キー単語: <strong className="text-sky-300">{activeCard.focusWord}</strong> ({activeCard.focusMeaning || ''})
+                        </div>
+                      )}
+
+                      {/* 構文骨格バッジ */}
+                      {activeCard.corePatterns && activeCard.corePatterns.length > 0 && (
+                        <div className="p-3 bg-purple-950/40 border border-purple-500/30 rounded-2xl space-y-1.5 text-xs">
+                          <span className="text-[11px] font-bold text-purple-300">💡 構文骨格:</span>
+                          {activeCard.corePatterns.map((cp, idx) => (
+                            <div key={idx} className="p-2 bg-slate-950/70 border border-purple-500/20 rounded-xl">
+                              <div className="font-bold text-purple-200">{cp.patternName}: <code className="text-[11px] text-amber-300 font-mono">{cp.formula}</code></div>
+                              <div className="text-[10px] text-slate-300">{cp.meaningTemplate}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="py-6">
+                      <span className="text-xs text-slate-500">頭の中で英語を組み立ててからタップ</span>
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="py-8">
-                  <span className="text-xs text-slate-500">タップして日本語訳を表示</span>
+                /* 英 ➔ 和 (読解・コンパイル速度モード) */
+                <div className="space-y-3">
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-sky-500/20 border border-sky-500/30 rounded-full text-sky-300 text-xs font-bold">
+                    <span>📖 読解コンパイル (英 ➔ 和)</span>
+                  </div>
+
+                  <div className="flex items-center justify-center space-x-2 py-1">
+                    <p className="text-lg sm:text-2xl font-bold text-white font-serif leading-relaxed px-2">
+                      {activeCard.sentence || activeCard.exampleSentence || activeCard.phrase}
+                    </p>
+                    <button
+                      onClick={() => speakText(activeCard.sentence || activeCard.exampleSentence || activeCard.phrase)}
+                      className="p-2 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors border border-sky-500/30 shrink-0"
+                      title="発音を再生"
+                    >
+                      <Volume2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {isFlipped ? (
+                    <div className="space-y-3 pt-3 border-t border-slate-800 animate-fadeIn text-left">
+                      <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-1">
+                        <span className="text-[11px] font-bold text-emerald-400 block">日本語訳:</span>
+                        <div className="text-base sm:text-lg font-bold text-white leading-relaxed">
+                          {activeCard.translation || activeCard.meaning}
+                        </div>
+                      </div>
+
+                      {activeCard.focusWord && (
+                        <div className="text-xs text-slate-400 px-1">
+                          フォーカス単語: <strong className="text-sky-300">{activeCard.focusWord}</strong> ({activeCard.focusMeaning || ''})
+                        </div>
+                      )}
+
+                      {/* 構文骨格バッジ */}
+                      {activeCard.corePatterns && activeCard.corePatterns.length > 0 && (
+                        <div className="p-3 bg-purple-950/40 border border-purple-500/30 rounded-2xl space-y-1.5 text-xs">
+                          <span className="text-[11px] font-bold text-purple-300">💡 構文骨格 (急所):</span>
+                          {activeCard.corePatterns.map((cp, idx) => (
+                            <div key={idx} className="p-2 bg-slate-950/70 border border-purple-500/20 rounded-xl">
+                              <div className="font-bold text-purple-200">{cp.patternName}: <code className="text-[11px] text-amber-300 font-mono">{cp.formula}</code></div>
+                              <div className="text-[10px] text-slate-300">{cp.meaningTemplate}</div>
+                              {cp.briefNote && <div className="text-[9px] text-purple-300/80 pt-0.5 border-t border-purple-500/10">💡 {cp.briefNote}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="py-6">
+                      <span className="text-xs text-slate-500">英語の語順のまま理解してタップ</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

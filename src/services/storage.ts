@@ -3,13 +3,13 @@ import { CEFR_PATTERNS_MASTER, getPatternsByLevel } from '../data/cefrPatternsMa
 import { CEFR_VOCAB_MASTER, getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
 import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
-import { VocabItem, VocabLookupResult } from '../types/vocab';
+import { VocabItem, VocabLookupResult, ExtractedCorePattern } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
 import { Story } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { ChatMessage } from '../types/chat';
 import { Persona, CallSession } from '../types/persona';
-import { calculateLapseSRS, calculateSuccessSRS, calculateAnkiSRS } from '../utils/srs';
+import { calculateLapseSRS, calculateSuccessSRS, calculateAnkiSRS, addDaysToDate } from '../utils/srs';
 
 const STORAGE_KEYS = {
   SETTINGS: 'storykai_settings_v1',
@@ -377,6 +377,22 @@ export function recordAnkiRating(
   };
 
   vocabs[index] = updated;
+
+  // Sibling Burying (兄弟カード延期): 今日中に解いた兄弟カードがあれば明日に延期
+  if (item.siblingId) {
+    const siblingIndex = vocabs.findIndex(v => v.id === item.siblingId);
+    if (siblingIndex >= 0) {
+      const today = getTodayDateString();
+      const tomorrow = addDaysToDate(1);
+      const sibling = vocabs[siblingIndex];
+      vocabs[siblingIndex] = {
+        ...sibling,
+        buriedUntilDate: tomorrow,
+        nextReviewDate: sibling.nextReviewDate <= today ? tomorrow : sibling.nextReviewDate,
+      };
+    }
+  }
+
   saveVocabsBatch(vocabs);
   return updated;
 }
@@ -1315,4 +1331,113 @@ export function loadAnkiUnifiedDeck(): VocabItem[] {
   });
 
   return [...vocabs, ...patternCards];
+}
+
+
+export interface SaveSentenceCardParams {
+  sentence: string;
+  translation: string;
+  focusType: 'word' | 'pattern' | 'sentence';
+  focusWord?: string;
+  focusMeaning?: string;
+  corePatterns?: ExtractedCorePattern[];
+  sourceStoryId?: string;
+  importance?: number;
+}
+
+/**
+ * 1文単位で英和・和英の2枚の兄弟カードを自動生成して保存
+ */
+export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { card1: VocabItem; card2: VocabItem } {
+  const vocabs = loadVocabs();
+  const now = new Date().toISOString();
+  const today = getTodayDateString();
+  const tomorrow = addDaysToDate(1);
+
+  const id1 = 'voc_en_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const id2 = 'voc_ja_' + (Date.now() + 1) + '_' + Math.random().toString(36).substring(2, 6);
+
+  const srs1 = calculateLapseSRS();
+  const srs2 = calculateLapseSRS();
+
+  const phraseText = params.focusType === 'word' && params.focusWord 
+    ? params.focusWord.trim() 
+    : params.sentence.trim();
+
+  const meaningText = params.focusType === 'word' && params.focusMeaning
+    ? params.focusMeaning.trim()
+    : params.translation.trim();
+
+  const primaryNote = params.focusType === 'pattern' && params.corePatterns && params.corePatterns.length > 0
+    ? (params.corePatterns[0].briefNote || params.corePatterns[0].meaningTemplate)
+    : (params.focusMeaning || '');
+
+  // Card 1: 英 ➔ 和 (読解・コンパイル用)
+  const card1: VocabItem = {
+    id: id1,
+    phrase: phraseText,
+    meaning: meaningText,
+    partOfSpeech: params.focusType === 'word' ? '単語・イディオム' : '文・構文',
+    contextNote: primaryNote,
+    exampleSentence: params.sentence.trim(),
+    sentence: params.sentence.trim(),
+    translation: params.translation.trim(),
+    focusType: params.focusType,
+    focusWord: params.focusWord?.trim(),
+    focusMeaning: params.focusMeaning?.trim(),
+    corePatterns: params.corePatterns || [],
+    cardDirection: 'en_to_ja',
+    siblingId: id2,
+    ...srs1,
+    nextReviewDate: today,
+    createdAt: now,
+    lastReviewedAt: now,
+    sourceStoryId: params.sourceStoryId,
+    importance: params.importance || (params.focusType === 'pattern' ? 4 : 3),
+    cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
+  };
+
+  // Card 2: 和 ➔ 英 (瞬間英作文・組み立て用) - 初回は翌日に延期して同日重複を防止
+  const card2: VocabItem = {
+    id: id2,
+    phrase: phraseText,
+    meaning: meaningText,
+    partOfSpeech: params.focusType === 'word' ? '単語・イディオム' : '文・構文',
+    contextNote: primaryNote,
+    exampleSentence: params.sentence.trim(),
+    sentence: params.sentence.trim(),
+    translation: params.translation.trim(),
+    focusType: params.focusType,
+    focusWord: params.focusWord?.trim(),
+    focusMeaning: params.focusMeaning?.trim(),
+    corePatterns: params.corePatterns || [],
+    cardDirection: 'ja_to_en',
+    siblingId: id1,
+    ...srs2,
+    nextReviewDate: tomorrow,
+    buriedUntilDate: tomorrow,
+    createdAt: now,
+    lastReviewedAt: now,
+    sourceStoryId: params.sourceStoryId,
+    importance: params.importance || (params.focusType === 'pattern' ? 4 : 3),
+    cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
+  };
+
+  // 重複チェック: 同じ sentence かつ同じ direction があれば更新、なければ先頭追加
+  const existingIdx1 = vocabs.findIndex(v => v.sentence === card1.sentence && v.cardDirection === 'en_to_ja');
+  if (existingIdx1 >= 0) {
+    vocabs[existingIdx1] = { ...vocabs[existingIdx1], ...card1, id: vocabs[existingIdx1].id };
+  } else {
+    vocabs.unshift(card1);
+  }
+
+  const existingIdx2 = vocabs.findIndex(v => v.sentence === card2.sentence && v.cardDirection === 'ja_to_en');
+  if (existingIdx2 >= 0) {
+    vocabs[existingIdx2] = { ...vocabs[existingIdx2], ...card2, id: vocabs[existingIdx2].id };
+  } else {
+    vocabs.unshift(card2);
+  }
+
+  saveVocabsBatch(vocabs);
+  return { card1, card2 };
 }

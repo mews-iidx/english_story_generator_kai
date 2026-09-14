@@ -1,3 +1,4 @@
+import { ExtractedCorePattern } from './types/vocab';
 import { ExpressionErrorItem } from './types/expressionError';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Header, NavTab } from './components/Header';
@@ -29,6 +30,8 @@ import {
   recordStoryRead,
   loadVocabs,
   recordVocabLapse,
+  saveSentenceCardWithSiblings,
+  SaveSentenceCardParams,
   recordVocabMastered,
   deleteVocab as removeVocabFromStorage,
   saveVocabsBatch,
@@ -60,7 +63,8 @@ import {
   recordPatternStatus,
 } from './services/storage';
 
-import { generateStorySeriesWithGemini, fetchContextualWordMeaning } from './services/gemini';
+import { generateStorySeriesWithGemini, fetchContextualWordMeaning,
+  extractSentenceCorePatternsWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
 import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
@@ -404,6 +408,35 @@ export const App: React.FC = () => {
   };
 
   // 単語・構文を弱点リストに追加 / Lapse記録
+  // 1文カード（英和・和英の兄弟カード）を自動生成して保存
+  const handleSaveSentenceCard = (params: SaveSentenceCardParams) => {
+    saveSentenceCardWithSiblings({
+      ...params,
+      sourceStoryId: readingStory?.id,
+    });
+    const updatedVocabs = loadVocabs();
+    setVocabs(updatedVocabs);
+    triggerAutoSync(updatedVocabs, stories);
+  };
+
+  // 選択文から2〜3個の構造化構文骨格仮説を抽出
+  const handleExtractCorePatterns = async (): Promise<ExtractedCorePattern[]> => {
+    if (!settings.geminiApiKey) {
+      alert('Gemini APIキーを設定してください');
+      return [];
+    }
+    const res = await extractSentenceCorePatternsWithGemini(
+      selectedText,
+      translatedText,
+      settings.geminiApiKey,
+      settings.geminiModel
+    );
+    if (res.tokenUsage) {
+      handleRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
+    }
+    return res.patterns;
+  };
+
   const handleAddToVocab = (phrase: string, meaning: string, sentence?: string, note?: string) => {
     const lookup = {
       phrase,
@@ -922,7 +955,7 @@ export const App: React.FC = () => {
         onImportStory={handleImportStory}
       />
 
-      {/* スマホChrome風ボトムシート翻訳 */}
+      {/* スマホChrome風ボトムシート翻訳 (1文カード & 構文抽出対応) */}
       <TranslationBottomSheet
         isOpen={isSheetOpen}
         onClose={() => {
@@ -937,7 +970,9 @@ export const App: React.FC = () => {
         isLoading={isTranslating}
         isSavedAsVocab={isSavedAsVocab}
         onAddToVocab={handleAddToVocab}
+        onSaveSentenceCard={handleSaveSentenceCard}
         onFetchContextualMeaning={handleFetchContextualMeaning}
+        onExtractCorePatterns={handleExtractCorePatterns}
         onOpenChatMentor={(text) => handleOpenChatWithSelection(text)}
         onRecordPatternFeedback={(patternId, status) => {
           recordPatternStatus(patternId, status);

@@ -1,3 +1,4 @@
+import { ExtractedCorePattern } from '../types/vocab';
 import { Story, ContentType, SeriesType, TargetEmbedding } from '../types/story';
 import { CefrLevel } from '../types/settings';
 import { PatternMasterItem, VocabMasterItem } from '../types/mastery';
@@ -1036,4 +1037,95 @@ export async function fetchContextualWordMeaning(
   }
 
   throw new Error('文脈訳の取得に失敗しました');
+}
+
+
+/**
+ * 難解文・選択文から2〜3個の核心文法・構文パターン仮説を構造化抽出
+ */
+export async function extractSentenceCorePatternsWithGemini(
+  sentence: string,
+  translation?: string,
+  apiKey?: string,
+  preferredModel?: string
+): Promise<{ patterns: ExtractedCorePattern[]; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
+  if (!apiKey || !sentence.trim()) {
+    return { patterns: [] };
+  }
+
+  const promptText = `あなたはプロの英語構文・文法指導者です。
+以下の英文（および日本語訳）から、学習者が理解・スピーキングする上で鍵となる【核心の文法・構文パターン（2〜3個）】を抽出し、厳密なフォーマットで構造化してください。
+
+【対象英文】: "${sentence}"
+${translation ? `【日本語訳】: "${translation}"` : ''}
+
+【要件】:
+1. 曖昧な散文ではなく、S+V記号（S, V, O, C, [Adj], [Verb], that節 など）を用いた定型フォーマット「formula」を作成すること。
+2. 該当する構文の日本語テンプレート（meaningTemplate）を「〜すぎて…できない」「Sは〜ということを…」のように作成すること。
+3. 文中でその構文を構成している単語の配列「highlightTokens」を抽出すること。
+4. なぜその訳になるのか、学習者が一瞬で納得できる急所解説（briefNote）を1行（30文字以内）で書くこと。
+5. 必ず2〜3個のパターン仮説を配列で返すこと。
+
+必ず以下のJSON配列フォーマットのみを出力してください：
+[
+  {
+    "patternName": "構文・文法名 (例: too...to 構文 (結果・程度))",
+    "formula": "S + be + too [Adj] + to [Verb]",
+    "meaningTemplate": "Sはあまりに[Adj]なので[Verb]できない",
+    "highlightTokens": ["too", "heavy", "to", "carry"],
+    "briefNote": "too + 形容詞 + to不定詞 で否定の意味を含む"
+  }
+]`;
+
+  const candidateModels = preferredModel
+    ? [preferredModel, 'gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.6-flash']
+    : ['gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.6-flash'];
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 500,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+        if (rawText) {
+          const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const patterns: ExtractedCorePattern[] = parsed.map(p => ({
+              patternName: String(p.patternName || '重要構文'),
+              formula: String(p.formula || ''),
+              meaningTemplate: String(p.meaningTemplate || ''),
+              highlightTokens: Array.isArray(p.highlightTokens) ? p.highlightTokens.map(String) : [],
+              briefNote: String(p.briefNote || ''),
+            }));
+
+            return {
+              patterns,
+              tokenUsage: {
+                promptTokens: usage?.promptTokenCount || 0,
+                candidatesTokens: usage?.candidatesTokenCount || 0,
+              },
+            };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`extractSentenceCorePatternsWithGemini error on ${currentModel}:`, e);
+    }
+  }
+
+  return { patterns: [] };
 }
