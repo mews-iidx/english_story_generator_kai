@@ -243,6 +243,22 @@ export function loadVocabs(): VocabItem[] {
       return v;
     });
 
+    // センテンスが段落単位になっている古いカードを1文単位にトリム
+    vocabs = vocabs.map(v => {
+      if (v.sentence && (v.sentence.includes('\n') || v.sentence.includes('. ') || v.sentence.includes('! ') || v.sentence.includes('? '))) {
+        const clean = extractSingleSentence(v.sentence, v.focusWord || v.phrase);
+        if (clean && clean !== v.sentence && clean.length < v.sentence.length) {
+          modified = true;
+          return {
+            ...v,
+            sentence: clean,
+            exampleSentence: clean,
+          };
+        }
+      }
+      return v;
+    });
+
     if (modified) {
       saveVocabsBatch(vocabs);
     }
@@ -1435,6 +1451,31 @@ export interface SaveSentenceCardParams {
 /**
  * 1文単位で英和・和英の2枚の兄弟カードを自動生成して保存
  */
+/**
+ * 複数文を含む段落テキストから、対象の単語・フレーズが含まれる「1文（ピリオド・疑問符・感嘆符・改行で区切られた単位）」を正確に抽出する
+ */
+export function extractSingleSentence(text: string, focusToken?: string): string {
+  if (!text) return '';
+  const trimmed = text.trim();
+  
+  // 文末（. ! ? または改行）で分割
+  const sentences = trimmed
+    .replace(/([.!?]["']?)(?:\s+|\n+|$)/g, '$1\n')
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (sentences.length <= 1) return trimmed;
+
+  if (focusToken && focusToken.trim()) {
+    const target = focusToken.toLowerCase().trim();
+    const matched = sentences.find(s => s.toLowerCase().includes(target));
+    if (matched) return matched;
+  }
+
+  return sentences[0];
+}
+
 export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { card1: VocabItem; card2: VocabItem } {
   const vocabs = loadVocabs();
   const now = new Date().toISOString();
@@ -1447,9 +1488,11 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
   const srs1 = calculateLapseSRS();
   const srs2 = calculateLapseSRS();
 
+  const cleanSentence = extractSingleSentence(params.sentence, params.focusWord);
+
   const phraseText = params.focusType === 'word' && params.focusWord 
     ? params.focusWord.trim() 
-    : params.sentence.trim();
+    : cleanSentence;
 
   const meaningText = params.focusType === 'word' && params.focusMeaning
     ? params.focusMeaning.trim()
@@ -1466,8 +1509,8 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     meaning: meaningText,
     partOfSpeech: params.focusType === 'word' ? '単語・イディオム' : '文・構文',
     contextNote: primaryNote,
-    exampleSentence: params.sentence.trim(),
-    sentence: params.sentence.trim(),
+    exampleSentence: cleanSentence,
+    sentence: cleanSentence,
     translation: params.translation.trim(),
     focusType: params.focusType,
     focusWord: params.focusWord?.trim(),
@@ -1491,8 +1534,8 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     meaning: meaningText,
     partOfSpeech: params.focusType === 'word' ? '単語・イディオム' : '文・構文',
     contextNote: primaryNote,
-    exampleSentence: params.sentence.trim(),
-    sentence: params.sentence.trim(),
+    exampleSentence: cleanSentence,
+    sentence: cleanSentence,
     translation: params.translation.trim(),
     focusType: params.focusType,
     focusWord: params.focusWord?.trim(),

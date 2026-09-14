@@ -6,7 +6,7 @@ import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones,
 
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
-import { recordDailyReadingActivity, loadMasteryState } from '../services/storage';
+import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence } from '../services/storage';
 import { getCandidateLemmas } from '../utils/storyVocabExtractor';
 import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
 
@@ -466,7 +466,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         });
       }
 
-      onWordOrPhraseTap(phrase, fullParaText, matchingEmbedding);
+      const singleSentence = extractSingleSentence(fullParaText, phrase);
+      onWordOrPhraseTap(phrase, singleSentence, matchingEmbedding);
     }
   };
 

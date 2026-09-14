@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Sparkles, CheckCircle2, Star, Zap, Filter, Undo2, Lightbulb, Repeat } from 'lucide-react';
+import { Volume2, Sparkles, CheckCircle2, Zap, Filter, Undo2, Lightbulb, Repeat, BookOpen, PenTool } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
 
-export type AnkiImportanceFilter = 'ge4' | 'ge3' | 'all' | 'syntax' | 'only5' | 'only4' | 'only3' | 'low';
+export type AnkiCardFilter = 'all' | 'word' | 'pattern' | 'en_to_ja' | 'ja_to_en';
 
 interface FilterOption {
-  id: AnkiImportanceFilter;
+  id: AnkiCardFilter;
   label: string;
   badgeLabel: string;
   description: string;
@@ -17,60 +17,39 @@ interface FilterOption {
 
 const FILTER_OPTIONS: FilterOption[] = [
   {
-    id: 'ge4',
-    label: '★4以上 (最頻出・必須)',
-    badgeLabel: '★4以上 👑',
-    description: '日常英会話の基盤となる最頻出・必須語彙に集中',
-    filterFn: (v) => (v.importance ?? 3) >= 4,
-  },
-  {
-    id: 'syntax',
-    label: '💡 構文カード (3文ローテーション)',
-    badgeLabel: '💡 構文マスター',
-    description: '文脈依存を防ぐ3パターン回転出題の構文カード',
-    filterFn: (v) => v.cardType === 'pattern',
-  },
-  {
-    id: 'ge3',
-    label: '★3以上 (標準〜重要)',
-    badgeLabel: '★3以上 ⭐',
-    description: '標準から最頻出までバランス良くマスター',
-    filterFn: (v) => (v.importance ?? 3) >= 3,
-  },
-  {
     id: 'all',
-    label: 'すべて (全語彙・構文)',
+    label: 'すべて (全カード)',
     badgeLabel: 'すべて 📚',
-    description: '登録された全語彙と構文カードをまとめて復習',
+    description: '登録された全1文カード・構文カードをまとめて復習',
     filterFn: () => true,
   },
   {
-    id: 'only5',
-    label: '★5 (超重要・日常必須)',
-    badgeLabel: '★5 日常必須',
-    description: '最優先で身につけるべき基礎語彙',
-    filterFn: (v) => (v.importance ?? 3) === 5 && v.cardType !== 'pattern',
+    id: 'word',
+    label: '🔤 単語重視',
+    badgeLabel: '🔤 単語',
+    description: '単語・イディオムにフォーカスした1文カード',
+    filterFn: (v) => v.focusType !== 'pattern' && (!v.corePatterns || v.corePatterns.length === 0) && v.cardType !== 'pattern',
   },
   {
-    id: 'only4',
-    label: '★4 (重要・頻出)',
-    badgeLabel: '★4 頻出',
-    description: '表現力と理解度を高める頻出語彙',
-    filterFn: (v) => (v.importance ?? 3) === 4,
+    id: 'pattern',
+    label: '💡 構文・文法重視',
+    badgeLabel: '💡 構文',
+    description: '文法構造・S+V骨格にフォーカスしたカード',
+    filterFn: (v) => v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0) || v.cardType === 'pattern',
   },
   {
-    id: 'only3',
-    label: '★3 (標準)',
-    badgeLabel: '★3 標準',
-    description: '一般的な日常・ストーリー語彙',
-    filterFn: (v) => (v.importance ?? 3) === 3,
+    id: 'en_to_ja',
+    label: '📖 読解 (EN ➔ JA)',
+    badgeLabel: '📖 読解',
+    description: '英語を見て瞬時に意味を脳内展開する訓練',
+    filterFn: (v) => v.cardDirection !== 'ja_to_en',
   },
   {
-    id: 'low',
-    label: '★1〜2 (発展・難単語)',
-    badgeLabel: '★1〜2 発展 🎯',
-    description: '専門的・低頻度な語彙をまとめて集中演習',
-    filterFn: (v) => (v.importance ?? 3) <= 2,
+    id: 'ja_to_en',
+    label: '✍️ 作文 (JA ➔ EN)',
+    badgeLabel: '✍️ 作文',
+    description: '日本語の意味から瞬時に英語センテンスを組み立てる訓練',
+    filterFn: (v) => v.cardDirection === 'ja_to_en',
   },
 ];
 
@@ -118,8 +97,7 @@ function pickNextCard(learning: VocabItem[], reviews: VocabItem[]): VocabItem | 
 
   // 3. 復習キューが空の場合は、残りの学習中カードを最短期日順に出題（待たせない）
   if (learning.length > 0) {
-    const sorted = [...learning].sort((a, b) => (a.dueTimestamp || 0) - (b.dueTimestamp || 0));
-    return sorted[0];
+    return [...learning].sort((a, b) => (a.dueTimestamp || 0) - (b.dueTimestamp || 0))[0];
   }
 
   return null;
@@ -132,27 +110,24 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 }) => {
   const today = getTodayDateString();
 
-  // 重要度フィルター設定 (localStorageで永続化、初期値は★4以上推奨)
-  const [importanceFilter, setImportanceFilter] = useState<AnkiImportanceFilter>(() => {
-    const saved = localStorage.getItem('anki_importance_filter') as AnkiImportanceFilter;
-    return saved && FILTER_OPTIONS.some(o => o.id === saved) ? saved : 'ge4';
+  // カードフィルター設定 (localStorageで永続化、初期値はすべて)
+  const [cardFilter, setCardFilter] = useState<AnkiCardFilter>(() => {
+    const saved = localStorage.getItem('anki_card_filter') as AnkiCardFilter;
+    return saved && FILTER_OPTIONS.some(o => o.id === saved) ? saved : 'all';
   });
 
   const activeFilterDef = useMemo(() => {
-    return FILTER_OPTIONS.find(f => f.id === importanceFilter) || FILTER_OPTIONS[0];
-  }, [importanceFilter]);
+    return FILTER_OPTIONS.find(f => f.id === cardFilter) || FILTER_OPTIONS[0];
+  }, [cardFilter]);
 
   // 各フィルター別の件数統計（全体件数 & 今日の復習対象件数）
   const filterStats = useMemo(() => {
-    const stats: Record<AnkiImportanceFilter, { total: number; due: number }> = {
-      ge4: { total: 0, due: 0 },
-      syntax: { total: 0, due: 0 },
-      ge3: { total: 0, due: 0 },
+    const stats: Record<AnkiCardFilter, { total: number; due: number }> = {
       all: { total: 0, due: 0 },
-      only5: { total: 0, due: 0 },
-      only4: { total: 0, due: 0 },
-      only3: { total: 0, due: 0 },
-      low: { total: 0, due: 0 },
+      word: { total: 0, due: 0 },
+      pattern: { total: 0, due: 0 },
+      en_to_ja: { total: 0, due: 0 },
+      ja_to_en: { total: 0, due: 0 },
     };
 
     FILTER_OPTIONS.forEach(opt => {
@@ -210,15 +185,15 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       // 今日の復習期日・学習中カードのみを出題
       initialReviews = shuffleArray(dueReviewCards);
       initialLearning = learningCards;
-      } else if (allowExtraStudy) {
+    } else if (allowExtraStudy) {
       // 追加練習
       const unmastered = targetVocabs.filter(v => (v.repetitionCount ?? 0) < 4);
       initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
       initialLearning = [];
-      } else {
+    } else {
       initialReviews = [];
       initialLearning = [];
-      }
+    }
 
     const firstCard = pickNextCard(initialLearning, initialReviews);
 
@@ -231,26 +206,29 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setHistoryStack([]);
   }, [today]);
 
+  // 初回マウント時、またはフィルター変更時にセッション初期化
   useEffect(() => {
     initSession(filteredVocabs, false);
-  }, [importanceFilter, initSession]);
+  }, [cardFilter]); // filteredVocabsそのものではなくフィルター切り替え時にのみリセット
 
-  const handleFilterChange = (newFilter: AnkiImportanceFilter) => {
-    if (newFilter === importanceFilter) return;
-    setImportanceFilter(newFilter);
-    localStorage.setItem('anki_importance_filter', newFilter);
+  const handleFilterChange = (newFilter: AnkiCardFilter) => {
+    if (newFilter === cardFilter) return;
+    setCardFilter(newFilter);
+    localStorage.setItem('anki_card_filter', newFilter);
   };
 
-  // 次回復習間隔のプレビュー
+  // 次回復習間隔（Again / Hard / Good / Easy）の動的プレビュー計算
   const intervals = useMemo(() => {
     if (!activeCard) return { again: '1分', hard: '6分', good: '10分', easy: '4日' };
     return getNextReviewIntervals(activeCard);
   }, [activeCard]);
 
-  // 構文カード用のローテーション文取得
+  // 構文パターンの3文ローテーション情報（構文カードの場合）
   const patternVariationData = useMemo(() => {
-    if (!activeCard || !activeCard.variations || activeCard.variations.length === 0) return null;
-    const rotIdx = (activeCard.repetitionCount || 0) % activeCard.variations.length;
+    if (!activeCard || activeCard.cardType !== 'pattern' || !activeCard.variations || activeCard.variations.length === 0) {
+      return null;
+    }
+    const rotIdx = (activeCard.repetitionCount ?? 0) % activeCard.variations.length;
     const currentVar = activeCard.variations[rotIdx];
     return {
       rotIdx,
@@ -259,24 +237,67 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     };
   }, [activeCard]);
 
-  // フリップ（回答表示）
+  // キーボードショートカット (Space: フリップ, 1: Again, 2: Hard, 3: Good, 4: Easy, z: Undo)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // テキスト入力中は無視
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+
+      if (e.key === 'z' || (e.ctrlKey && e.key === 'z') || (e.metaKey && e.key === 'z')) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      if (!activeCard) return;
+
+      if (!isFlipped) {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          handleFlip();
+        }
+      } else {
+        if (e.key === '1') {
+          e.preventDefault();
+          handleRate('again');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          handleRate('hard');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          handleRate('good');
+        } else if (e.key === '4') {
+          e.preventDefault();
+          handleRate('easy');
+        } else if (e.key === ' ') {
+          e.preventDefault();
+          handleRate('good'); // スペースでGood
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFlipped, activeCard, reviewQueue, learningPool, historyStack]);
+
   const handleFlip = () => {
     setIsFlipped(true);
+    // フリップ時に自動音声再生（英和カードの場合は英語、和英カードの場合はめくった後の英語）
     if (activeCard) {
-      const textToSpeak = activeCard.cardType === 'pattern' && patternVariationData
-        ? patternVariationData.currentVar.sentence
-        : activeCard.phrase;
-      speakText(textToSpeak);
+      const textToSpeak = activeCard.sentence || activeCard.exampleSentence || activeCard.phrase;
+      if (textToSpeak) {
+        speakText(textToSpeak);
+      }
     }
   };
 
-  // Undo (直前の評価を取り消す)
+  // 直前の回答を取り消す (Undo)
   const handleUndo = () => {
     if (historyStack.length === 0) return;
-
     const lastSnapshot = historyStack[historyStack.length - 1];
     setHistoryStack(prev => prev.slice(0, -1));
 
+    // 親コンポーネント経由でストレージのSRSステートを巻き戻し
     if (onRevertCard) {
       onRevertCard(lastSnapshot.ratedCard);
     }
@@ -286,16 +307,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setGraduatedIds(lastSnapshot.previousGraduatedIds);
     setSessionReviewedCount(lastSnapshot.previousReviewedCount);
     setActiveCard(lastSnapshot.activeCardBefore);
-    setIsFlipped(false);
+    setIsFlipped(true); // 直前のめくられた状態で再開
   };
 
-  // 解答評価ハンドラー (Again / Hard / Good / Easy)
+  // Anki 4ボタン評価ハンドラー
   const handleRate = (rating: 'again' | 'hard' | 'good' | 'easy') => {
     if (!activeCard) return;
 
     const currentCard = activeCard;
 
-    // Undoスナップショットの保存
+    // 1. Undo用に現在の完全な状態スナップショットを保存
     const snapshot: HistorySnapshot = {
       ratedCard: { ...currentCard },
       previousReviewQueue: [...reviewQueue],
@@ -304,29 +325,22 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       previousReviewedCount: sessionReviewedCount,
       activeCardBefore: currentCard,
     };
-    setHistoryStack(prev => [...prev.slice(-10), snapshot]);
+    setHistoryStack(prev => [...prev.slice(-10), snapshot]); // 最大10件まで履歴保持
 
-    // SM-2 SRS 計算
-    const srsResult = calculateAnkiSRS(currentCard, rating, true);
+    // 2. Anki SRS計算
+    const srsResult = calculateAnkiSRS(currentCard, rating);
 
-    const updatedCard: VocabItem = {
-      ...currentCard,
-      easeFactor: srsResult.easeFactor,
-      intervalDays: srsResult.intervalDays,
-      repetitionCount: srsResult.repetitionCount,
-      lapseCount: srsResult.lapseCount,
-      nextReviewDate: srsResult.nextReviewDate,
-      lastReviewedAt: srsResult.lastReviewedAt,
-      cardState: srsResult.cardState,
-      learningStep: srsResult.learningStep,
-      dueTimestamp: srsResult.dueTimestamp,
-    };
-
+    // 3. 親コンポーネント (App.tsx / storage) へ保存依頼
     onRateCard(currentCard.id, rating);
 
-    // キュー更新
-    const nextReviewQ = reviewQueue.filter(c => c.id !== currentCard.id);
-    const nextLearningP = learningPool.filter(c => c.id !== currentCard.id);
+    // 4. アプリ内リアルタイムキューの更新
+    const updatedCard: VocabItem = {
+      ...currentCard,
+      ...srsResult,
+    };
+
+    let nextReviewQ = reviewQueue.filter(c => c.id !== currentCard.id);
+    let nextLearningP = learningPool.filter(c => c.id !== currentCard.id);
     const nextGraduated = new Set(graduatedIds);
 
     if (srsResult.cardState === 'learning' || srsResult.cardState === 'relearning') {
@@ -362,12 +376,12 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
           <div className="flex items-center space-x-2 text-xs text-slate-400">
             <Filter className="w-4 h-4 text-blue-400" />
-            <span className="font-semibold">重要度フィルター:</span>
+            <span className="font-semibold">カード絞り込み:</span>
           </div>
           <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
             {FILTER_OPTIONS.map(opt => {
               const stat = filterStats[opt.id];
-              const isSelected = importanceFilter === opt.id;
+              const isSelected = cardFilter === opt.id;
               return (
                 <button
                   key={opt.id}
@@ -401,7 +415,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               今日の復習が完了しました！ 🎉
             </h2>
             <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-              選択中のフィルター【{activeFilterDef.label}】における本日の復習期日カードはすべて完了しました。素晴らしい継続力です！
+              選択中のカテゴリー【{activeFilterDef.label}】における本日の復習期日カードはすべて完了しました。素晴らしい継続力です！
             </p>
           </div>
 
@@ -461,11 +475,11 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
       {/* 1. Header: Filter & Anki 3-Counter Progress Bar */}
       <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
-        {/* Importance Filter Pills */}
+        {/* Category Filter Pills */}
         <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
           {FILTER_OPTIONS.map(opt => {
             const stat = filterStats[opt.id];
-            const isSelected = importanceFilter === opt.id;
+            const isSelected = cardFilter === opt.id;
             return (
               <button
                 key={opt.id}
@@ -558,10 +572,18 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             )}
           </div>
 
-          <div className="flex items-center space-x-1.5 text-amber-400">
-            {Array.from({ length: activeCard.importance ?? 3 }).map((_, i) => (
-              <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />
-            ))}
+          {/* Direction & SRS interval badge (Replacing fake stars) */}
+          <div className="flex items-center space-x-2">
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+              activeCard.cardDirection === 'ja_to_en'
+                ? 'bg-indigo-950/70 text-indigo-300 border-indigo-500/40'
+                : 'bg-cyan-950/70 text-cyan-300 border-cyan-500/40'
+            }`}>
+              {activeCard.cardDirection === 'ja_to_en' ? 'JA ➔ EN 作文' : 'EN ➔ JA 読解'}
+            </span>
+            <span className="text-[10px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+              間隔: {activeCard.intervalDays || 1}日 (正解: {activeCard.repetitionCount || 0}回)
+            </span>
           </div>
         </div>
 
@@ -639,8 +661,9 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               {activeCard.cardDirection === 'ja_to_en' ? (
                 /* 和 ➔ 英 (瞬間英作文・組み立てモード) */
                 <div className="space-y-3">
-                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-amber-500/20 border border-amber-500/30 rounded-full text-amber-300 text-xs font-bold">
-                    <span>🗣️ 瞬間英作文 (和 ➔ 英)</span>
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-indigo-500/20 border border-indigo-500/30 rounded-full text-indigo-300 text-xs font-bold">
+                    <PenTool className="w-3.5 h-3.5" />
+                    <span>瞬間英作文 (和 ➔ 英)</span>
                   </div>
 
                   <div className="text-xl sm:text-2xl font-extrabold text-white leading-snug py-2">
@@ -649,16 +672,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
                   {isFlipped ? (
                     <div className="space-y-3 pt-3 border-t border-slate-800 animate-fadeIn text-left">
-                      <div className="flex items-start justify-between gap-2 p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                        <div className="space-y-1">
-                          <span className="text-[11px] font-bold text-sky-400 block">正解の英文:</span>
+                      <div className="flex items-center justify-between p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
+                        <div>
+                          <span className="text-[11px] font-bold text-cyan-400 block mb-1">正解の英文:</span>
                           <p className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
                             {activeCard.sentence || activeCard.exampleSentence || activeCard.phrase}
                           </p>
                         </div>
                         <button
                           onClick={() => speakText(activeCard.sentence || activeCard.exampleSentence || activeCard.phrase)}
-                          className="p-2 text-sky-400 hover:text-sky-300 bg-sky-950/50 rounded-xl border border-sky-500/30 shrink-0"
+                          className="p-2 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors border border-sky-500/30 ml-2 shrink-0"
                           title="発音を再生"
                         >
                           <Volume2 className="w-4 h-4" />
@@ -693,8 +716,9 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               ) : (
                 /* 英 ➔ 和 (読解・コンパイル速度モード) */
                 <div className="space-y-3">
-                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-sky-500/20 border border-sky-500/30 rounded-full text-sky-300 text-xs font-bold">
-                    <span>📖 読解コンパイル (英 ➔ 和)</span>
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-cyan-500/20 border border-cyan-500/30 rounded-full text-cyan-300 text-xs font-bold">
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>読解コンパイル (英 ➔ 和)</span>
                   </div>
 
                   <div className="flex items-center justify-center space-x-2 py-1">

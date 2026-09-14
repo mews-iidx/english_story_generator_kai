@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { TargetEmbedding } from '../types/story';
 import { ExtractedCorePattern } from '../types/vocab';
-import { SaveSentenceCardParams } from '../services/storage';
+import { SaveSentenceCardParams, extractSingleSentence } from '../services/storage';
 import { Volume2, Plus, Check, Sparkles, Lightbulb, CheckCircle, AlertCircle, Bot, Layers } from 'lucide-react';
 import { speakText } from '../utils/speech';
 
@@ -99,9 +99,10 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
 
   const handleSaveCard = () => {
     if (onSaveSentenceCard) {
+      const cleanSentence = extractSingleSentence(fullSentenceText, originalText);
       if (isSingleWord) {
         onSaveSentenceCard({
-          sentence: fullSentenceText,
+          sentence: cleanSentence,
           translation: currentDisplayMeaning,
           focusType: 'word',
           focusWord: originalText.trim(),
@@ -109,7 +110,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
         });
       } else {
         onSaveSentenceCard({
-          sentence: originalText.trim(),
+          sentence: cleanSentence,
           translation: currentDisplayMeaning,
           focusType: targetEmbedding ? 'pattern' : 'sentence',
           corePatterns: extractedPatterns.length > 0 ? extractedPatterns : (targetEmbedding ? [{
