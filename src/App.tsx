@@ -844,6 +844,7 @@ export const App: React.FC = () => {
                 savedVocabs={vocabs}
                 difficultSentences={difficultSentences}
                 expressionErrors={expressionErrors}
+                stories={stories}
                 onMasterVocab={handleMasterVocab}
                 onDeleteVocab={handleDeleteVocab}
                 onDeleteSentence={handleDeleteDifficultSentence}

@@ -1,1029 +1,761 @@
 import React, { useState, useMemo } from 'react';
 import {
-  loadMasteryState,
-  computeAllLevelProgress,
   loadDailySnapshots,
-  loadMyGoal,
-  saveMyGoal,
-  clearMyGoal,
-  recordPatternStatus,
-  recordVocabMasteryStatus
 } from '../services/storage';
-import { getPatternsByLevel, CEFR_PATTERNS_MASTER } from '../data/cefrPatternsMaster';
-import { getVocabMasterByLevel, CEFR_VOCAB_MASTER } from '../data/cefrVocabMaster';
-import { MasteryStatus, MyGoal, PatternMasterItem, VocabMasterItem } from '../types/mastery';
+import { DailySnapshot } from '../types/mastery';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem } from '../types/sentence';
 import { ExpressionErrorItem } from '../types/expressionError';
+import { Story } from '../types/story';
 import {
-  Target, Sparkles, AlertCircle, ChevronDown, ChevronUp,
-  TrendingUp, BookOpen, Award, Layers, Volume2, Search, Trash2,
-  FileText, BarChart3
+  Zap, Sparkles, AlertCircle, TrendingUp, BookOpen, Award,
+  Volume2, Search, Trash2, FileText, Flame,
+  ShieldCheck, Filter, PlayCircle, BarChart3
 } from 'lucide-react';
 import { speakText } from '../utils/speech';
-import { addDaysToDate } from '../utils/srs';
+import { getTodayDateString } from '../utils/srs';
 
 interface MasteryDashboardViewProps {
   onNavigateToCreate?: () => void;
   savedVocabs?: VocabItem[];
   difficultSentences?: DifficultSentenceItem[];
   expressionErrors?: ExpressionErrorItem[];
+  stories?: Story[];
   onMasterVocab?: (vocabId: string) => void;
   onDeleteVocab?: (vocabId: string) => void;
   onDeleteSentence?: (sentenceId: string) => void;
   onDeleteExpressionError?: (errorId: string) => void;
 }
 
-type MainTabMode = 'insights' | 'dictionary';
-type CefrFilter = 'ALL' | 'A1' | 'A2' | 'B1' | 'B2';
-type ItemTypeTab = 'vocabs' | 'patterns';
-type StatusFilter = 'all' | 'mastered' | 'lapsed' | 'unseen';
-type SavedStockTab = 'words' | 'sentences' | 'errors';
+type SavedStockTab = 'cards' | 'sentences' | 'errors';
+type CardFilterType = 'all' | 'word' | 'pattern' | 'mastered' | 'learning';
+
+function formatDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function computeDailyStreak(snapshots: DailySnapshot[]): number {
+  if (!snapshots || snapshots.length === 0) return 0;
+  
+  const activeDates = new Set(
+    snapshots
+      .filter(s => (s.wordsRead && s.wordsRead > 0) || (s.newMasteredVocabsCount && s.newMasteredVocabsCount > 0))
+      .map(s => s.date)
+  );
+
+  if (activeDates.size === 0) return 0;
+
+  const now = new Date();
+  const checkDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  let dateKey = formatDateKey(checkDate);
+  if (!activeDates.has(dateKey)) {
+    checkDate.setDate(checkDate.getDate() - 1);
+    dateKey = formatDateKey(checkDate);
+    if (!activeDates.has(dateKey)) {
+      return 0;
+    }
+  }
+
+  let streak = 0;
+  while (activeDates.has(formatDateKey(checkDate))) {
+    streak++;
+    checkDate.setDate(checkDate.getDate() - 1);
+  }
+
+  return streak;
+}
 
 export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   onNavigateToCreate,
   savedVocabs = [],
   difficultSentences = [],
   expressionErrors = [],
+  stories = [],
   onDeleteVocab,
   onDeleteSentence,
   onDeleteExpressionError,
 }) => {
-  // メイン画面モード: 📊 インサイト（進捗ビュー） vs 📖 辞書・シラバス検索
-  const [mainTab, setMainTab] = useState<MainTabMode>('insights');
+  const [savedTab, setSavedTab] = useState<SavedStockTab>('cards');
+  const [cardFilter, setCardFilter] = useState<CardFilterType>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // 📖 辞書用ステート
-  const [dictItemType, setDictItemType] = useState<ItemTypeTab>('vocabs'); // デフォルトは語彙
-  const [dictLevelFilter, setDictLevelFilter] = useState<CefrFilter>('ALL'); // デフォルトは全レベル
-  const [dictStatusFilter, setDictStatusFilter] = useState<StatusFilter>('all');
-  const [dictSearchQuery, setDictSearchQuery] = useState('');
-  const [displayLimit, setDisplayLimit] = useState(60);
-  const [expandedPatternId, setExpandedPatternId] = useState<string | null>(null);
+  const dailySnapshots = useMemo(() => loadDailySnapshots(), []);
 
-  // 📊 インサイト / マイトロフィー用ステート
-  const [savedTab, setSavedTab] = useState<SavedStockTab>('words');
-  const [savedSearchQuery, setSavedSearchQuery] = useState('');
+  // 1. 総読了語数の集計
+  const totalWordsRead = useMemo(() => {
+    const fromSnapshots = dailySnapshots.reduce((acc, s) => acc + (s.wordsRead || 0), 0);
+    if (fromSnapshots > 0) return fromSnapshots;
+    return stories.reduce((acc, st) => {
+      if (st.actualWordCount && st.actualWordCount > 0) return acc + st.actualWordCount;
+      const text = st.storyContent || '';
+      const words = text.split(/\s+/).filter(Boolean).length;
+      return acc + words;
+    }, 0);
+  }, [dailySnapshots, stories]);
 
+  // 2. 平均読書スピード（WPM）の集計
+  const { averageWpm, wpmTier } = useMemo(() => {
+    const validWpms = dailySnapshots
+      .map(s => s.averageWpm)
+      .filter((w): w is number => typeof w === 'number' && w > 0);
 
-  // 目標設定状態
-  const [myGoal, setMyGoal] = useState<MyGoal | null>(() => loadMyGoal());
-  const [isEditingGoal, setIsEditingGoal] = useState(false);
-  const [goalTargetLevel, setGoalTargetLevel] = useState<'A1' | 'A2' | 'B1' | 'B2'>(myGoal?.targetCefr as any || 'B1');
-  const [goalTargetDays, setGoalTargetDays] = useState<number>(myGoal?.targetDays || 60);
+    const avg = validWpms.length > 0
+      ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length)
+      : 0;
 
-  // マスターステートと進捗の読み込み
-  const [masteryState, setMasteryState] = useState(() => loadMasteryState());
-  const allProgress = useMemo(() => computeAllLevelProgress(), [masteryState]);
-  const dailySnapshots = useMemo(() => loadDailySnapshots(), [masteryState]);
+    let tier = { label: '未測定', color: 'text-slate-400', desc: '物語を読了するとWPMが記録されます' };
+    if (avg > 0 && avg < 100) {
+      tier = { label: 'じっくり精読', color: 'text-amber-400', desc: '1文ずつ確実に理解しながら読解中' };
+    } else if (avg >= 100 && avg < 150) {
+      tier = { label: 'スムーズ読破', color: 'text-cyan-400', desc: '英語の語順のままスラスラ読める段階' };
+    } else if (avg >= 150 && avg < 200) {
+      tier = { label: 'ネイティブ並速読', color: 'text-emerald-400', desc: '日本語に訳さず直読直解できている速度' };
+    } else if (avg >= 200) {
+      tier = { label: '超高速英語脳', color: 'text-purple-400', desc: '圧倒的な処理速度で情報処理が可能' };
+    }
 
-  // レベル別情報
-  const levelNames: Record<'A1' | 'A2' | 'B1' | 'B2', { name: string; desc: string }> = {
-    A1: { name: '超初級 (A1)', desc: '中学1〜2年・最重要基礎構文と語彙' },
-    A2: { name: '初級 (A2)', desc: '中学3年〜日常会話基礎・表現の骨格' },
-    B1: { name: '中級 (B1)', desc: '高校〜実用英会話・複文・関係詞・仮定法' },
-    B2: { name: '中上級 (B2)', desc: '高度な構文・句動詞・自然なイディオム' },
-  };
+    return { averageWpm: avg, wpmTier: tier };
+  }, [dailySnapshots]);
 
-  // -------------------------------------------------------------
-  // 📖 辞書・シラバス検索ロジック（完全一致最優先 ＆ デフォルト全語彙）
-  // -------------------------------------------------------------
-  const baseVocabPool = useMemo(() => {
-    if (dictLevelFilter === 'ALL') return CEFR_VOCAB_MASTER;
-    return getVocabMasterByLevel(dictLevelFilter);
-  }, [dictLevelFilter]);
+  // 3. 連続学習ストリーク（日数）
+  const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
 
-  const basePatternPool = useMemo(() => {
-    if (dictLevelFilter === 'ALL') return CEFR_PATTERNS_MASTER;
-    return getPatternsByLevel(dictLevelFilter);
-  }, [dictLevelFilter]);
+  // 4. センテンス武器庫のステータス集計
+  const { masteredCardsCount, learningCardsCount, wordCardsCount, patternCardsCount } = useMemo(() => {
+    let mastered = 0;
+    let learning = 0;
+    let words = 0;
+    let patterns = 0;
 
-  // 単語検索＆完全一致最優先ソート
-  const filteredDictVocabs = useMemo(() => {
-    const q = dictSearchQuery.trim().toLowerCase();
-    const items = baseVocabPool.filter(v => {
-      const st = masteryState.vocabs[v.id]?.status || masteryState.vocabs[v.phrase.toLowerCase()]?.status || 'unseen';
-      if (dictStatusFilter === 'mastered' && st !== 'mastered') return false;
-      if (dictStatusFilter === 'lapsed' && st !== 'lapsed') return false;
-      if (dictStatusFilter === 'unseen' && (st !== 'unseen' && st !== 'exposed')) return false;
+    savedVocabs.forEach(v => {
+      const isMastered = v.intervalDays >= 21 || v.repetitionCount >= 4;
+      if (isMastered) mastered++;
+      else learning++;
 
-      if (q) {
-        const matchesPhrase = v.phrase.toLowerCase().includes(q);
-        const matchesMeaning = v.meaning.toLowerCase().includes(q);
-        return matchesPhrase || matchesMeaning;
+      if (v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0)) patterns++;
+      else words++;
+    });
+
+    return {
+      masteredCardsCount: mastered,
+      learningCardsCount: learning,
+      wordCardsCount: words,
+      patternCardsCount: patterns,
+    };
+  }, [savedVocabs]);
+
+  // 5. 直近7日間の日次データ
+  const last7DaysData = useMemo(() => {
+    const result: { date: string; displayDate: string; words: number; wpm: number; isToday: boolean }[] = [];
+    const todayStr = getTodayDateString();
+    
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = formatDateKey(d);
+      const displayDate = `${d.getMonth() + 1}/${d.getDate()}`;
+      const snap = dailySnapshots.find(s => s.date === dateStr);
+      result.push({
+        date: dateStr,
+        displayDate,
+        words: snap?.wordsRead || 0,
+        wpm: snap?.averageWpm || 0,
+        isToday: dateStr === todayStr,
+      });
+    }
+    return result;
+  }, [dailySnapshots]);
+
+  const maxWordsIn7Days = useMemo(() => {
+    return Math.max(...last7DaysData.map(d => d.words), 200);
+  }, [last7DaysData]);
+
+  // 6. 多読マイルストーン判定
+  const milestone = useMemo(() => {
+    const storiesCount = stories.length;
+    const words = totalWordsRead;
+
+    const ranks = [
+      { name: '🌱 ビギナー読者', targetWords: 1000, targetStories: 3, desc: '多読の第一歩！短編ストーリーに挑戦中' },
+      { name: '🥉 ストーリー探検家', targetWords: 5000, targetStories: 10, desc: '日常的な構文や単語が自然と定着する段階' },
+      { name: '🥈 多読ランナー', targetWords: 15000, targetStories: 25, desc: '英語を英語のまま処理する回路が形成中' },
+      { name: '🥇 ブックマスター', targetWords: 30000, targetStories: 50, desc: 'ペーパーバック1冊分相当の膨大な英語を読破' },
+      { name: '👑 英語脳の達人', targetWords: 100000, targetStories: 100, desc: 'ネイティブ同等の自然な多読力を完全習得' },
+    ];
+
+    let currentRankIdx = 0;
+    for (let i = 0; i < ranks.length; i++) {
+      if (words >= ranks[i].targetWords && storiesCount >= ranks[i].targetStories) {
+        currentRankIdx = i;
       }
-      return true;
-    });
-
-    if (q) {
-      return [...items].sort((a, b) => {
-        const score = (v: VocabMasterItem) => {
-          const phrase = v.phrase.toLowerCase();
-          if (phrase === q) return 1000; // 完全一致最優先
-          if (phrase.startsWith(q + ' ') || phrase.startsWith(q)) return 500; // 前方一致
-          if (phrase.includes(q)) return 200; // フレーズ内一致
-          if (v.meaning.toLowerCase().includes(q)) return 100; // 意味一致
-          return 10;
-        };
-        const diff = score(b) - score(a);
-        if (diff !== 0) return diff;
-        return a.phrase.localeCompare(b.phrase);
-      });
     }
 
-    return items;
-  }, [baseVocabPool, masteryState, dictStatusFilter, dictSearchQuery]);
+    const currentRank = ranks[currentRankIdx];
+    const nextRank = currentRankIdx < ranks.length - 1 ? ranks[currentRankIdx + 1] : null;
 
-  // 構文検索＆完全一致最優先ソート
-  const filteredDictPatterns = useMemo(() => {
-    const q = dictSearchQuery.trim().toLowerCase();
-    const items = basePatternPool.filter(p => {
-      const st = masteryState.patterns[p.id]?.status || 'unseen';
-      if (dictStatusFilter === 'mastered' && st !== 'mastered') return false;
-      if (dictStatusFilter === 'lapsed' && st !== 'lapsed') return false;
-      if (dictStatusFilter === 'unseen' && (st !== 'unseen' && st !== 'exposed')) return false;
-
-      if (q) {
-        const matchesName = p.name.toLowerCase().includes(q);
-        const matchesMeaning = p.meaning.toLowerCase().includes(q);
-        const matchesFocus = p.focus.toLowerCase().includes(q);
-        const matchesCat = p.categoryLabel.toLowerCase().includes(q);
-        return matchesName || matchesMeaning || matchesFocus || matchesCat;
-      }
-      return true;
-    });
-
-    if (q) {
-      return [...items].sort((a, b) => {
-        const score = (p: PatternMasterItem) => {
-          const name = p.name.toLowerCase();
-          if (name === q) return 1000;
-          if (name.startsWith(q)) return 500;
-          if (name.includes(q)) return 200;
-          if (p.meaning.toLowerCase().includes(q)) return 100;
-          return 10;
-        };
-        return score(b) - score(a);
-      });
+    let progressPct = 100;
+    if (nextRank) {
+      const wordPct = Math.min(100, Math.round((words / nextRank.targetWords) * 100));
+      const storyPct = Math.min(100, Math.round((storiesCount / nextRank.targetStories) * 100));
+      progressPct = Math.round((wordPct + storyPct) / 2);
     }
 
-    return items;
-  }, [basePatternPool, masteryState, dictStatusFilter, dictSearchQuery]);
+    return {
+      currentRank,
+      nextRank,
+      progressPct,
+      storiesCount,
+      wordsCount: words,
+    };
+  }, [stories.length, totalWordsRead]);
 
-  // -------------------------------------------------------------
-  // 📊 インサイト / マイトロフィーフィルタリング
-  // -------------------------------------------------------------
-  const filteredSavedVocabs = useMemo(() => {
-    const q = savedSearchQuery.trim().toLowerCase();
-    const items = savedVocabs.filter(v => {
-      const matchesSearch =
-        !q ||
-        v.phrase.toLowerCase().includes(q) ||
-        v.meaning.toLowerCase().includes(q) ||
-        (v.contextNote && v.contextNote.toLowerCase().includes(q));
+  // 7. 1センテンス Ankiカードのフィルタリング & 検索
+  const filteredVocabCards = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    
+    return savedVocabs.filter(card => {
+      if (cardFilter === 'word' && card.focusType === 'pattern') return false;
+      if (cardFilter === 'pattern' && card.focusType !== 'pattern' && !card.corePatterns?.length) return false;
+      
+      const isMastered = card.intervalDays >= 21 || card.repetitionCount >= 4;
+      if (cardFilter === 'mastered' && !isMastered) return false;
+      if (cardFilter === 'learning' && isMastered) return false;
 
-      return matchesSearch;
+      if (!q) return true;
+      const textMatch = 
+        (card.sentence && card.sentence.toLowerCase().includes(q)) ||
+        (card.exampleSentence && card.exampleSentence.toLowerCase().includes(q)) ||
+        (card.phrase && card.phrase.toLowerCase().includes(q)) ||
+        (card.meaning && card.meaning.toLowerCase().includes(q)) ||
+        (card.translation && card.translation.toLowerCase().includes(q)) ||
+        (card.focusWord && card.focusWord.toLowerCase().includes(q)) ||
+        (card.corePatterns && card.corePatterns.some(p => 
+          p.patternName.toLowerCase().includes(q) ||
+          p.formula.toLowerCase().includes(q) ||
+          p.meaningTemplate.toLowerCase().includes(q)
+        ));
+
+      return textMatch;
     });
+  }, [savedVocabs, cardFilter, searchQuery]);
 
-    if (q) {
-      return [...items].sort((a, b) => {
-        const score = (v: VocabItem) => {
-          const phrase = v.phrase.toLowerCase();
-          if (phrase === q) return 1000;
-          if (phrase.startsWith(q + ' ') || phrase.startsWith(q)) return 500;
-          if (phrase.includes(q)) return 200;
-          if (v.meaning.toLowerCase().includes(q)) return 100;
-          return 10;
-        };
-        const diff = score(b) - score(a);
-        if (diff !== 0) return diff;
-        return a.phrase.localeCompare(b.phrase);
-      });
-    }
-
-    return items;
-  }, [savedVocabs, savedSearchQuery]);
-
+  // 8. 難解文のフィルタリング
   const filteredDifficultSentences = useMemo(() => {
-    const q = savedSearchQuery.trim().toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
     return difficultSentences.filter(s => {
+      if (!q) return true;
       return (
-        !q ||
         s.sentence.toLowerCase().includes(q) ||
         s.translation.toLowerCase().includes(q) ||
         (s.highlightedPhrase && s.highlightedPhrase.toLowerCase().includes(q))
       );
     });
-  }, [difficultSentences, savedSearchQuery]);
+  }, [difficultSentences, searchQuery]);
 
-  // ステータス手動トグル (すでに同じステータスの場合は未遭遇'unseen'に戻す)
-  const handleTogglePatternStatus = (patternId: string, clickedStatus: MasteryStatus) => {
-    const current = masteryState.patterns[patternId]?.status || 'unseen';
-    const nextStatus: MasteryStatus = current === clickedStatus ? 'unseen' : clickedStatus;
-    recordPatternStatus(patternId, nextStatus);
-    setMasteryState(loadMasteryState());
-  };
-
-  const handleToggleVocabStatus = (vocabPhraseOrId: string, clickedStatus: MasteryStatus) => {
-    const current = masteryState.vocabs[vocabPhraseOrId]?.status || 'unseen';
-    const nextStatus: MasteryStatus = current === clickedStatus ? 'unseen' : clickedStatus;
-    recordVocabMasteryStatus(vocabPhraseOrId, nextStatus);
-    setMasteryState(loadMasteryState());
-  };
-
-  // 目標保存
-  const handleSaveGoal = () => {
-    const goal: MyGoal = {
-      targetCefr: goalTargetLevel,
-      targetDays: goalTargetDays,
-      startDate: new Date().toISOString().substring(0, 10),
-      targetDate: addDaysToDate(goalTargetDays),
-      isActive: true,
-    };
-    saveMyGoal(goal);
-    setMyGoal(goal);
-    setIsEditingGoal(false);
-  };
-
-  const handleClearGoal = () => {
-    clearMyGoal();
-    setMyGoal(null);
-    setIsEditingGoal(false);
-  };
-
-  // 目標達成予測 (ETA) 計算
-  const etaCalculation = useMemo(() => {
-    const targetLvl = (myGoal?.targetCefr || 'B1') as 'A1' | 'A2' | 'B1' | 'B2';
-    const p = allProgress[targetLvl];
-    if (!p) return null;
-
-    const remainingPatterns = p.patternTotal - p.patternMastered;
-    const remainingVocabs = p.vocabTotal - p.vocabMastered;
-    const totalRemaining = remainingPatterns + remainingVocabs;
-
-    const itemsPerDay = Math.max(1, Math.round(totalRemaining / Math.max(1, myGoal?.targetDays || 60)));
-    const estimatedDays = Math.ceil(totalRemaining / itemsPerDay);
-    const estimatedDate = addDaysToDate(estimatedDays);
-
-    return {
-      targetLevel: targetLvl,
-      remainingPatterns,
-      remainingVocabs,
-      totalRemaining,
-      estimatedDays,
-      estimatedDate,
-      progressPercent: Math.round(p.overallPct),
-    };
-  }, [allProgress, myGoal]);
-
-  const recentSnapshots = useMemo(() => {
-    return [...dailySnapshots].slice(-7);
-  }, [dailySnapshots]);
-
-  
+  // 9. 苦手表現のフィルタリング
+  const filteredExpressionErrors = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return expressionErrors.filter(err => {
+      if (!q) return true;
+      return (
+        err.userUtterance.toLowerCase().includes(q) ||
+        err.naturalExpression.toLowerCase().includes(q) ||
+        err.corePattern.toLowerCase().includes(q) ||
+        (err.explanation && err.explanation.toLowerCase().includes(q))
+      );
+    });
+  }, [expressionErrors, searchQuery]);
 
   return (
     <div className="max-w-4xl mx-auto px-3 sm:px-4 py-6 space-y-6">
-      {/* 1. Top Header & Tab Switcher (インサイト vs 辞書) */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center space-x-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/25 border border-cyan-400/30">
-              <Target className="w-6 h-6 text-white" />
+      {/* 1. TOP HEADER & HUD METRICS */}
+      <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center space-x-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/25 border border-cyan-400/30">
+              <Zap className="w-6 h-6 text-white" />
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center space-x-2">
-                <span>{mainTab === 'insights' ? '学習進捗＆インサイト' : 'CEFR 辞書＆シラバス'}</span>
+                <span>学習進捗 & マイ武器庫</span>
                 <Sparkles className="w-4 h-4 text-amber-400" />
               </h2>
               <p className="text-xs text-slate-400">
-                {mainTab === 'insights'
-                  ? 'あなたの学習達成率、読破スピード、マイトロフィーの閲覧'
-                  : 'Oxford 4,538語 ＆ Cambridge 996構文の完全一致検索・シラバス'}
+                読書量・脳内処理速度(WPM)・獲得したセンテンスカードの成長ダッシュボード
               </p>
             </div>
           </div>
 
-          {/* Main Top Tab Switcher */}
-          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 space-x-1">
+          {onNavigateToCreate && (
             <button
-              onClick={() => setMainTab('insights')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                mainTab === 'insights'
+              onClick={onNavigateToCreate}
+              className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-2xl text-xs font-black shadow-lg shadow-cyan-500/20 transition-all hover:scale-105 active:scale-95"
+            >
+              <PlayCircle className="w-4 h-4" />
+              <span>物語で英語多読</span>
+            </button>
+          )}
+        </div>
+
+        {/* 4 Key Stat Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Card 1: 総読了語数 */}
+          <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[11px] font-bold">総読了語数</span>
+              <BookOpen className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black text-white">
+              {totalWordsRead.toLocaleString()} <span className="text-xs font-normal text-slate-400">語</span>
+            </div>
+            <div className="text-[10px] text-cyan-400 font-semibold">
+              物語 {stories.length} 冊読破
+            </div>
+          </div>
+
+          {/* Card 2: 読破スピード (WPM) */}
+          <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[11px] font-bold">脳内処理速度</span>
+              <TrendingUp className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black text-white">
+              {averageWpm > 0 ? averageWpm : '--'} <span className="text-xs font-normal text-slate-400">WPM</span>
+            </div>
+            <div className={`text-[10px] font-bold ${wpmTier.color}`}>
+              {wpmTier.label}
+            </div>
+          </div>
+
+          {/* Card 3: 連続ストリーク */}
+          <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[11px] font-bold">学習ストリーク</span>
+              <Flame className="w-4 h-4 text-amber-500 fill-amber-500/20" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black text-white">
+              {streakDays} <span className="text-xs font-normal text-slate-400">日連続</span>
+            </div>
+            <div className="text-[10px] text-amber-400 font-semibold">
+              {streakDays > 0 ? '🔥 英語習慣が定着中！' : '今日1話を読んでスタート'}
+            </div>
+          </div>
+
+          {/* Card 4: マイ武器庫 (Ankiカード) */}
+          <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[11px] font-bold">センテンス武器庫</span>
+              <ShieldCheck className="w-4 h-4 text-purple-400" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black text-white">
+              {savedVocabs.length} <span className="text-xs font-normal text-slate-400">枚</span>
+            </div>
+            <div className="text-[10px] text-slate-400 flex items-center space-x-1.5 font-semibold">
+              <span className="text-emerald-400">定着 {masteredCardsCount}</span>
+              <span>/</span>
+              <span className="text-amber-400">育成中 {learningCardsCount}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. 7-DAY ACTIVITY & WPM TREND CHART */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <BarChart3 className="w-4 h-4 text-cyan-400" />
+            <h3 className="text-sm font-bold text-white">
+              直近7日間の読書アクティビティ & 処理速度推移
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">日次読了語数 ＆ WPM</span>
+        </div>
+
+        {/* Bar Visualizer */}
+        <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-3">
+          {last7DaysData.map(d => {
+            const heightPercent = d.words > 0 ? Math.max(15, Math.min(100, Math.round((d.words / maxWordsIn7Days) * 100))) : 4;
+
+            return (
+              <div key={d.date} className="flex flex-col items-center space-y-2">
+                {/* WPM or Words Badge */}
+                <div className="h-5 flex items-center justify-center">
+                  {d.wpm > 0 ? (
+                    <span className="text-[9px] font-extrabold text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-1 rounded">
+                      {d.wpm}wpm
+                    </span>
+                  ) : d.words > 0 ? (
+                    <span className="text-[9px] text-slate-400 font-medium">
+                      {d.words}語
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Vertical Bar */}
+                <div className="w-full bg-slate-950/80 rounded-xl h-24 sm:h-28 p-1 flex items-end justify-center border border-slate-800/80">
+                  <div
+                    className={`w-full rounded-lg transition-all duration-700 ${
+                      d.words > 0
+                        ? d.isToday
+                          ? 'bg-gradient-to-t from-cyan-600 via-blue-500 to-indigo-500 shadow-md shadow-cyan-500/20'
+                          : 'bg-gradient-to-t from-slate-700 to-slate-500'
+                        : 'bg-slate-900/50'
+                    }`}
+                    style={{ height: `${heightPercent}%` }}
+                  />
+                </div>
+
+                {/* Day Label */}
+                <div className="text-center">
+                  <span className={`text-[10px] font-bold block ${d.isToday ? 'text-cyan-400' : 'text-slate-400'}`}>
+                    {d.displayDate}
+                  </span>
+                  {d.isToday && (
+                    <span className="text-[8px] text-cyan-500 font-extrabold block -mt-0.5">TODAY</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 3. 多読マイルストーン (READING MILESTONE) */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900/90 to-indigo-950/40 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center space-x-2">
+            <Award className="w-5 h-5 text-amber-400" />
+            <span className="text-sm font-black text-white">多読マイルストーン</span>
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 font-bold">
+              {milestone.currentRank.name}
+            </span>
+          </div>
+
+          {milestone.nextRank && (
+            <span className="text-xs text-slate-400">
+              次のランク: <strong className="text-white">{milestone.nextRank.name}</strong> まであと {Math.max(0, milestone.nextRank.targetWords - milestone.wordsCount).toLocaleString()} 語
+            </span>
+          )}
+        </div>
+
+        {/* Progress Bar */}
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-[11px] text-slate-300 font-semibold">
+            <span>{milestone.currentRank.desc}</span>
+            <span className="text-amber-400 font-bold">{milestone.progressPct}%</span>
+          </div>
+          <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+            <div
+              className="h-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-300 rounded-full transition-all duration-700 shadow-sm shadow-amber-500/50"
+              style={{ width: `${milestone.progressPct}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 4. 🏆 マイ武器庫 (MY ARSENAL: 1-SENTENCE CARDS, DIFFICULT SENTENCES, ERRORS) */}
+      <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5">
+        {/* Main Tab Switcher: Cards vs Sentences vs Errors */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div className="flex items-center space-x-2 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+            <button
+              onClick={() => setSavedTab('cards')}
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                savedTab === 'cards'
                   ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-600/30'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : 'bg-slate-950 text-slate-400 hover:text-slate-200'
               }`}
             >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>📊 インサイト</span>
+              <Zap className="w-3.5 h-3.5" />
+              <span>1センテンス Ankiカード ({savedVocabs.length})</span>
             </button>
 
             <button
-              onClick={() => setMainTab('dictionary')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all relative ${
-                mainTab === 'dictionary'
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/30'
-                  : 'text-slate-400 hover:text-slate-200'
+              onClick={() => setSavedTab('sentences')}
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                savedTab === 'sentences'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                  : 'bg-slate-950 text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Search className="w-3.5 h-3.5" />
-              <span>📖 辞書・シラバス</span>
+              <FileText className="w-3.5 h-3.5" />
+              <span>難解文ストック ({difficultSentences.length})</span>
             </button>
+
+            <button
+              onClick={() => setSavedTab('errors')}
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                savedTab === 'errors'
+                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+                  : 'bg-slate-950 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>苦手表現 ({expressionErrors.length})</span>
+            </button>
+          </div>
+
+          {/* Search Box */}
+          <div className="relative w-full sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="武器庫内を瞬時検索..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner"
+            />
           </div>
         </div>
 
-        {/* Goal / ETA Section (Visible in Insights mode) */}
-        {mainTab === 'insights' && (
-          <div className="pt-2 border-t border-slate-800">
-            {!myGoal ? (
-              <div className="flex items-center justify-between p-3.5 bg-blue-950/40 border border-blue-500/20 rounded-2xl">
-                <div className="flex items-center space-x-2 text-xs text-sky-200">
-                  <Award className="w-4 h-4 text-sky-400 flex-shrink-0" />
-                  <span>目標レベル（例: 60日でB1制覇）を設定して達成予測を可視化しましょう</span>
-                </div>
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 1: 1センテンス Ankiカード一覧 */}
+        {/* ------------------------------------------------------------- */}
+        {savedTab === 'cards' && (
+          <div className="space-y-4">
+            {/* Filter Pills */}
+            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 text-xs">
+              <span className="text-[11px] text-slate-500 font-bold mr-1 flex items-center gap-1">
+                <Filter className="w-3 h-3" /> 絞り込み:
+              </span>
+              {[
+                { id: 'all', label: `すべて (${savedVocabs.length})` },
+                { id: 'word', label: `🔤 単語重視 (${wordCardsCount})` },
+                { id: 'pattern', label: `💡 構文重視 (${patternCardsCount})` },
+                { id: 'mastered', label: `👑 定着済 (${masteredCardsCount})` },
+                { id: 'learning', label: `🌱 育成中 (${learningCardsCount})` },
+              ].map(f => (
                 <button
-                  onClick={() => setIsEditingGoal(true)}
-                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-colors shadow-md shadow-blue-600/20"
+                  key={f.id}
+                  onClick={() => setCardFilter(f.id as CardFilterType)}
+                  className={`px-3 py-1 rounded-xl font-bold transition-all whitespace-nowrap ${
+                    cardFilter === f.id
+                      ? 'bg-slate-800 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                      : 'bg-slate-950/70 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
                 >
-                  目標を設定
+                  {f.label}
                 </button>
-              </div>
-            ) : isEditingGoal ? (
-              <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-200">目標設定の編集</span>
-                  <button onClick={() => setIsEditingGoal(false)} className="text-slate-400 hover:text-slate-200 text-xs">
-                    閉じる
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] text-slate-400 font-bold mb-1">目標レベル</label>
-                    <select
-                      value={goalTargetLevel}
-                      onChange={(e) => setGoalTargetLevel(e.target.value as any)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="A1">A1 (超初級)</option>
-                      <option value="A2">A2 (初級)</option>
-                      <option value="B1">B1 (中級・日常会話自立)</option>
-                      <option value="B2">B2 (中上級・高度表現)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-400 font-bold mb-1">目標日数</label>
-                    <input
-                      type="number"
-                      min={7}
-                      max={365}
-                      value={goalTargetDays}
-                      onChange={(e) => setGoalTargetDays(Number(e.target.value))}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-                <div className="flex space-x-2 pt-1">
-                  <button
-                    onClick={handleSaveGoal}
-                    className="flex-1 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition-colors"
-                  >
-                    保存する
-                  </button>
-                  <button
-                    onClick={handleClearGoal}
-                    className="px-3 py-1.5 bg-rose-950/60 border border-rose-500/30 text-rose-300 font-bold rounded-xl text-xs hover:bg-rose-900/60 transition-colors"
-                  >
-                    目標解除
-                  </button>
-                </div>
+              ))}
+            </div>
+
+            {/* Cards List */}
+            {filteredVocabCards.length === 0 ? (
+              <div className="py-16 text-center text-slate-500 text-xs space-y-2">
+                <p className="font-bold text-slate-400 text-sm">カードが見つかりませんでした</p>
+                <p>ストーリー読書中に引っかかった英文をワンタップでカード化すると、ここに蓄積されます。</p>
               </div>
             ) : (
-              etaCalculation && (
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-blue-950/50 via-slate-900/80 to-indigo-950/50 border border-blue-500/30 rounded-2xl">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-sky-300 border border-blue-500/40 font-bold">
-                        AI ペース予測
-                      </span>
-                      <span className="text-xs text-slate-300">
-                        目標: <strong className="text-white">CEFR {etaCalculation.targetLevel} 完全習得</strong>
-                        （現在: <strong className="text-sky-400">{etaCalculation.progressPercent}%</strong>）
-                      </span>
-                    </div>
-                    <div className="text-slate-400 text-[11px]">
-                      未マスター: 構文 {etaCalculation.remainingPatterns}個 / 単語 {etaCalculation.remainingVocabs}語
-                    </div>
-                  </div>
+              <div className="grid grid-cols-1 gap-3">
+                {filteredVocabCards.map(card => {
+                  const isMastered = card.intervalDays >= 21 || card.repetitionCount >= 4;
+                  const displaySentence = card.sentence || card.exampleSentence || card.phrase;
+                  const displayTranslation = card.translation || card.meaning;
+                  const directionLabel = card.cardDirection === 'ja_to_en' ? 'JA ➔ EN 作文' : 'EN ➔ JA 読解';
+                  const isJaToEn = card.cardDirection === 'ja_to_en';
 
-                  <div className="flex items-center space-x-3 self-end sm:self-auto">
-                    <div className="px-3 py-1.5 bg-blue-950/70 border border-blue-500/30 rounded-xl text-right">
-                      <span className="text-[10px] text-sky-400 block font-semibold">達成予測</span>
-                      <strong className="text-xs sm:text-sm font-extrabold text-white">
-                        あと約 {etaCalculation.estimatedDays} 日 ({etaCalculation.estimatedDate})
-                      </strong>
-                    </div>
-                    {onNavigateToCreate && (
-                      <button
-                        onClick={onNavigateToCreate}
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition-colors shadow-md shadow-blue-600/20"
-                      >
-                        物語で特訓
-                      </button>
-                    )}
-                    <button
-                      onClick={() => setIsEditingGoal(true)}
-                      className="text-[10px] text-slate-400 hover:text-slate-200 underline"
+                  return (
+                    <div
+                      key={card.id}
+                      className="p-4 bg-slate-950/80 border border-slate-800 hover:border-slate-700 rounded-2xl space-y-3 transition-colors shadow-lg"
                     >
-                      変更
-                    </button>
-                  </div>
-                </div>
-              )
+                      {/* Top Meta Line */}
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center space-x-2">
+                          {/* Card Direction Pill */}
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${
+                            isJaToEn
+                              ? 'bg-indigo-950/60 text-indigo-300 border-indigo-500/40'
+                              : 'bg-cyan-950/60 text-cyan-300 border-cyan-500/40'
+                          }`}>
+                            {directionLabel}
+                          </span>
+
+                          {/* Focus Type Tag */}
+                          {card.focusType === 'pattern' || (card.corePatterns && card.corePatterns.length > 0) ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-950/50 text-amber-300 border border-amber-500/30">
+                              💡 構文フォーカス
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-950/50 text-emerald-300 border border-emerald-500/30">
+                              🔤 単語: {card.focusWord || card.phrase}
+                            </span>
+                          )}
+
+                          {/* Mastered Badge */}
+                          {isMastered ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-yellow-950/50 text-yellow-300 border border-yellow-500/40 flex items-center gap-1">
+                              👑 定着済
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-900 text-slate-400 border border-slate-800">
+                              🌱 復習間隔: {card.intervalDays}日 (正解: {card.repetitionCount}回)
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={() => speakText(displaySentence)}
+                            className="text-slate-400 hover:text-cyan-400 p-1.5 rounded-lg hover:bg-slate-900 transition-colors"
+                            title="発音を聞く"
+                          >
+                            <Volume2 className="w-4 h-4" />
+                          </button>
+                          {onDeleteVocab && (
+                            <button
+                              onClick={() => onDeleteVocab(card.id)}
+                              className="text-slate-600 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-900 transition-colors"
+                              title="削除"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Main Sentence Content */}
+                      <div className="space-y-1">
+                        <p className="text-sm sm:text-base font-bold text-white leading-relaxed">
+                          {displaySentence}
+                        </p>
+                        <p className="text-xs sm:text-sm text-slate-300 font-medium">
+                          {displayTranslation}
+                        </p>
+                      </div>
+
+                      {/* AI Extracted Grammar Hypothesis Box (if pattern) */}
+                      {card.corePatterns && card.corePatterns.length > 0 && (
+                        <div className="pt-2 border-t border-slate-850 flex flex-wrap gap-2">
+                          {card.corePatterns.map((pat, idx) => (
+                            <div
+                              key={idx}
+                              className="text-[11px] px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-xl space-y-0.5 text-slate-300"
+                            >
+                              <div className="font-mono text-cyan-300 font-bold">
+                                {pat.formula}
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                {pat.meaningTemplate} {pat.briefNote ? `・ ${pat.briefNote}` : ''}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
-      </div>
 
-      {/* ========================================================= */}
-      {/* 2. MODE CONTENT: 📊 インサイト (ビュー専用) */}
-      {/* ========================================================= */}
-      {mainTab === 'insights' ? (
-        <div className="space-y-6 animate-fadeIn">
-          {/* Level Overview Progress Cards (A1, A2, B1, B2) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {(['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
-              const prog = allProgress[lvl];
-              return (
-                <div
-                  key={lvl}
-                  className="p-4 rounded-3xl border bg-slate-900/80 border-slate-800 text-left space-y-3 shadow-lg"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-base font-extrabold text-white">{lvl}</span>
-                      <span className="text-[10px] text-slate-400 block">{levelNames[lvl].name.split(' ')[0]}</span>
-                    </div>
-                    <span className="text-lg font-black text-sky-400">
-                      {Math.round(prog.overallPct)}%
-                    </span>
-                  </div>
-
-                  {/* Progress Bars */}
-                  <div className="space-y-1.5">
-                    {/* Patterns */}
-                    <div className="space-y-0.5">
-                      <div className="flex justify-between text-[10px] text-slate-400 font-semibold">
-                        <span>💡 構文 ({prog.patternMastered}/{prog.patternTotal})</span>
-                        <span>{Math.round(prog.patternPct)}%</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-500"
-                          style={{ width: `${prog.patternPct}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Vocabs */}
-                    <div className="space-y-0.5">
-                      <div className="flex justify-between text-[10px] text-slate-400 font-semibold">
-                        <span>🔤 語彙 ({prog.vocabMastered}/{prog.vocabTotal})</span>
-                        <span>{Math.round(prog.vocabPct)}%</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500"
-                          style={{ width: `${prog.vocabPct}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Growth Diff Analytics HUD (日次推移) */}
-          {recentSnapshots.length > 0 && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <TrendingUp className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-xs sm:text-sm font-bold text-white">
-                    直近の成長推移（日次アクティビティHUD）
-                  </h3>
-                </div>
-                <span className="text-[11px] text-slate-400">直近 {recentSnapshots.length} 日間</span>
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 2: 難解文ストック */}
+        {/* ------------------------------------------------------------- */}
+        {savedTab === 'sentences' && (
+          <div className="space-y-3">
+            {filteredDifficultSentences.length === 0 ? (
+              <div className="py-16 text-center text-slate-500 text-xs">
+                難解文のストックはありません。
               </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {recentSnapshots.map(snap => (
-                  <div key={snap.date} className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400">{snap.date.substring(5)}</span>
-                    <div className="text-sm font-extrabold text-white">
-                      {snap.wordsRead} <span className="text-[10px] font-normal text-slate-400">語読了</span>
-                    </div>
-                    <div className="text-xs font-semibold text-emerald-400">
-                      +{snap.newMasteredPatternsCount + snap.newMasteredVocabsCount} 項目定着
+            ) : (
+              <div className="space-y-2.5">
+                {filteredDifficultSentences.map(s => (
+                  <div
+                    key={s.id}
+                    className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2 hover:border-slate-700 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1 flex-1">
+                        <p className="text-xs sm:text-sm font-semibold text-white leading-relaxed">
+                          {s.sentence}
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          {s.translation}
+                        </p>
+                      </div>
+                      <div className="flex items-center space-x-1 flex-shrink-0">
+                        <button
+                          onClick={() => speakText(s.sentence)}
+                          className="text-slate-400 hover:text-cyan-400 p-1.5"
+                          title="発音を聞く"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                        {onDeleteSentence && (
+                          <button
+                            onClick={() => onDeleteSentence(s.id)}
+                            className="text-slate-600 hover:text-rose-400 p-1.5"
+                            title="削除"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        )}
 
-          {/* 🏆 マイトロフィー（マイ単語帳・保存文・苦手表現リスト） */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setSavedTab('words')}
-                  className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    savedTab === 'words'
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span>マイ単語帳 ({savedVocabs.length})</span>
-                </button>
-
-                <button
-                  onClick={() => setSavedTab('sentences')}
-                  className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    savedTab === 'sentences'
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>難解文 ({difficultSentences.length})</span>
-                </button>
-
-                <button
-                  onClick={() => setSavedTab('errors')}
-                  className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    savedTab === 'errors'
-                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  <span>苦手表現 ({expressionErrors.length})</span>
-                </button>
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 3: 苦手表現ストック */}
+        {/* ------------------------------------------------------------- */}
+        {savedTab === 'errors' && (
+          <div className="space-y-3">
+            {filteredExpressionErrors.length === 0 ? (
+              <div className="py-16 text-center text-slate-500 text-xs">
+                苦手表現の記録はありません。
               </div>
-
-              {/* Search Bar for Saved */}
-              <div className="relative w-full sm:w-56">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="ストック内を検索..."
-                  value={savedSearchQuery}
-                  onChange={(e) => setSavedSearchQuery(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-            </div>
-
-            {/* Saved Tab Content */}
-            {savedTab === 'words' && (
+            ) : (
               <div className="space-y-2.5">
-                {filteredSavedVocabs.length === 0 ? (
-                  <div className="py-12 text-center text-slate-500 text-xs space-y-1">
-                    <p className="font-bold text-slate-400">登録された単語はありません</p>
-                    <p>ストーリー読書中に単語をタップして「＋単語帳に追加」するとここに蓄積されます。</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {filteredSavedVocabs.map(v => (
-                      <div
-                        key={v.id}
-                        className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-1.5 hover:border-slate-700 transition-colors"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-sm text-white">{v.phrase}</span>
-                            <button
-                              onClick={() => speakText(v.phrase)}
-                              className="text-slate-400 hover:text-cyan-400 p-1"
-                              title="発音を聞く"
-                            >
-                              <Volume2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                          {onDeleteVocab && (
-                            <button
-                              onClick={() => onDeleteVocab(v.id)}
-                              className="text-slate-600 hover:text-rose-400 p-1"
-                              title="削除"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                {filteredExpressionErrors.map(err => (
+                  <div
+                    key={err.id}
+                    className="p-4 bg-slate-950/70 border border-rose-500/20 rounded-2xl space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1 flex-1">
+                        <div className="text-xs font-bold text-rose-300">
+                          苦手構文: {err.corePattern}
                         </div>
-                        <div className="text-xs text-slate-300 font-medium">
-                          {v.meaning}
-                        </div>
-                        {v.exampleSentence && (
-                          <div className="text-[11px] text-sky-300/90 italic pt-0.5">
-                            "{v.exampleSentence}"
-                          </div>
+                        <p className="text-xs text-slate-300 mt-1">
+                          発話: "{err.userUtterance}"
+                        </p>
+                        <p className="text-xs text-emerald-400 font-semibold">
+                          自然な表現: {err.naturalExpression}
+                        </p>
+                        {err.explanation && (
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            {err.explanation}
+                          </p>
                         )}
                       </div>
-                    ))}
+                      {onDeleteExpressionError && (
+                        <button
+                          onClick={() => onDeleteExpressionError(err.id)}
+                          className="text-slate-600 hover:text-rose-400 p-1.5 flex-shrink-0"
+                          title="削除"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
-
-            {savedTab === 'sentences' && (
-              <div className="space-y-2.5">
-                {filteredDifficultSentences.length === 0 ? (
-                  <div className="py-12 text-center text-slate-500 text-xs">
-                    難解文のストックはありません。
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {filteredDifficultSentences.map(s => (
-                      <div
-                        key={s.id}
-                        className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="space-y-1">
-                            <p className="text-xs sm:text-sm font-semibold text-white leading-relaxed">
-                              {s.sentence}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                              {s.translation}
-                            </p>
-                          </div>
-                          {onDeleteSentence && (
-                            <button
-                              onClick={() => onDeleteSentence(s.id)}
-                              className="text-slate-600 hover:text-rose-400 p-1 flex-shrink-0"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {savedTab === 'errors' && (
-              <div className="space-y-2.5">
-                {expressionErrors.length === 0 ? (
-                  <div className="py-12 text-center text-slate-500 text-xs">
-                    苦手表現の記録はありません。
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {expressionErrors.map(err => (
-                      <div
-                        key={err.id}
-                        className="p-4 bg-slate-950/70 border border-rose-500/20 rounded-2xl space-y-2"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-bold text-rose-300">
-                              苦手構文: {err.corePattern}
-                            </div>
-                            <p className="text-xs text-slate-300 mt-1">
-                              発話: "{err.userUtterance}"
-                            </p>
-                            <p className="text-xs text-emerald-400 font-semibold">
-                              自然な表現: {err.naturalExpression}
-                            </p>
-                            {err.explanation && (
-                              <p className="text-[11px] text-slate-400 mt-0.5">
-                                {err.explanation}
-                              </p>
-                            )}
-                          </div>
-                          {onDeleteExpressionError && (
-                            <button
-                              onClick={() => onDeleteExpressionError(err.id)}
-                              className="text-slate-600 hover:text-rose-400 p-1 flex-shrink-0"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                ))}
               </div>
             )}
           </div>
-        </div>
-      ) : (
-        /* ========================================================= */
-        /* 3. MODE CONTENT: 📖 辞書・シラバス検索（完全一致最優先） */
-        /* ========================================================= */
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5 animate-fadeIn">
-          {/* Controls: Type Tabs (Vocab vs Pattern) & Level Filters & Search */}
-          <div className="space-y-4 border-b border-slate-800 pb-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              {/* Type Switcher: 語彙 vs 構文 */}
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => {
-                    setDictItemType('vocabs');
-                    setDisplayLimit(60);
-                  }}
-                  className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    dictItemType === 'vocabs'
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span>重要語彙辞書 ({filteredDictVocabs.length}語)</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setDictItemType('patterns');
-                    setDisplayLimit(60);
-                  }}
-                  className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    dictItemType === 'patterns'
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>構文シラバス ({filteredDictPatterns.length}構文)</span>
-                </button>
-              </div>
-
-              {/* Search Bar */}
-              <div className="relative w-full sm:w-64">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder={dictItemType === 'vocabs' ? "単語・意味を検索 (完全一致最優先)..." : "構文名・意味を検索..."}
-                  value={dictSearchQuery}
-                  onChange={(e) => setDictSearchQuery(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 shadow-inner"
-                />
-              </div>
-            </div>
-
-            {/* Level Filter Tabs (ALL / A1 / A2 / B1 / B2) */}
-            <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
-              <div className="flex items-center space-x-1.5 overflow-x-auto text-xs pb-1 sm:pb-0">
-                <span className="text-[11px] text-slate-400 font-bold mr-1">レベル:</span>
-                {(['ALL', 'A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
-                  const isSelected = dictLevelFilter === lvl;
-                  return (
-                    <button
-                      key={lvl}
-                      onClick={() => {
-                        setDictLevelFilter(lvl);
-                        setDisplayLimit(60);
-                      }}
-                      className={`px-3 py-1 rounded-xl font-bold transition-all ${
-                        isSelected
-                          ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                          : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                      }`}
-                    >
-                      {lvl === 'ALL' ? 'すべて (4,538語)' : lvl}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Status Filter Tabs (all / mastered / lapsed / unseen) */}
-              <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[11px]">
-                {(['all', 'mastered', 'lapsed', 'unseen'] as const).map(st => {
-                  const labels = { all: 'すべて', mastered: '習得済', lapsed: '要復習', unseen: '未遭遇' };
-                  const isSelected = dictStatusFilter === st;
-                  return (
-                    <button
-                      key={st}
-                      onClick={() => setDictStatusFilter(st)}
-                      className={`px-2.5 py-0.5 rounded-lg font-bold transition-all ${
-                        isSelected
-                          ? 'bg-slate-800 text-white'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {labels[st]}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Dictionary List Results */}
-          {dictItemType === 'vocabs' ? (
-            <div className="space-y-3">
-              {filteredDictVocabs.length === 0 ? (
-                <div className="py-16 text-center text-slate-500 text-xs">
-                  該当する単語は見つかりませんでした。
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {filteredDictVocabs.slice(0, displayLimit).map(v => {
-                      const st = masteryState.vocabs[v.id]?.status || masteryState.vocabs[v.phrase.toLowerCase()]?.status || 'unseen';
-                      const isExactMatch = dictSearchQuery.trim().toLowerCase() === v.phrase.toLowerCase();
-
-                      return (
-                        <div
-                          key={v.id}
-                          className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${
-                            isExactMatch
-                              ? 'bg-blue-950/40 border-blue-500/80 shadow-md shadow-blue-500/10 ring-1 ring-blue-500/50'
-                              : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
-                          }`}
-                        >
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center space-x-2">
-                                <span className="font-extrabold text-sm text-white">{v.phrase}</span>
-                                <button
-                                  onClick={() => speakText(v.phrase)}
-                                  className="text-slate-400 hover:text-cyan-400 p-0.5"
-                                  title="発音を聞く"
-                                >
-                                  <Volume2 className="w-3.5 h-3.5" />
-                                </button>
-                                {isExactMatch && (
-                                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/30 text-sky-300 font-bold border border-blue-400/40">
-                                    完全一致
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded font-bold border bg-slate-900 text-slate-300 border-slate-700">
-                                {v.cefr} / {v.partOfSpeech}
-                              </span>
-                            </div>
-                            <div className="text-xs text-slate-200 font-medium">
-                              {v.meaning}
-                            </div>
-                          </div>
-
-                          {/* Quick Mastery Toggle */}
-                          <div className="flex items-center justify-end space-x-1.5 pt-1 border-t border-slate-850">
-                            <button
-                              onClick={() => handleToggleVocabStatus(v.phrase, 'mastered')}
-                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all ${
-                                st === 'mastered'
-                                  ? 'bg-emerald-950 text-emerald-300 border-emerald-500 shadow-sm'
-                                  : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
-                              }`}
-                            >
-                              ✓ 習得済
-                            </button>
-                            <button
-                              onClick={() => handleToggleVocabStatus(v.phrase, 'lapsed')}
-                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all ${
-                                st === 'lapsed'
-                                  ? 'bg-rose-950 text-rose-300 border-rose-500 shadow-sm'
-                                  : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
-                              }`}
-                            >
-                              ! 要復習
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {filteredDictVocabs.length > displayLimit && (
-                    <div className="text-center pt-2">
-                      <button
-                        onClick={() => setDisplayLimit(prev => prev + 60)}
-                        className="px-6 py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-colors"
-                      >
-                        さらに表示する (+60件 / 残り {filteredDictVocabs.length - displayLimit}件)
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          ) : (
-            /* Patterns List */
-            <div className="space-y-3">
-              {filteredDictPatterns.length === 0 ? (
-                <div className="py-16 text-center text-slate-500 text-xs">
-                  該当する構文は見つかりませんでした。
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2.5">
-                    {filteredDictPatterns.slice(0, displayLimit).map(p => {
-                      const st = masteryState.patterns[p.id]?.status || 'unseen';
-                      const isExpanded = expandedPatternId === p.id;
-                      const isExactMatch = dictSearchQuery.trim().toLowerCase() === p.name.toLowerCase();
-
-                      return (
-                        <div
-                          key={p.id}
-                          className={`p-4 rounded-2xl border transition-all space-y-2.5 ${
-                            isExactMatch
-                              ? 'bg-blue-950/40 border-blue-500 shadow-md shadow-blue-500/10'
-                              : 'bg-slate-950/70 border-slate-800'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="space-y-1 flex-1">
-                              <div className="flex items-center space-x-2">
-                                <span className="font-extrabold text-sm text-white">{p.name}</span>
-                                <span className="text-[10px] text-slate-400 font-medium">({p.categoryLabel})</span>
-                                <span className="text-[9px] px-1.5 py-0.2 rounded font-bold border bg-slate-900 text-slate-300 border-slate-700">
-                                  {p.cefr}
-                                </span>
-                              </div>
-                              <div className="text-xs text-sky-300 font-semibold">{p.meaning}</div>
-                              <div className="text-[11px] text-slate-400 leading-relaxed">{p.focus}</div>
-                            </div>
-
-                            <div className="flex items-center space-x-1.5 flex-shrink-0">
-                              <button
-                                onClick={() => handleTogglePatternStatus(p.id, 'mastered')}
-                                className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition-all ${
-                                  st === 'mastered'
-                                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500 shadow-sm'
-                                    : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
-                                }`}
-                              >
-                                ✓ 習得済
-                              </button>
-                              <button
-                                onClick={() => handleTogglePatternStatus(p.id, 'lapsed')}
-                                className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition-all ${
-                                  st === 'lapsed'
-                                    ? 'bg-rose-950 text-rose-300 border-rose-500 shadow-sm'
-                                    : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
-                                }`}
-                              >
-                                ! 要復習
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Variations Accordion */}
-                          <div className="pt-2 border-t border-slate-850 flex items-center justify-between">
-                            <button
-                              onClick={() => setExpandedPatternId(isExpanded ? null : p.id)}
-                              className="text-[11px] text-sky-400 hover:underline flex items-center gap-1 font-semibold"
-                            >
-                              <span>例文 ({p.variations.length}パターン)</span>
-                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                            </button>
-                          </div>
-
-                          {isExpanded && (
-                            <div className="p-3 bg-slate-900/90 rounded-xl space-y-2 border border-slate-800 text-xs animate-fadeIn">
-                              {p.variations.map((v, vIdx) => (
-                                <div key={vIdx} className="space-y-0.5 border-b border-slate-800/60 pb-1.5 last:border-b-0 last:pb-0">
-                                  <div className="flex items-center justify-between">
-                                    <span className="font-bold text-white">{v.sentence}</span>
-                                    <button
-                                      onClick={() => speakText(v.sentence)}
-                                      className="text-slate-400 hover:text-cyan-400 p-0.5"
-                                    >
-                                      <Volume2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                  <div className="text-[11px] text-slate-400">{v.translation}</div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {filteredDictPatterns.length > displayLimit && (
-                    <div className="text-center pt-2">
-                      <button
-                        onClick={() => setDisplayLimit(prev => prev + 60)}
-                        className="px-6 py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-colors"
-                      >
-                        さらに表示する (+60件 / 残り {filteredDictPatterns.length - displayLimit}件)
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
