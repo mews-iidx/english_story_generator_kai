@@ -121,6 +121,93 @@ export function recordStoryRead(storyId: string, wpm?: number): Story | null {
     };
     stories[index] = updatedStory;
     localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));
+
+    // AIの出題意図があった構文・単語の進捗をこっそり反映 (Passive Exposure & Mastery)
+    try {
+      const mastery = loadMasteryState();
+      const now = new Date().toISOString();
+      let masteryChanged = false;
+
+      // 1. Target Embeddings (構文 & 単語)
+      if (story.targetEmbeddings && story.targetEmbeddings.length > 0) {
+        story.targetEmbeddings.forEach(emb => {
+          if (emb.type === 'pattern' && emb.targetId) {
+            const prev = mastery.patterns[emb.targetId] || {
+              status: 'unseen',
+              encounterCount: 0,
+              firstSeenAt: now,
+            };
+            if (prev.status !== 'lapsed' && prev.status !== 'mastered') {
+              const nextCount = (prev.encounterCount || 0) + 1;
+              mastery.patterns[emb.targetId] = {
+                ...prev,
+                status: nextCount >= 3 ? 'mastered' : 'exposed',
+                lastSeenAt: now,
+                encounterCount: nextCount,
+                masteredAt: nextCount >= 3 ? now : prev.masteredAt,
+              };
+              masteryChanged = true;
+            }
+          } else if (emb.type === 'vocab') {
+            const key = (emb.targetName || '').trim().toLowerCase();
+            if (key) {
+              const prev = mastery.vocabs[key] || {
+                status: 'unseen',
+                encounterCount: 0,
+                firstSeenAt: now,
+              };
+              if (prev.status !== 'lapsed' && prev.status !== 'mastered') {
+                const nextCount = (prev.encounterCount || 0) + 1;
+                mastery.vocabs[key] = {
+                  ...prev,
+                  status: nextCount >= 3 ? 'mastered' : 'exposed',
+                  lastSeenAt: now,
+                  encounterCount: nextCount,
+                  masteredAt: nextCount >= 3 ? now : prev.masteredAt,
+                };
+                masteryChanged = true;
+              }
+            }
+          }
+        });
+      }
+
+      // 2. Target Vocab List
+      if (story.targetVocabList && story.targetVocabList.length > 0) {
+        story.targetVocabList.forEach(rawWord => {
+          const key = rawWord.trim().toLowerCase();
+          if (key) {
+            const prev = mastery.vocabs[key] || {
+              status: 'unseen',
+              encounterCount: 0,
+              firstSeenAt: now,
+            };
+            if (prev.status !== 'lapsed' && prev.status !== 'mastered') {
+              const nextCount = (prev.encounterCount || 0) + 1;
+              mastery.vocabs[key] = {
+                ...prev,
+                status: nextCount >= 3 ? 'mastered' : 'exposed',
+                lastSeenAt: now,
+                encounterCount: nextCount,
+                masteredAt: nextCount >= 3 ? now : prev.masteredAt,
+              };
+              masteryChanged = true;
+            }
+          }
+        });
+      }
+
+      if (masteryChanged) {
+        saveMasteryState(mastery);
+      }
+
+      // 単語数とWPMを日次スナップショットに記録
+      const words = updatedStory.actualWordCount || updatedStory.targetWordCount || 700;
+      recordDailyReadingActivity(words, wpm);
+    } catch (err) {
+      console.error('Failed to update passive mastery on story read', err);
+    }
+
     return updatedStory;
   }
   return null;

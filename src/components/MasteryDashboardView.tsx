@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   loadDailySnapshots,
+  computeAllLevelProgress,
 } from '../services/storage';
 import { DailySnapshot } from '../types/mastery';
 import { VocabItem } from '../types/vocab';
@@ -10,7 +11,8 @@ import { Story } from '../types/story';
 import {
   Zap, Sparkles, AlertCircle, TrendingUp, BookOpen, Award,
   Volume2, Search, Trash2, FileText, Flame,
-  ShieldCheck, Filter, PlayCircle, BarChart3
+  ShieldCheck, Filter, PlayCircle, BarChart3, Globe,
+  ChevronDown, ChevronUp, Calendar
 } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
@@ -29,6 +31,15 @@ interface MasteryDashboardViewProps {
 
 type SavedStockTab = 'cards' | 'sentences' | 'errors';
 type CardFilterType = 'all' | 'word' | 'pattern' | 'mastered' | 'learning';
+type TimeScale = 'daily' | 'weekly' | 'monthly';
+
+interface TrendPoint {
+  label: string; // e.g. "9/14", "第36週", "9月"
+  wordsRead: number;
+  wpm: number;
+  overallCefrPct: number;
+  dateKey: string;
+}
 
 function formatDateKey(d: Date): string {
   const y = d.getFullYear();
@@ -69,6 +80,109 @@ function computeDailyStreak(snapshots: DailySnapshot[]): number {
   return streak;
 }
 
+// 日・週・月ごとのトレンド集計ロジック
+function aggregateSnapshots(snapshots: DailySnapshot[], scale: TimeScale): TrendPoint[] {
+  if (!snapshots || snapshots.length === 0) return [];
+
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+
+  if (scale === 'daily') {
+    return sorted.slice(-14).map(s => {
+      const parts = s.date.split('-');
+      const label = `${parseInt(parts[1], 10)}/${parseInt(parts[2], 10)}`;
+      const avgCefr = Math.round(
+        ((s.a1Progress?.overallPct || 0) +
+         (s.a2Progress?.overallPct || 0) +
+         (s.b1Progress?.overallPct || 0) +
+         (s.b2Progress?.overallPct || 0)) / 4
+      );
+      return {
+        label,
+        wordsRead: s.wordsRead || 0,
+        wpm: s.averageWpm || 0,
+        overallCefrPct: avgCefr,
+        dateKey: s.date,
+      };
+    });
+  }
+
+  if (scale === 'weekly') {
+    const weekMap: Record<string, { label: string; words: number; wpms: number[]; latestSnap: DailySnapshot }> = {};
+    
+    sorted.forEach(s => {
+      const d = new Date(s.date);
+      const startOfYear = new Date(d.getFullYear(), 0, 1);
+      const weekNum = Math.ceil((((d.getTime() - startOfYear.getTime()) / 86400000) + startOfYear.getDay() + 1) / 7);
+      const key = `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+      const label = `W${weekNum}`;
+
+      if (!weekMap[key]) {
+        weekMap[key] = { label, words: 0, wpms: [], latestSnap: s };
+      }
+      weekMap[key].words += s.wordsRead || 0;
+      if (s.averageWpm && s.averageWpm > 0) weekMap[key].wpms.push(s.averageWpm);
+      weekMap[key].latestSnap = s;
+    });
+
+    return Object.keys(weekMap).sort().slice(-8).map(key => {
+      const item = weekMap[key];
+      const avgWpm = item.wpms.length > 0 ? Math.round(item.wpms.reduce((a, b) => a + b, 0) / item.wpms.length) : 0;
+      const s = item.latestSnap;
+      const avgCefr = Math.round(
+        ((s.a1Progress?.overallPct || 0) +
+         (s.a2Progress?.overallPct || 0) +
+         (s.b1Progress?.overallPct || 0) +
+         (s.b2Progress?.overallPct || 0)) / 4
+      );
+      return {
+        label: item.label,
+        wordsRead: item.words,
+        wpm: avgWpm,
+        overallCefrPct: avgCefr,
+        dateKey: key,
+      };
+    });
+  }
+
+  if (scale === 'monthly') {
+    const monthMap: Record<string, { label: string; words: number; wpms: number[]; latestSnap: DailySnapshot }> = {};
+    
+    sorted.forEach(s => {
+      const key = s.date.substring(0, 7);
+      const parts = key.split('-');
+      const label = `${parseInt(parts[1], 10)}月`;
+
+      if (!monthMap[key]) {
+        monthMap[key] = { label, words: 0, wpms: [], latestSnap: s };
+      }
+      monthMap[key].words += s.wordsRead || 0;
+      if (s.averageWpm && s.averageWpm > 0) monthMap[key].wpms.push(s.averageWpm);
+      monthMap[key].latestSnap = s;
+    });
+
+    return Object.keys(monthMap).sort().slice(-6).map(key => {
+      const item = monthMap[key];
+      const avgWpm = item.wpms.length > 0 ? Math.round(item.wpms.reduce((a, b) => a + b, 0) / item.wpms.length) : 0;
+      const s = item.latestSnap;
+      const avgCefr = Math.round(
+        ((s.a1Progress?.overallPct || 0) +
+         (s.a2Progress?.overallPct || 0) +
+         (s.b1Progress?.overallPct || 0) +
+         (s.b2Progress?.overallPct || 0)) / 4
+      );
+      return {
+        label: item.label,
+        wordsRead: item.words,
+        wpm: avgWpm,
+        overallCefrPct: avgCefr,
+        dateKey: key,
+      };
+    });
+  }
+
+  return [];
+}
+
 export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   onNavigateToCreate,
   savedVocabs = [],
@@ -79,13 +193,30 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   onDeleteSentence,
   onDeleteExpressionError,
 }) => {
+  // マイトロフィー（武器庫）のタブ & フィルター
   const [savedTab, setSavedTab] = useState<SavedStockTab>('cards');
   const [cardFilter, setCardFilter] = useState<CardFilterType>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const dailySnapshots = useMemo(() => loadDailySnapshots(), []);
+  // リアルCEFR進捗マップの展開状態 & タイムスケール（日/週/月）
+  const [isCefrMapExpanded, setIsCefrMapExpanded] = useState(false);
+  const [timeScale, setTimeScale] = useState<TimeScale>('weekly');
 
-  // 1. 総読了語数の集計
+  // 日次スナップショット & CEFR進捗の取得
+  const dailySnapshots = useMemo(() => loadDailySnapshots(), []);
+  const allCefrProgress = useMemo(() => computeAllLevelProgress(), []);
+
+  // 全レベルの平均制覇率
+  const overallAvgCefrPct = useMemo(() => {
+    return Math.round(
+      (allCefrProgress.A1.overallPct +
+       allCefrProgress.A2.overallPct +
+       allCefrProgress.B1.overallPct +
+       allCefrProgress.B2.overallPct) / 4
+    );
+  }, [allCefrProgress]);
+
+  // 1. 総読了語数の集計（青天井）
   const totalWordsRead = useMemo(() => {
     const fromSnapshots = dailySnapshots.reduce((acc, s) => acc + (s.wordsRead || 0), 0);
     if (fromSnapshots > 0) return fromSnapshots;
@@ -174,7 +305,16 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     return Math.max(...last7DaysData.map(d => d.words), 200);
   }, [last7DaysData]);
 
-  // 6. 多読マイルストーン判定
+  // 6. 日・週・月ごとのトレンドデータ
+  const trendData = useMemo(() => {
+    return aggregateSnapshots(dailySnapshots, timeScale);
+  }, [dailySnapshots, timeScale]);
+
+  const maxTrendWords = useMemo(() => {
+    return Math.max(...trendData.map(t => t.wordsRead), 500);
+  }, [trendData]);
+
+  // 7. 多読マイルストーン判定
   const milestone = useMemo(() => {
     const storiesCount = stories.length;
     const words = totalWordsRead;
@@ -213,7 +353,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     };
   }, [stories.length, totalWordsRead]);
 
-  // 7. 1センテンス Ankiカードのフィルタリング & 検索
+  // 8. 1センテンス Ankiカードのフィルタリング & 検索
   const filteredVocabCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     
@@ -243,7 +383,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     });
   }, [savedVocabs, cardFilter, searchQuery]);
 
-  // 8. 難解文のフィルタリング
+  // 9. 難解文のフィルタリング
   const filteredDifficultSentences = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return difficultSentences.filter(s => {
@@ -256,7 +396,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     });
   }, [difficultSentences, searchQuery]);
 
-  // 9. 苦手表現のフィルタリング
+  // 10. 苦手表現のフィルタリング
   const filteredExpressionErrors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return expressionErrors.filter(err => {
@@ -272,7 +412,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto px-3 sm:px-4 py-6 space-y-6">
-      {/* 1. TOP HEADER & HUD METRICS */}
+      {/* 1. TOP HEADER & HUD METRICS (青天井アクティビティ) */}
       <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center space-x-3.5">
@@ -457,7 +597,174 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 4. 🏆 マイ武器庫 (MY ARSENAL: 1-SENTENCE CARDS, DIFFICULT SENTENCES, ERRORS) */}
+      {/* 4. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) - 気になったら見に行く折りたたみセクション */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4 transition-all">
+        <button
+          onClick={() => setIsCefrMapExpanded(!isCefrMapExpanded)}
+          className="w-full flex items-center justify-between text-left group"
+        >
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-950 border border-blue-500/30 flex items-center justify-center text-sky-400 group-hover:scale-105 transition-transform">
+              <Globe className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-sm sm:text-base font-black text-white group-hover:text-sky-300 transition-colors">
+                  🌐 リアルCEFRシラバス進捗マップ (A1〜B2)
+                </h3>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-sky-300 border border-blue-500/40 font-bold">
+                  全体 {overallAvgCefrPct}% 制覇
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                AIが出題意図を持ってストーリーに組み込み、読破した重要構文・語彙のリアル達成度
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-1.5 text-slate-400 group-hover:text-white transition-colors pl-2">
+            <span className="text-xs font-semibold hidden sm:inline">
+              {isCefrMapExpanded ? '閉じる' : '進捗を見る'}
+            </span>
+            {isCefrMapExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </div>
+        </button>
+
+        {isCefrMapExpanded && (
+          <div className="pt-4 border-t border-slate-800 space-y-6 animate-fadeIn">
+            {/* Level Progress Cards (A1, A2, B1, B2) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {(['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
+                const prog = allCefrProgress[lvl];
+                const levelTitle = {
+                  A1: '超初級 (A1)',
+                  A2: '初級 (A2)',
+                  B1: '中級 (B1)',
+                  B2: '中上級 (B2)',
+                }[lvl];
+
+                return (
+                  <div
+                    key={lvl}
+                    className="p-4 rounded-2xl border bg-slate-950/80 border-slate-800 text-left space-y-2.5 shadow-md"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-300">{levelTitle}</span>
+                      <span className="text-base font-black text-sky-400">
+                        {Math.round(prog.overallPct)}%
+                      </span>
+                    </div>
+
+                    <div className="space-y-1.5 text-[10px] text-slate-400">
+                      <div>
+                        <div className="flex justify-between font-semibold mb-0.5">
+                          <span>💡 構文 ({prog.patternMastered}/{prog.patternTotal})</span>
+                          <span>{Math.round(prog.patternPct)}%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full"
+                            style={{ width: `${prog.patternPct}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between font-semibold mb-0.5">
+                          <span>🔤 語彙 ({prog.vocabMastered}/{prog.vocabTotal})</span>
+                          <span>{Math.round(prog.vocabPct)}%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full"
+                            style={{ width: `${prog.vocabPct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Time Scale Trend Graph (日 / 週 / 月) */}
+            <div className="p-4 sm:p-5 bg-slate-950/60 border border-slate-800 rounded-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                <div className="flex items-center space-x-2">
+                  <Calendar className="w-4 h-4 text-sky-400" />
+                  <span className="text-xs sm:text-sm font-bold text-white">
+                    期間別・CEFR総合進捗推移グラフ
+                  </span>
+                </div>
+
+                {/* Scale Switcher: Daily / Weekly / Monthly */}
+                <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800 text-[11px] space-x-1">
+                  {[
+                    { id: 'daily', label: '📅 日次' },
+                    { id: 'weekly', label: '📆 週次 (推奨)' },
+                    { id: 'monthly', label: '🗓️ 月次' },
+                  ].map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => setTimeScale(s.id as TimeScale)}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                        timeScale === s.id
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Trend Chart Bars */}
+              {trendData.length === 0 ? (
+                <div className="py-8 text-center text-slate-500 text-xs">
+                  まだ十分な日次データがありません。ストーリーを読破すると履歴が積み上がります。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${trendData.length}, minmax(0, 1fr))` }}>
+                    {trendData.map((point, idx) => {
+                      const barHeight = Math.max(12, Math.min(100, Math.round((point.wordsRead / maxTrendWords) * 100)));
+
+                      return (
+                        <div key={idx} className="flex flex-col items-center space-y-1.5">
+                          {/* Top CEFR % Badge */}
+                          <span className="text-[9px] font-black text-sky-300">
+                            {point.overallCefrPct}%
+                          </span>
+
+                          {/* Bar */}
+                          <div className="w-full bg-slate-900 rounded-lg h-20 p-0.5 flex items-end justify-center border border-slate-800">
+                            <div
+                              className="w-full bg-gradient-to-t from-blue-600 to-cyan-400 rounded-md transition-all duration-500"
+                              style={{ height: `${barHeight}%` }}
+                            />
+                          </div>
+
+                          {/* Label */}
+                          <span className="text-[9px] font-bold text-slate-400 truncate w-full text-center">
+                            {point.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 text-center pt-2">
+                    💡 AIがストーリーに組み込んだ構文・重要語彙を読破するたびに、週・月単位で着実に進捗率が成長していきます。
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 5. 🏆 マイ武器庫 (MY ARSENAL: 1-SENTENCE CARDS, DIFFICULT SENTENCES, ERRORS) */}
       <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5">
         {/* Main Tab Switcher: Cards vs Sentences vs Errors */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
