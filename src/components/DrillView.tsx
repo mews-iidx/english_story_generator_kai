@@ -11,8 +11,6 @@ import {
   PenTool,
   Flame,
   ChevronRight,
-  ChevronDown,
-  ChevronUp,
   Settings2,
   HelpCircle
 } from 'lucide-react';
@@ -75,103 +73,93 @@ export const DrillView: React.FC<DrillViewProps> = ({
   };
 
   // 出題候補リストの取得＆優先度ソート (A1から順次未知を潰す)
-  const pickNextQuestion = useCallback((cefr: CefrLevel, mode: DrillFilterMode) => {
+  const pickNextQuestion = useCallback((cefr: CefrLevel, mode: DrillFilterMode, type: 'assembly' | 'comprehension') => {
     const state = loadMasteryState();
     const patterns = getPatternsByLevel(cefr);
-    if (!patterns || patterns.length === 0) return;
 
-    let candidatePool: { pattern: PatternMasterItem; priority: number }[] = [];
-
-    patterns.forEach(p => {
-      const prog = state.patterns[p.id];
-      const compStatus = prog?.comprehensionStatus || prog?.status || 'unseen';
-      const assemStatus = prog?.assemblyStatus || 'unseen';
-      const mistakeCount = prog?.mistakeCount || 0;
-
-      const targetStatus = drillType === 'assembly' ? assemStatus : compStatus;
-
-      // フィルター条件
-      if (mode === 'unseen' && targetStatus !== 'unseen') return;
-      if (mode === 'lapsed' && targetStatus !== 'lapsed' && mistakeCount === 0) return;
-
-      // 優先度スコア計算
-      let priority = 10;
-      if (targetStatus === 'unseen') priority = 100;
-      else if (targetStatus === 'lapsed') priority = 80 + mistakeCount * 2;
-      else if (targetStatus === 'exposed') priority = 50;
-      else if (targetStatus === 'mastered') priority = 10;
-
-      candidatePool.push({ pattern: p, priority });
-    });
-
-    if (candidatePool.length === 0) {
-      if (mode === 'unseen') {
-        // 現在のレベルの未着手が全滅した時、自動で次のレベルを提案/移行
-        const nextLevels: Record<CefrLevel, CefrLevel | null> = {
-          A1: 'A2',
-          A2: 'B1',
-          B1: 'B2',
-          B2: 'C1',
-          C1: null,
-        };
-        const next = nextLevels[cefr];
-        if (next) {
-          setLevelCompletionNotice(`🎉 ${cefr}レベルの未着手構文をすべてクリアしました！次の【${next}】に進みます。`);
-          setSelectedCefr(next);
-          return;
-        }
-      }
-
-      // 該当なしの場合は全件からランダム
-      const randomP = patterns[Math.floor(Math.random() * patterns.length)];
-      setCurrentPattern(randomP);
-      setVariationIndex(Math.floor(Math.random() * (randomP.variations?.length || 1)));
-      setUserAnswer('');
-      setEvalResult(null);
-      setIsSavedToAnki(false);
+    if (!patterns || patterns.length === 0) {
+      setCurrentPattern(null);
       return;
     }
 
-    setLevelCompletionNotice(null);
+    let candidatePool: PatternMasterItem[] = [];
 
-    // 優先度上位からピック
-    candidatePool.sort((a, b) => b.priority - a.priority);
-    const topCandidates = candidatePool.slice(0, Math.min(6, candidatePool.length));
-    const chosen = topCandidates[Math.floor(Math.random() * topCandidates.length)].pattern;
+    if (mode === 'unseen') {
+      candidatePool = patterns.filter(p => {
+        const m = state.patterns[p.id];
+        const targetStatus = type === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
+        return !m || !targetStatus || targetStatus === 'unseen';
+      });
+      if (candidatePool.length === 0) {
+        setLevelCompletionNotice(`🎉 おめでとうございます！ ${cefr} レベルの構文はすべて確認済みです！`);
+        candidatePool = patterns;
+      } else {
+        setLevelCompletionNotice(null);
+      }
+    } else if (mode === 'lapsed') {
+      candidatePool = patterns.filter(p => {
+        const m = state.patterns[p.id];
+        const targetStatus = type === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
+        return m && (targetStatus === 'lapsed' || ((m.mistakeCount || 0) > 0 && targetStatus !== 'mastered'));
+      });
+      if (candidatePool.length === 0) {
+        setLevelCompletionNotice(`✨ 素晴らしい！ ${cefr} レベルに苦手・要復習の構文はありません！`);
+        candidatePool = patterns;
+      } else {
+        setLevelCompletionNotice(null);
+      }
+    } else {
+      candidatePool = [...patterns].sort((a, b) => {
+        const mA = state.patterns[a.id];
+        const mB = state.patterns[b.id];
+        const statusA = type === 'assembly' ? mA?.assemblyStatus : mA?.comprehensionStatus;
+        const statusB = type === 'assembly' ? mB?.assemblyStatus : mB?.comprehensionStatus;
+        const rank = (s?: string) => (s === 'lapsed' ? 0 : !s || s === 'unseen' ? 1 : s === 'exposed' ? 2 : 3);
+        return rank(statusA) - rank(statusB);
+      });
+      setLevelCompletionNotice(null);
+    }
 
-    setCurrentPattern(chosen);
-    setVariationIndex(Math.floor(Math.random() * (chosen.variations?.length || 1)));
+    const selected = candidatePool[Math.floor(Math.random() * candidatePool.length)];
+    setCurrentPattern(selected);
+    
+    const varCount = selected.variations?.length || 3;
+    setVariationIndex(Math.floor(Math.random() * varCount));
+
     setUserAnswer('');
     setEvalResult(null);
     setIsSavedToAnki(false);
-  }, [drillType]);
+  }, []);
 
-  // 初回およびレベル/モード変更時の問題選定
+  // レベルやモード変更時に次の問題をピック
   useEffect(() => {
-    pickNextQuestion(selectedCefr, filterMode);
+    pickNextQuestion(selectedCefr, filterMode, drillType);
   }, [selectedCefr, filterMode, drillType, pickNextQuestion]);
 
-  // フォーカス
+  // 入力フォーカス
   useEffect(() => {
     if (!isEvaluating && !evalResult) {
       inputRef.current?.focus();
     }
-  }, [isEvaluating, evalResult, currentPattern]);
+  }, [currentPattern, isEvaluating, evalResult]);
 
+  // 現在の例文データ
   const currentVariation = useMemo(() => {
-    if (!currentPattern || !currentPattern.variations) return null;
+    if (!currentPattern || !currentPattern.variations) {
+      return null;
+    }
     return currentPattern.variations[variationIndex] || currentPattern.variations[0];
   }, [currentPattern, variationIndex]);
 
-  // 回答送信＆AI添削
+  // 判定実行
   const handleSubmitAnswer = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!userAnswer.trim() || !currentPattern || isEvaluating) return;
+    if (!userAnswer.trim() || !currentPattern || !currentVariation || isEvaluating) return;
 
     setIsEvaluating(true);
-    const promptJa = currentVariation?.translation || currentPattern.meaning;
-
     try {
+      const promptJa = currentVariation.translation || currentPattern.meaning;
+      
       const result = await evaluateDrillAnswerWithGemini({
         promptJa,
         targetItem: {
@@ -195,7 +183,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
         setSessionCorrectCount(prev => prev + 1);
         setCurrentStreak(prev => prev + 1);
         speakText(result.correctedSentence || currentVariation?.sentence || userAnswer);
-        // 一撃100%マスター記録
+        
         recordDrillResult({
           itemId: currentPattern.id,
           itemType: 'pattern',
@@ -210,7 +198,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
         playWrongSound();
         setCurrentStreak(0);
         speakText(result.correctedSentence || currentVariation?.sentence || '');
-        // ミス記録 & 0%リセット
+        
         recordDrillResult({
           itemId: currentPattern.id,
           itemType: 'pattern',
@@ -264,25 +252,23 @@ export const DrillView: React.FC<DrillViewProps> = ({
     setIsEvaluating(false);
   };
 
-  // ワンタップ Anki 登録
-  const handleSendToAnki = () => {
+  // Ankiへ3連バリエーション丸ごと武器化保存
+  const handleSaveToAnki = () => {
     if (!currentPattern || !currentVariation || isSavedToAnki) return;
 
-    const targetSentence = evalResult?.correctedSentence || currentVariation.sentence;
-    const targetTranslation = currentVariation.translation;
-
     saveSentenceCardWithSiblings({
-      sentence: targetSentence,
-      translation: targetTranslation,
+      sentence: evalResult?.correctedSentence || currentVariation.sentence,
+      translation: currentVariation.translation,
       focusType: 'pattern',
+      focusWord: currentPattern.focus || currentPattern.name,
+      focusMeaning: currentPattern.meaning,
       corePatterns: [{
         patternName: currentPattern.name,
         formula: currentPattern.focus,
         meaningTemplate: currentPattern.meaning,
         highlightTokens: currentVariation.targetTokens || [],
-        briefNote: currentPattern.focus,
+        briefNote: currentPattern.meaning,
       }],
-      importance: 5,
     });
 
     setIsSavedToAnki(true);
@@ -290,90 +276,94 @@ export const DrillView: React.FC<DrillViewProps> = ({
 
   // 次の問題へ
   const handleNext = () => {
-    pickNextQuestion(selectedCefr, filterMode);
+    pickNextQuestion(selectedCefr, filterMode, drillType);
   };
 
-  // キーボードショートカット (Enter で送信 / 次へ)
+  // キーボードショートカット (Enterで送信または次へ)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      if (evalResult && evalResult.result !== 'alternative_hint') {
+      if (evalResult && (evalResult.result === 'correct' || evalResult.result === 'wrong')) {
         handleNext();
-      } else {
-        handleSubmitAnswer();
       }
     }
   };
 
-  return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-5 animate-fadeIn">
-      {/* Level Completion Toast */}
-      {levelCompletionNotice && (
-        <div className="p-4 bg-emerald-950/80 border border-emerald-500/40 rounded-2xl text-emerald-300 text-xs font-bold shadow-lg animate-slideDown flex items-center justify-between">
-          <span>{levelCompletionNotice}</span>
-          <button
-            onClick={() => setLevelCompletionNotice(null)}
-            className="text-emerald-400 hover:text-white px-2 py-0.5 rounded-lg"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+  // 全体進捗のサマリー計算
+  const masteryProgress = useMemo(() => {
+    const state = loadMasteryState();
+    const patterns = getPatternsByLevel(selectedCefr);
+    const total = patterns.length;
+    if (total === 0) return { mastered: 0, total: 0, percentage: 0 };
 
-      {/* 1. Compact Collapsible Header */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl transition-all">
-        <div className="flex items-center justify-between flex-wrap gap-2.5">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center shadow-md shadow-orange-500/20">
-              <Zap className="w-4 h-4 text-white" />
+    const mastered = patterns.filter(p => {
+      const m = state.patterns[p.id];
+      const targetStatus = drillType === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
+      return targetStatus === 'mastered' || m?.status === 'mastered';
+    }).length;
+
+    return {
+      mastered,
+      total,
+      percentage: Math.round((mastered / total) * 100),
+    };
+  }, [selectedCefr, drillType, evalResult]);
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 pb-20 px-3 sm:px-4 animate-fadeIn">
+      {/* 1. Header & Quick Controls */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-3 bg-gradient-to-tr from-amber-500 to-orange-500 rounded-2xl shadow-lg shadow-orange-500/20 text-white">
+              <Zap className="w-6 h-6" />
             </div>
-            <div className="flex items-center space-x-2">
-              <span className="text-sm sm:text-base font-extrabold text-white">
-                瞬間ドリル
-              </span>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-600/20 text-blue-300 border border-blue-500/30 font-bold">
-                {selectedCefr}
-              </span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 font-semibold">
-                {drillType === 'assembly' ? '✍️ 組立' : '📖 理解'}
-              </span>
-              <span className="text-[11px] text-slate-400 hidden sm:inline">
-                ({filterMode === 'unseen' ? '未知優先' : filterMode === 'lapsed' ? '苦手優先' : 'おまかせ'})
-              </span>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                  構文スピード仕分けドリル
+                </h1>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                  {selectedCefr}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-400 font-medium">
+                {drillType === 'assembly' ? '日本語を見て瞬時に英語を組み立てる' : '英文を見て意味を即座に理解する'}
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            {/* Streak & Score */}
+          {/* Streak & Score */}
+          <div className="flex items-center space-x-3">
+            {sessionTotalCount > 0 && (
+              <span className="text-xs text-slate-400 font-bold bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                {sessionCorrectCount} / {sessionTotalCount} 問正解
+              </span>
+            )}
+
             {currentStreak > 1 && (
-              <div className="flex items-center space-x-1 px-2.5 py-1 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-300 font-bold text-xs animate-bounce">
-                <Flame className="w-3.5 h-3.5 text-orange-400" />
-                <span>{currentStreak}連正解!</span>
+              <div className="flex items-center space-x-1 px-3 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-amber-400 text-xs font-bold animate-pulse">
+                <Flame className="w-3.5 h-3.5" />
+                <span>{currentStreak} 連問正解!</span>
               </div>
             )}
-            <div className="px-2.5 py-1 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-300 font-semibold text-xs">
-              正答: <strong className="text-emerald-400">{sessionCorrectCount}</strong> / {sessionTotalCount}
-            </div>
 
-            {/* Accordion Toggle */}
             <button
               onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className="flex items-center space-x-1 p-2 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 rounded-xl text-xs transition-colors"
-              title="設定・レベル変更"
+              className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-colors border border-slate-700"
+              title="設定"
             >
-              <Settings2 className="w-3.5 h-3.5" />
-              {isSettingsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              <Settings2 className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Collapsed Setting Controls */}
+        {/* Collapsible Settings Drawer */}
         {isSettingsOpen && (
-          <div className="pt-4 mt-3 border-t border-slate-800 space-y-3 animate-fadeIn">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              {/* CEFR Level Selector */}
-              <div className="flex items-center space-x-1.5">
-                <span className="text-xs font-bold text-slate-400 mr-1">レベル:</span>
-                {(['A1', 'A2', 'B1', 'B2'] as CefrLevel[]).map(lvl => (
+          <div className="pt-3 border-t border-slate-800 space-y-3 animate-fadeIn">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* CEFR Level Tabs */}
+              <div className="flex items-center space-x-1">
+                {(['A1', 'A2', 'B1', 'B2', 'C1'] as CefrLevel[]).map((lvl) => (
                   <button
                     key={lvl}
                     onClick={() => setSelectedCefr(lvl)}
@@ -389,13 +379,12 @@ export const DrillView: React.FC<DrillViewProps> = ({
               </div>
 
               {/* Mode Toggle */}
-              <div className="flex items-center space-x-1.5">
-                <span className="text-xs font-bold text-slate-400 mr-1">モード:</span>
+              <div className="flex items-center space-x-1 border-l border-slate-800 pl-3">
                 <button
                   onClick={() => setDrillType('assembly')}
                   className={`flex items-center space-x-1 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
                     drillType === 'assembly'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
                       : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
                   }`}
                 >
@@ -433,10 +422,10 @@ export const DrillView: React.FC<DrillViewProps> = ({
         )}
       </div>
 
-      {/* 2. Main Question Card (ネタバレ・狙い非表示) */}
+      {/* 2. Main Question Card */}
       {currentPattern && currentVariation ? (
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-          {/* Card Category Header (構文名や狙いは隠す) */}
+          {/* Card Category Header */}
           <div className="flex items-center justify-between pb-3 border-b border-slate-800">
             <div className="flex items-center space-x-2">
               <span className="px-2.5 py-0.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold border border-slate-700">
@@ -448,7 +437,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
             </div>
           </div>
 
-          {/* Question Prompt (お題の日本語のみを堂々と表示) */}
+          {/* Question Prompt */}
           <div className="space-y-3 text-center py-5">
             <span className="text-xs font-bold text-slate-400 tracking-wider block">
               {drillType === 'assembly'
@@ -456,12 +445,24 @@ export const DrillView: React.FC<DrillViewProps> = ({
                 : '【この英文の意味を理解できますか？】'}
             </span>
             <div className="text-2xl sm:text-3xl font-extrabold text-white leading-snug tracking-tight">
-              「{currentVariation.translation}」
+              「{drillType === 'assembly' ? currentVariation.translation : currentVariation.sentence}」
             </div>
+            {drillType === 'comprehension' && (
+              <div className="flex justify-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => speakText(currentVariation.sentence)}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-xl text-xs font-semibold transition-all"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>音声を聞く</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* User Input & Form */}
-          <form onSubmit={handleSubmitAnswer} className="space-y-3">
+          <form onSubmit={handleSubmitAnswer} className="space-y-4">
             <div className="relative">
               <input
                 ref={inputRef}
@@ -470,186 +471,237 @@ export const DrillView: React.FC<DrillViewProps> = ({
                 onChange={(e) => setUserAnswer(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={isEvaluating || (evalResult !== null && evalResult.result !== 'alternative_hint')}
-                placeholder={drillType === 'assembly' ? '英語全文を入力 (例: I used to live here.)' : '日本語の意味を入力'}
+                placeholder={drillType === 'assembly' ? '英語全文を入力 (例: I used to live here.)' : '日本語の意味を入力（または「わからない」で模範解答確認）'}
                 className="w-full bg-slate-950/90 border-2 border-slate-700 focus:border-blue-500 rounded-2xl px-5 py-4 text-base sm:text-lg text-white font-medium placeholder-slate-500 shadow-inner focus:outline-none transition-all disabled:opacity-60"
               />
 
-              <button
-                type="submit"
-                disabled={!userAnswer.trim() || isEvaluating || (evalResult !== null && evalResult.result !== 'alternative_hint')}
-                className="absolute right-2 top-2 bottom-2 px-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white rounded-xl font-bold text-sm flex items-center space-x-1.5 shadow-lg shadow-blue-600/25 transition-all disabled:opacity-50"
-              >
-                {isEvaluating ? (
-                  <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                ) : (
-                  <>
-                    <span>判定</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
+              {/* Enter badge */}
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 hidden sm:flex items-center space-x-1 text-slate-500 text-xs font-mono pointer-events-none">
+                <kbd className="px-2 py-1 bg-slate-800 rounded-md border border-slate-700">Enter</kbd>
+              </div>
             </div>
 
-            {/* わからない（ギブアップ）ボタン (判定前のみ表示) */}
+            {/* Action Buttons */}
             {!evalResult && (
-              <div className="flex justify-end pt-1">
+              <div className="flex items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
                   onClick={handleGiveUp}
                   disabled={isEvaluating}
-                  className="flex items-center space-x-1 text-xs text-slate-500 hover:text-slate-300 transition-colors py-1 px-2 rounded-lg hover:bg-slate-800/60"
+                  className="flex items-center space-x-1 px-4 py-3 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-2xl text-xs font-bold transition-all disabled:opacity-50"
                 >
-                  <HelpCircle className="w-3.5 h-3.5" />
-                  <span>わからない (模範解答を見る)</span>
+                  <HelpCircle className="w-4 h-4 text-slate-400" />
+                  <span>わからない (答えを見る)</span>
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isEvaluating || !userAnswer.trim()}
+                  className="flex-1 sm:flex-initial flex items-center justify-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-2xl shadow-lg shadow-blue-600/30 transition-all disabled:opacity-50 disabled:shadow-none"
+                >
+                  {isEvaluating ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>AI採点中...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>回答する</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </div>
             )}
           </form>
 
-          {/* AI Feedback & Results (回答後に初めてターゲット構文を明かす) */}
+          {/* AI Feedback & Results (回答後にターゲット構文と英日ペアを明かす) */}
           {evalResult && (
             <div className="space-y-4 animate-fadeIn pt-2">
               {evalResult.result === 'correct' && (
-                <div className="p-5 bg-emerald-950/50 border border-emerald-500/40 rounded-2xl space-y-3">
+                <div className="p-5 bg-emerald-950/40 border-2 border-emerald-500/40 rounded-2xl space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2 text-emerald-400 font-extrabold text-base">
                       <CheckCircle2 className="w-5 h-5" />
-                      <span>完全正解！一撃マスター達成 🎉</span>
+                      <span>正解！お見事です 🎉</span>
                     </div>
                     <span className="text-xs font-bold text-emerald-300 bg-emerald-900/60 px-2.5 py-0.5 rounded-lg border border-emerald-500/30">
                       🎯 {currentPattern.name}
                     </span>
                   </div>
 
-                  <p className="text-sm text-emerald-200/90 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
                     {evalResult.feedback}
                   </p>
 
-                  <div className="flex items-center justify-between p-3 bg-slate-950/80 border border-emerald-500/20 rounded-xl">
-                    <div>
+                  <div className="p-3.5 bg-slate-950/80 border border-emerald-500/20 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold text-emerald-400 block">構文公式: {currentPattern.focus}</span>
-                      <div className="text-sm font-bold text-white font-serif pt-0.5">
-                        {evalResult.correctedSentence || currentVariation.sentence}
-                      </div>
+                      <button
+                        onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
+                        className="p-1.5 text-emerald-400 hover:bg-emerald-950 rounded-lg transition-colors"
+                        title="発音を再生"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
-                      className="p-1.5 text-emerald-400 hover:bg-emerald-950 rounded-lg transition-colors"
-                      title="発音を再生"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
+                    <div className="text-sm font-bold text-white font-serif">
+                      {evalResult.correctedSentence || currentVariation.sentence}
+                    </div>
+                    <div className="text-xs text-slate-300">
+                      {currentVariation.translation}
+                    </div>
                   </div>
 
                   <button
                     onClick={handleNext}
-                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center justify-center space-x-2 transition-all"
+                    className="w-full flex items-center justify-center space-x-2 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition-all text-sm mt-2"
                   >
-                    <span>次の問題へ (Enter)</span>
-                    <ChevronRight className="w-4 h-4" />
+                    <span>次へ進む (Enter)</span>
+                    <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               )}
 
-              {evalResult.result === 'alternative_hint' && (
-                <div className="p-5 bg-amber-950/50 border border-amber-500/40 rounded-2xl space-y-3">
-                  <div className="flex items-center space-x-2 text-amber-400 font-extrabold text-base">
-                    <AlertCircle className="w-5 h-5" />
-                    <span>意味は通じますが、指定構文を使ってみましょう！ 💡</span>
-                  </div>
-                  <p className="text-sm text-amber-200/90 leading-relaxed">
-                    {evalResult.feedback}
-                  </p>
-                  <div className="text-xs text-amber-300/80 bg-slate-950/60 p-2.5 rounded-xl border border-amber-500/20">
-                    🎯 今回使ってほしい構文: <strong>{currentPattern.focus}</strong>
-                  </div>
-                </div>
-              )}
-
               {evalResult.result === 'wrong' && (
-                <div className="p-5 bg-rose-950/50 border border-rose-500/40 rounded-2xl space-y-4">
+                <div className="p-5 bg-rose-950/40 border-2 border-rose-500/40 rounded-2xl space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2 text-rose-400 font-extrabold text-base">
                       <AlertCircle className="w-5 h-5" />
-                      <span>不正解・要復習 ❌</span>
+                      <span>要復習 ❌</span>
                     </div>
                     <span className="text-xs font-bold text-rose-300 bg-rose-900/60 px-2.5 py-0.5 rounded-lg border border-rose-500/30">
                       🎯 {currentPattern.name}
                     </span>
                   </div>
 
-                  <p className="text-sm text-rose-200/90 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
                     {evalResult.feedback}
                   </p>
 
-                  <div className="flex items-center justify-between p-3 bg-slate-950/80 border border-rose-500/20 rounded-xl">
-                    <div>
+                  <div className="p-3.5 bg-slate-950/80 border border-rose-500/20 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold text-rose-400 block mb-0.5">
                         構文公式: {currentPattern.focus}
                       </span>
-                      <div className="text-base font-bold text-white font-serif">
-                        {evalResult.correctedSentence || currentVariation.sentence}
-                      </div>
+                      <button
+                        onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
+                        className="p-1.5 text-rose-400 hover:bg-rose-950 rounded-lg transition-colors"
+                        title="発音を再生"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
-                      className="p-1.5 text-rose-400 hover:bg-rose-950 rounded-lg transition-colors"
-                      title="発音を再生"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
+                    <div className="text-base font-bold text-white font-serif">
+                      {evalResult.correctedSentence || currentVariation.sentence}
+                    </div>
+                    <div className="text-xs text-slate-300">
+                      {currentVariation.translation}
+                    </div>
                   </div>
 
                   <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
                     <button
-                      onClick={handleSendToAnki}
+                      onClick={handleSaveToAnki}
                       disabled={isSavedToAnki}
-                      className={`w-full sm:w-1/2 py-3 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-all ${
+                      className={`flex-1 w-full flex items-center justify-center space-x-2 py-3 rounded-xl font-bold text-xs transition-all ${
                         isSavedToAnki
-                          ? 'bg-slate-800 text-slate-400 border border-slate-700'
-                          : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30'
+                          ? 'bg-slate-800 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-lg shadow-orange-600/30'
                       }`}
                     >
-                      <Plus className="w-4 h-4" />
-                      <span>{isSavedToAnki ? '✅ Ankiにペアカード登録済み' : '🃏 1文ペアカードをAnkiに送る'}</span>
+                      {isSavedToAnki ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Ankiに3連バリエーション登録済み</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4" />
+                          <span>Ankiに3連バリエーションを武器化登録</span>
+                        </>
+                      )}
                     </button>
-
-                    {onNavigateToAnki && isSavedToAnki && (
-                      <button
-                        onClick={onNavigateToAnki}
-                        className="w-full sm:w-auto px-3 py-3 bg-indigo-950 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-300 font-bold text-xs rounded-xl transition-all"
-                      >
-                        Ankiを開く ➔
-                      </button>
-                    )}
 
                     <button
                       onClick={handleNext}
-                      className="w-full sm:w-1/2 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1 transition-all border border-slate-700"
+                      className="flex-1 w-full flex items-center justify-center space-x-2 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl transition-all text-xs border border-slate-700"
                     >
                       <span>次の問題へ (Enter)</span>
-                      <ChevronRight className="w-4 h-4" />
+                      <ArrowRight className="w-4 h-4" />
                     </button>
                   </div>
+                </div>
+              )}
+
+              {evalResult.result === 'alternative_hint' && (
+                <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-2xl space-y-2">
+                  <div className="flex items-center space-x-2 text-amber-400 font-bold text-sm">
+                    <HelpCircle className="w-4 h-4" />
+                    <span>惜しい！別の表現・構文で再挑戦</span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-300">
+                    {evalResult.feedback}
+                  </p>
                 </div>
               )}
             </div>
           )}
         </div>
       ) : (
-        <div className="p-8 text-center text-slate-400 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-3">
-          <p className="text-sm">該当する問題が見つかりませんでした。</p>
-          <button
-            onClick={() => {
-              setSelectedCefr('A1');
-              setFilterMode('all');
-            }}
-            className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl"
-          >
-            A1の全問から再開する
-          </button>
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-12 text-center space-y-4">
+          <Zap className="w-12 h-12 text-blue-400 mx-auto animate-bounce" />
+          <h3 className="text-xl font-bold text-white">
+            {levelCompletionNotice || '該当する問題が見つかりません'}
+          </h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto">
+            フィルターを変更するか、別のCEFRレベルを選択してください。
+          </p>
+          <div className="pt-2 flex justify-center gap-3">
+            <button
+              onClick={() => setFilterMode('all')}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition-all"
+            >
+              おまかせ出題で復習する
+            </button>
+            {onNavigateToAnki && (
+              <button
+                onClick={onNavigateToAnki}
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition-all border border-slate-700"
+              >
+                Ankiカードで復習する
+              </button>
+            )}
+          </div>
         </div>
       )}
+
+      {/* 3. Bottom Mastery Status Card */}
+      <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <div className="p-2 bg-blue-500/10 rounded-xl text-blue-400 border border-blue-500/20">
+            <Zap className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-400">
+              {selectedCefr} 構文マスター率
+            </div>
+            <div className="text-sm font-extrabold text-white">
+              {masteryProgress.mastered} / {masteryProgress.total} 構文習得 ({masteryProgress.percentage}%)
+            </div>
+          </div>
+        </div>
+
+        {onNavigateToAnki && (
+          <button
+            onClick={onNavigateToAnki}
+            className="flex items-center space-x-1 text-xs font-bold text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            <span>Ankiカード一覧へ</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
     </div>
   );
 };
