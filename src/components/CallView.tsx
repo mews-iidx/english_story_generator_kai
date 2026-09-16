@@ -287,17 +287,22 @@ export const CallView: React.FC<CallViewProps> = ({
           ]);
         },
         onAssistantTranscript: (textChunk) => {
+          // モデルの思考テキストやシステムプレフィックスを万一受信した場合も遮断
+          if (textChunk.includes('Initiating') || textChunk.startsWith('[')) {
+            return;
+          }
           setCurrentAssistantText((prev) => prev + textChunk);
         },
         onTurnComplete: () => {
           setCurrentAssistantText((current) => {
-            if (current.trim()) {
+            const trimmed = current.trim();
+            if (trimmed && !trimmed.startsWith('[') && !trimmed.includes('Initiating')) {
               setCallMessages((prev) => [
                 ...prev,
                 {
                   id: 'asst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
                   role: 'assistant',
-                  text: current.trim(),
+                  text: trimmed,
                   timestamp: new Date().toISOString(),
                 },
               ]);
