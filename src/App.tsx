@@ -338,7 +338,7 @@ export const App: React.FC = () => {
           model: settings.geminiModel,
           cefrLevel: nextTask.params?.cefrLevel || settings.cefrLevel,
           contentType: nextTask.params?.contentType || 'story',
-          storyCount: nextTask.totalEpisodes || nextTask.storyCount || 1,
+          storyCount: nextTask.storyCount || 1,
           isContinuous: nextTask.seriesType === 'continuous',
           userPrompt: nextTask.params?.userPrompt || nextTask.title,
           targetVocabs: selectedDueVocabs,

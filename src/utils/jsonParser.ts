@@ -1,5 +1,8 @@
 import { StoryGenerationResponse } from '../types/story';
 
+/**
+ * Geminiから返却されたストーリーJSONを極めて堅牢にパースするユーティリティ
+ */
 export function parseRobustStoryJson(rawText: string): StoryGenerationResponse {
   if (!rawText || typeof rawText !== 'string') {
     throw new Error('JSONテキストが空です。');
@@ -7,47 +10,118 @@ export function parseRobustStoryJson(rawText: string): StoryGenerationResponse {
 
   let clean = rawText.trim();
 
+  // 1. Markdownコードブロックの除去
   if (clean.startsWith('```json')) {
     clean = clean.replace(/^```json\s*/, '').replace(/```\s*$/, '');
   } else if (clean.startsWith('```')) {
     clean = clean.replace(/^```\s*/, '').replace(/```\s*$/, '');
   }
 
+  // 2. 最も外側の波括弧を探す
   const firstBrace = clean.indexOf('{');
   const lastBrace = clean.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    clean = clean.substring(firstBrace, lastBrace + 1);
+  if (firstBrace !== -1) {
+    if (lastBrace !== -1 && lastBrace > firstBrace) {
+      clean = clean.substring(firstBrace, lastBrace + 1);
+    } else {
+      clean = clean.substring(firstBrace);
+    }
   }
 
+  // 3. 標準の JSON.parse
   try {
     const parsed = JSON.parse(clean);
     return normalizeStoryResponse(parsed);
   } catch (initialErr) {
-    console.warn('Initial JSON.parse failed, attempting repair...', initialErr);
+    console.warn('Direct JSON.parse failed, attempting repair...', initialErr);
   }
 
+  // 4. トラブルシューティング & 修復処理
   try {
-    let repaired = clean.replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) => {
-      if (c === '\n') return '\\n';
-      if (c === '\r') return '\\r';
-      if (c === '\t') return '\\t';
-      return '';
-    });
+    let repaired = clean;
+
+    // 末尾カンマの除去 (例: , } や , ])
+    repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+
+    // 途中で切れた不完全JSON（トークンリミット等）の補完
+    if (!repaired.endsWith('}')) {
+      const openBraces = (repaired.match(/{/g) || []).length;
+      const closeBraces = (repaired.match(/}/g) || []).length;
+      const openQuotes = (repaired.match(/"/g) || []).length;
+      
+      if (openQuotes % 2 !== 0) {
+        repaired += '"';
+      }
+      for (let i = 0; i < openBraces - closeBraces; i++) {
+        repaired += '}';
+      }
+    }
 
     const parsed = JSON.parse(repaired);
     return normalizeStoryResponse(parsed);
-  } catch (e) {
-    try {
-      const parsed = extractFieldsByRegex(clean);
-      if (parsed.story && parsed.title) {
-        return normalizeStoryResponse(parsed);
-      }
-    } catch (regexErr) {
-      console.error('Regex JSON recovery failed', regexErr);
-    }
-
-    throw new Error(`ストーリーJSONのパースに失敗しました。正しいJSONフォーマットか確認してください。\n詳細: ${(e as Error).message}`);
+  } catch (repairErr) {
+    console.warn('Basic repair failed, attempting control-character & string repair...', repairErr);
   }
+
+  // 5. 文字列内部の改行エスケープ修復
+  try {
+    const repairedStrings = repairUnescapedNewlinesInJson(clean);
+    const parsed = JSON.parse(repairedStrings);
+    return normalizeStoryResponse(parsed);
+  } catch (strRepairErr) {
+    console.warn('String repair failed, falling back to regex extraction...', strRepairErr);
+  }
+
+  // 6. 正規表現によるフィールド個別抽出（最強フォールバック）
+  try {
+    const parsed = extractFieldsByRegex(clean);
+    if (parsed.story || parsed.title) {
+      return normalizeStoryResponse(parsed);
+    }
+  } catch (regexErr) {
+    console.error('Regex JSON recovery failed', regexErr);
+  }
+
+  throw new Error('ストーリーJSONのパースに失敗しました。AIの出力を解析できませんでした。');
+}
+
+/**
+ * JSON文字列リテラル内部の未エスケープ改行を安全に \n に置換
+ */
+function repairUnescapedNewlinesInJson(jsonStr: string): string {
+  let result = '';
+  let inString = false;
+  let isEscaped = false;
+
+  for (let i = 0; i < jsonStr.length; i++) {
+    const char = jsonStr[i];
+
+    if (char === '"' && !isEscaped) {
+      inString = !inString;
+      result += char;
+    } else if (inString) {
+      if (char === '\\') {
+        isEscaped = !isEscaped;
+        result += char;
+      } else {
+        if (char === '\n') {
+          result += '\\n';
+        } else if (char === '\r') {
+          result += '\\r';
+        } else if (char === '\t') {
+          result += '\\t';
+        } else {
+          result += char;
+        }
+        isEscaped = false;
+      }
+    } else {
+      result += char;
+      isEscaped = false;
+    }
+  }
+
+  return result;
 }
 
 function normalizeStoryResponse(data: any): StoryGenerationResponse {
@@ -68,8 +142,19 @@ function extractFieldsByRegex(text: string): Partial<StoryGenerationResponse> {
   const result: Partial<StoryGenerationResponse> = {};
 
   const extractString = (key: string): string => {
-    const match = text.match(new RegExp(`"${key}"\\s*:\\s*"([\\s\\S]*?)(?="\\s*,|"\\s*\\})`));
-    return match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n') : '';
+    // 柔軟なキー探索
+    const patterns = [
+      new RegExp(`"${key}"\\s*:\\s*"([\\s\\S]*?)(?="\\s*,\\s*"[a-zA-Z_]+"|"\\s*})`),
+      new RegExp(`"${key}"\\s*:\\s*"([\\s\\S]*?)$`),
+    ];
+
+    for (const pat of patterns) {
+      const match = text.match(pat);
+      if (match && match[1]) {
+        return match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+      }
+    }
+    return '';
   };
 
   result.title = extractString('title');
