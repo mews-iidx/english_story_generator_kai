@@ -271,12 +271,16 @@ export const CallView: React.FC<CallViewProps> = ({
           if (errorMsg) setErrorMessage(errorMsg);
         },
         onUserTranscript: (text) => {
+          const trimmed = text.trim();
+          if (!trimmed || trimmed.startsWith('[') || trimmed.includes('Call connected')) {
+            return;
+          }
           setCallMessages((prev) => [
             ...prev,
             {
               id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
               role: 'user',
-              text,
+              text: trimmed,
               timestamp: new Date().toISOString(),
             },
           ]);
@@ -407,7 +411,9 @@ export const CallView: React.FC<CallViewProps> = ({
 
     setConnectionState('disconnected');
 
-    let finalMessages = [...callMessages];
+    let finalMessages = callMessages.filter(
+      (m) => !m.text.trim().startsWith('[') && !m.text.includes('Call connected')
+    );
     if (currentAssistantText.trim()) {
       finalMessages.push({
         id: 'asst_' + Date.now(),
@@ -693,13 +699,15 @@ export const CallView: React.FC<CallViewProps> = ({
     const duration = callDuration;
     const topic = selectedRallyTopic;
 
-    // 瞬間ラリーのメッセージを標準CallMessageに変換
-    const convertedMessages: CallMessage[] = rallyMessages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      text: m.text,
-      timestamp: m.timestamp,
-    }));
+    // 瞬間ラリーのメッセージを標準CallMessageに変換（システム制御プロンプト等は除外）
+    const convertedMessages: CallMessage[] = rallyMessages
+      .filter((m) => !m.text.trim().startsWith('[') && !m.text.includes('Call connected'))
+      .map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.text,
+        timestamp: m.timestamp,
+      }));
 
     // 即座に得られているフィードバックから語彙とエラーを抽出
     const rallyExtractedVocabs: ExtractedCallVocab[] = [];
@@ -2788,7 +2796,9 @@ export const CallView: React.FC<CallViewProps> = ({
             </div>
 
             <div className="space-y-3 max-h-[550px] overflow-y-auto p-1">
-              {session.messages.map((msg, idx) => {
+              {session.messages
+                .filter((m) => !m.text.trim().startsWith('[') && !m.text.includes('Call connected'))
+                .map((msg, idx) => {
                 const isUser = msg.role === 'user';
 
                 return (

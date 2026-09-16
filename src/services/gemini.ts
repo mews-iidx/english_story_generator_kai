@@ -699,6 +699,7 @@ export async function analyzeCallSessionAndExtractMemory(params: {
   }
 
   const conversationText = messages
+    .filter(m => !m.text.trim().startsWith('[') && !m.text.includes('Call connected'))
     .map(m => `${m.role === 'user' ? 'User' : pName}: ${m.text}`)
     .join('\n');
 
@@ -865,6 +866,7 @@ export async function askCallReviewQuestion(params: CallReviewQuestionParams): P
   }
 
   const conversationTranscript = messages
+    .filter(m => !m.text.trim().startsWith('[') && !m.text.includes('Call connected'))
     .slice(-30) // 直近30ターン
     .map(m => `${m.role === 'user' ? 'User' : (personaName || 'AI')}: ${m.text}`)
     .join('\n');
@@ -1126,10 +1128,12 @@ export async function chatWithPersona(params: {
     });
   }
 
-  contents.push({
-    role: 'user',
-    parts: [{ text: userText }],
-  });
+  if (recentHistory.length === 0 || recentHistory[recentHistory.length - 1].role !== 'user' || recentHistory[recentHistory.length - 1].text !== userText.trim()) {
+    contents.push({
+      role: 'user',
+      parts: [{ text: userText }],
+    });
+  }
 
   const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
 
@@ -1549,18 +1553,18 @@ Return ONLY a pure JSON object:
   }
 }`;
 
-  const formattedHistory = history.slice(-6).map(h => ({
+  const recentHistory = history.slice(-6);
+  const contents: any[] = recentHistory.map(h => ({
     role: h.role === 'user' ? 'user' : 'model',
     parts: [{ text: h.text }],
   }));
 
-  const contents = [
-    ...formattedHistory,
-    {
+  if (recentHistory.length === 0 || recentHistory[recentHistory.length - 1].role !== 'user' || recentHistory[recentHistory.length - 1].text !== userText.trim()) {
+    contents.push({
       role: 'user',
       parts: [{ text: userText.trim() }],
-    },
-  ];
+    });
+  }
 
   const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
 

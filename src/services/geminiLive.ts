@@ -389,7 +389,11 @@ export class GeminiLiveSession {
 
       // 2. ユーザー音声のリアルタイム文字起こし
       if (serverContent.inputTranscription?.text) {
-        this.options.callbacks.onUserTranscript(serverContent.inputTranscription.text);
+        const text = serverContent.inputTranscription.text.trim();
+        // Kickoff指示やシステム制御プロンプトはユーザー発話として扱わない
+        if (text && !text.startsWith('[') && !text.includes('Call connected')) {
+          this.options.callbacks.onUserTranscript(text);
+        }
       }
 
       // 3. モデルの発話データ (音声 & テキスト)
