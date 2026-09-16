@@ -985,6 +985,21 @@ export function saveCallSession(session: CallSession): void {
   }
 }
 
+export function updateCallSession(sessionId: string, updater: (s: CallSession) => CallSession): CallSession | null {
+  try {
+    const sessions = loadCallSessions();
+    const targetIndex = sessions.findIndex(s => s.id === sessionId);
+    if (targetIndex === -1) return null;
+    const updated = updater(sessions[targetIndex]);
+    sessions[targetIndex] = updated;
+    localStorage.setItem(STORAGE_KEYS.CALL_SESSIONS, JSON.stringify(sessions));
+    return updated;
+  } catch (e) {
+    console.error('Failed to update call session', e);
+    return null;
+  }
+}
+
 export function deleteCallSession(sessionId: string): void {
   try {
     const sessions = loadCallSessions();

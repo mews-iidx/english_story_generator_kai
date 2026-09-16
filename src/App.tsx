@@ -55,6 +55,8 @@ import {
   updatePersonaMemory,
   loadCallSessions,
   saveCallSession,
+  updateCallSession,
+  deleteCallSession,
   loadExpressionErrors,
   saveExpressionError,
   deleteExpressionError,
@@ -752,6 +754,17 @@ export const App: React.FC = () => {
     setCallSessions(loadCallSessions());
   };
 
+  const handleUpdateCallSession = (sessionId: string, updater: (s: CallSession) => CallSession) => {
+    const updated = updateCallSession(sessionId, updater);
+    setCallSessions(loadCallSessions());
+    return updated;
+  };
+
+  const handleDeleteCallSession = (sessionId: string) => {
+    deleteCallSession(sessionId);
+    setCallSessions(loadCallSessions());
+  };
+
   // ボトムシート「AIに質問」を押した時
   const handleOpenChatWithSelection = (customText?: string) => {
     const targetText = customText || selectedText;
@@ -1065,6 +1078,8 @@ export const App: React.FC = () => {
                 onResetPersonas={handleResetPersonas}
                 onUpdatePersonaMemory={handleUpdatePersonaMemory}
                 onSaveCallSession={handleSaveCallSession}
+                onUpdateCallSession={handleUpdateCallSession}
+                onDeleteCallSession={handleDeleteCallSession}
                 onAddToVocab={handleAddToVocab}
                 onSaveSentenceCard={handleSaveSentenceCard}
                 onSaveExpressionError={handleSaveExpressionError}

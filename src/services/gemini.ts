@@ -671,9 +671,10 @@ export interface CallAnalysisResult {
 }
 
 /**
- * 通話セッション終了時に、会話ログから
+ * 通話・チャット・ラリーセッション終了時に、会話ログから
  * 1. 相手ペルソナが記憶すべきユーザー情報・話題要約
- * 2. ユーザーが犯した「偽英語・不自然な表現・文法ミス」と「その本質構文パターン」
+ * 2. 会話中に出てきた重要・実用的な英語フレーズやコロケーション（武器化語彙）
+ * 3. ユーザーが犯した「偽英語・不自然な表現・文法ミス」と「その本質構文パターン」
  * をGeminiで一括解析・抽出する
  */
 export async function analyzeCallSessionAndExtractMemory(params: {
@@ -684,11 +685,17 @@ export async function analyzeCallSessionAndExtractMemory(params: {
   messages: CallMessage[];
   extractedVocabs?: ExtractedCallVocab[];
 }): Promise<CallAnalysisResult> {
-  const { apiKey, model = 'gemini-3.7-flash', persona, personaName = 'AI Partner', messages, extractedVocabs } = params;
+  const { apiKey, model = 'gemini-3.7-flash', persona, personaName = 'AI Partner', messages, extractedVocabs = [] } = params;
   const pName = persona?.name || personaName;
 
   if (!apiKey || messages.length < 2) {
-    return { newLikes: [], newDislikes: [] };
+    return { 
+      newLikes: [], 
+      newDislikes: [],
+      recapSummary: '会話が短時間で終了したため、サマリーはありません。',
+      extractedVocabs: extractedVocabs || [],
+      detectedErrors: []
+    };
   }
 
   const conversationText = messages
@@ -696,7 +703,7 @@ export async function analyzeCallSessionAndExtractMemory(params: {
     .join('\n');
 
   const prompt = `あなたは卓越した言語交換AIエージェントおよび英語指導のプロです。
-以下の「ユーザーとネイティブキャラクター(${pName})の英会話通話ログ」を分析し、2つのタスクを行ってください。
+以下の「ユーザーとネイティブキャラクター(${pName})の英会話ログ」を分析し、3つのタスクを行ってください。
 
 【会話ログ】
 ${conversationText}
@@ -705,9 +712,13 @@ ${conversationText}
 【タスク1: ペルソナの記憶更新 (Memory Update)】
 会話を通じて${pName}が新たに知ったユーザーの好み(likes)、苦手なもの(dislikes)、ユーザーに関する重要メモ(userNotes)、および今回の会話トピックの1文要約(topicSummary)を抽出してください。新規情報がない項目は空配列にしてください。
 
-【タスク2: 発話カルテ・文法語法パターンの抽出 (Expression Error Analysis)】
+【タスク2: 武器化フレーズ・重要表現の抽出 (Useful Vocabulary / Collocations)】
+会話の中から、ユーザーが今後自分の英語力として「武器化（Anki登録して使えるように）」すべき、実用的な表現・イディオム・コロケーションを2〜4個抽出してください。
+（日本語の意味、会話内での使われ方文、ニュアンス・使い所メモを添えてください）
+
+【タスク3: 発話カルテ・文法語法パターンの抽出 (Expression Error Analysis)】
 ユーザーの発言の中に、不自然な英語、文法ミス、和製英語、意図が伝わりにくい表現があれば最大3個まで抽出してください。
-特に重要なのは「corePattern（本質の構文・語法パターン）」です。単なる単語のミスではなく、「too ~ to ...」「prevent A from -ing」「look forward to -ing」「I wish I had ...」などの文法・語法の抽象的な型を抽出してください。
+特に重要なのは「corePattern（本質の構文・語法パターン）」です。単なる単語のミスではなく、「too ~ to ...」「prevent A from -ing」「look forward to -ing」「I wish I had ...」「動詞強調時のreally/love to」などの文法・語法の抽象的な型を抽出してください。
 
 以下のJSONフォーマットのみを出力してください:
 {
@@ -717,11 +728,20 @@ ${conversationText}
     "userNotes": ["ユーザーの職業、家族、計画など記憶すべき事実"],
     "topicSummary": "今回の会話の簡潔なまとめ（日本語1文）"
   },
+  "extractedVocabs": [
+    {
+      "phrase": "実用的な英語フレーズ・単語",
+      "meaning": "日本語の意味",
+      "contextSentence": "会話中での使われ方・例文",
+      "nuanceNote": "ネイティブのニュアンスや使われる場面"
+    }
+  ],
   "detectedErrors": [
     {
       "mistake": "ユーザーが実際に言った不自然な文・間違い",
       "corrected": "ネイティブならこう言う自然な表現",
       "corePattern": "抽象化された文法・語法パターン（例: look forward to + ~ing）",
+      "suggestedCause": "vocabulary | syntax_order | direct_translation | tense_modals | preposition_colloc | other",
       "explanation": "なぜ不自然なのか、どう使い分けるのかの簡潔な日本語解説（1〜2文）"
     }
   ]
@@ -757,9 +777,31 @@ ${conversationText}
           userUtterance: e.userUtterance || e.mistake || '',
           naturalExpression: e.naturalExpression || e.corrected || '',
           corePattern: e.corePattern || '',
-          suggestedCause: e.suggestedCause || e.causeCategory || 'grammar',
+          suggestedCause: e.suggestedCause || e.causeCategory || 'syntax_order',
           explanation: e.explanation || '',
         }));
+
+        const vocabs: ExtractedCallVocab[] = [
+          ...(extractedVocabs || []),
+          ...((parsed.extractedVocabs || []).map((v: any) => ({
+            phrase: v.phrase || '',
+            meaning: v.meaning || '',
+            contextSentence: v.contextSentence || '',
+            nuanceNote: v.nuanceNote || '',
+          }))),
+        ];
+
+        // 重複除去
+        const uniqueVocabs: ExtractedCallVocab[] = [];
+        const seenPhrases = new Set<string>();
+        for (const v of vocabs) {
+          if (!v.phrase) continue;
+          const key = v.phrase.trim().toLowerCase();
+          if (!seenPhrases.has(key)) {
+            seenPhrases.add(key);
+            uniqueVocabs.push(v);
+          }
+        }
 
         return {
           newLikes: mem.likes || mem.newLikes || [],
@@ -768,7 +810,7 @@ ${conversationText}
           newUserNotes: mem.userNotes || mem.newUserNotes || [],
           newPromises: mem.promises || mem.newPromises || [],
           recapSummary: mem.topicSummary || mem.recapSummary || '',
-          extractedVocabs: extractedVocabs || [],
+          extractedVocabs: uniqueVocabs,
           detectedErrors: errors,
           tokenUsage: {
             promptTokens: usage?.promptTokenCount || 0,
@@ -781,13 +823,153 @@ ${conversationText}
     }
   }
 
-  return { newLikes: [], newDislikes: [] };
+  return { 
+    newLikes: [], 
+    newDislikes: [],
+    recapSummary: '会話が完了しました。',
+    extractedVocabs: extractedVocabs || [],
+    detectedErrors: []
+  };
+}
+
+export interface CallReviewQuestionParams {
+  apiKey: string;
+  model?: string;
+  sessionTitle?: string;
+  personaName?: string;
+  messages: CallMessage[];
+  recapSummary?: string;
+  detectedErrors?: DetectedExpressionError[];
+  userQuestion: string;
+  history?: CallMessage[]; // 振り返りセッション内での過去のQ&Aやり取り
+}
+
+export interface CallReviewQuestionResult {
+  replyText: string;
+  suggestedVocab?: ExtractedCallVocab[];
+  tokenUsage?: {
+    promptTokens: number;
+    candidatesTokens: number;
+  };
 }
 
 /**
- * ユーザーの希望（「カフェの店員」「同年代のオーストラリア人サーファー」等）から
- * 完全なペルソナプロフィールを自動生成する
+ * 振り返り画面で、ユーザーが会話セッションの内容について
+ * AIコーチに質問・深掘り・アドバイスを求めるインタラクティブチャット
  */
+export async function askCallReviewQuestion(params: CallReviewQuestionParams): Promise<CallReviewQuestionResult> {
+  const { apiKey, model = 'gemini-3.7-flash', sessionTitle, personaName, messages, recapSummary, detectedErrors, userQuestion, history = [] } = params;
+
+  if (!apiKey || !userQuestion.trim()) {
+    return { replyText: 'APIキーまたは質問が入力されていません。' };
+  }
+
+  const conversationTranscript = messages
+    .slice(-30) // 直近30ターン
+    .map(m => `${m.role === 'user' ? 'User' : (personaName || 'AI')}: ${m.text}`)
+    .join('\n');
+
+  const historyTranscript = history
+    .slice(-6)
+    .map(m => `${m.role === 'user' ? 'User' : 'Coach'}: ${m.text}`)
+    .join('\n');
+
+  const errorsText = (detectedErrors && detectedErrors.length > 0)
+    ? detectedErrors.map(e => `- 発話: "${e.userUtterance}" -> 自然: "${e.naturalExpression}" (型: ${e.corePattern})`).join('\n')
+    : '特記事項なし';
+
+  const prompt = `あなたは英語学習者の専属パーソナル英語コーチ（バイリンガル・英語指導の最高峰プロフェッショナル）です。
+ユーザーは先ほど行われた英会話セッションの振り返りを行っており、そのセッションの内容や表現に関してあなたに質問をしています。
+
+【セッション概要】
+タイトル: ${sessionTitle || '英会話セッション'}
+相手キャラクター: ${personaName || 'AI Partner'}
+要約: ${recapSummary || 'なし'}
+
+【対話ログ抜粋】
+${conversationTranscript}
+
+【検出された発話ミス・添削】
+${errorsText}
+
+${historyTranscript ? `【これまでのQ&A履歴】\n${historyTranscript}\n` : ''}
+
+【ユーザーからの新しい質問】
+"${userQuestion}"
+
+---
+【指示】
+1. ユーザーの質問に対して、親身・論理的・実践的かつ分かりやすい日本語で丁寧に解説してください。
+2. なぜネイティブはそのように表現するのか、語感やニュアンスの違い、状況別の使い分け（カジュアル vs フォーマル）を明快に教えてください。
+3. すぐに使える例文やフレーズを提示してください。
+4. Markdown形式で見やすく整形してください（箇条書き、太字、コード装飾など）。
+5. 回答の最後で、今回の解説から特に身につけておくべき重要な英単語・フレーズがあれば、JSONブロックとして末尾に付与してください。
+フォーマット:
+\`\`\`suggested_vocabs
+[
+  {
+    "phrase": "英語フレーズ",
+    "meaning": "日本語の意味",
+    "contextSentence": "例文",
+    "nuanceNote": "使い方のポイント"
+  }
+]
+\`\`\`
+（推奨語彙がない場合は suggested_vocabs ブロックは不要です）`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.4,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const usage = data?.usageMetadata;
+
+        let replyText = rawText;
+        let suggestedVocab: ExtractedCallVocab[] = [];
+
+        const vocabBlockMatch = rawText.match(/```suggested_vocabs\s*([\s\S]*?)\s*```/);
+        if (vocabBlockMatch) {
+          try {
+            suggestedVocab = JSON.parse(vocabBlockMatch[1]);
+            replyText = rawText.replace(/```suggested_vocabs\s*[\s\S]*?\s*```/, '').trim();
+          } catch (e) {
+            console.warn('Failed to parse suggested_vocabs block', e);
+          }
+        }
+
+        return {
+          replyText,
+          suggestedVocab,
+          tokenUsage: {
+            promptTokens: usage?.promptTokenCount || 0,
+            candidatesTokens: usage?.candidatesTokenCount || 0,
+          },
+        };
+      }
+    } catch (e) {
+      console.warn('Review Q&A error with model ' + currentModel, e);
+    }
+  }
+
+  return {
+    replyText: 'AIコーチからの回答取得に失敗しました。少し時間をおいて再試行してください。',
+  };
+}
+
 export async function generateCustomPersona(params: {
   apiKey: string;
   model?: string;

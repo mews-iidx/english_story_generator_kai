@@ -1,3 +1,5 @@
+import { ErrorCauseCategory } from './expressionError';
+
 export interface PersonaMemory {
   likes: string[];              // 好きなもの・趣味
   dislikes: string[];           // 嫌い・苦手なもの
@@ -44,11 +46,37 @@ export interface ExtractedCallVocab {
   nuanceNote?: string;
 }
 
+export interface DetectedCallError {
+  userUtterance: string;
+  naturalExpression: string;
+  corePattern: string;
+  explanation: string;
+  suggestedCause?: ErrorCauseCategory;
+}
+
+export interface CallSessionReviewAnalysis {
+  status: 'pending' | 'analyzing' | 'ready' | 'failed';
+  recapSummary?: string;
+  extractedVocabs?: ExtractedCallVocab[];
+  detectedErrors?: DetectedCallError[];
+  newLikes?: string[];
+  newDislikes?: string[];
+  newTopic?: string;
+  newUserNotes?: string[];
+  newPromises?: string[];
+  errorMessage?: string;
+  analyzedAt?: string;
+  qaMessages?: CallMessage[]; // 振り返り画面でのユーザーとAIコーチのQ&Aチャット履歴
+}
+
 export interface CallSession {
   id: string;
   personaId?: string;           // undefined の場合はフリー会話
   personaName?: string;
-  sessionType?: 'voice' | 'chat'; // 'voice' (音声通話) または 'chat' (テキストチャット)
+  personaEmoji?: string;
+  sessionType?: 'voice' | 'chat' | 'rally'; // 'voice' (音声通話), 'chat' (テキストチャット), 'rally' (瞬間ラリー)
+  topic?: string;               // ラリーや会話のトピック
+  title?: string;               // 表示用タイトル
   startedAt: string;
   endedAt?: string;
   durationSeconds: number;
@@ -56,4 +84,6 @@ export interface CallSession {
   extractedVocabs: ExtractedCallVocab[];
   recapSummary?: string;
   newLearnedFacts?: string[];   // ペルソナについて新しく判明した事実
+  reviewAnalysis?: CallSessionReviewAnalysis;
+  isReviewed?: boolean;         // ユーザーが振り返り・武器化完了したか
 }

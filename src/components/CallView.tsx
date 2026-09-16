@@ -1,14 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Persona, CallSession, CallMessage } from '../types/persona';
+import {
+  Persona,
+  CallSession,
+  CallMessage,
+  ExtractedCallVocab,
+  DetectedCallError,
+} from '../types/persona';
 import { GeminiLiveSession, CallConnectionState } from '../services/geminiLive';
 import {
   analyzeCallSessionAndExtractMemory,
   generateCustomPersona,
   chatWithPersona,
-  DetectedExpressionError,
   chatWithRallyPartner,
   RallyPartnerFeedback,
   RallySuggestionChip,
+  askCallReviewQuestion,
 } from '../services/gemini';
 import { ErrorCauseCategory } from '../types/expressionError';
 import { speakText } from '../utils/speech';
@@ -18,7 +24,8 @@ import {
   deleteRallyTopic,
   DEFAULT_RALLY_TOPICS,
   SaveSentenceCardParams,
-  saveSentenceCardWithSiblings,
+  updateCallSession,
+  deleteCallSession,
 } from '../services/storage';
 import { playCorrectSound } from '../utils/audio';
 import { enqueueMasteryScanTask } from '../services/cefrScanner';
@@ -31,24 +38,24 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
-  AlertCircle,
   RefreshCw,
   X,
   Languages,
   BookMarked,
   Smile,
-  Globe,
-  Radio,
   MessageSquare,
   Send,
   Volume2,
   ArrowLeft,
-  User,
   Zap,
   Swords,
   Check,
   Flame,
   Bookmark,
+  ShieldCheck,
+  HelpCircle,
+  ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 
 interface CallViewProps {
@@ -58,7 +65,7 @@ interface CallViewProps {
   callSessions: CallSession[];
   onSavePersona: (persona: Persona) => void;
   onDeletePersona: (personaId: string) => void;
-  onResetPersonas: () => void;
+  onResetPersonas?: () => void;
   onUpdatePersonaMemory: (
     personaId: string,
     memoryUpdates: {
@@ -71,6 +78,8 @@ interface CallViewProps {
     lastSpokenAt?: string
   ) => void;
   onSaveCallSession: (session: CallSession) => void;
+  onUpdateCallSession?: (sessionId: string, updater: (s: CallSession) => CallSession) => CallSession | null;
+  onDeleteCallSession?: (sessionId: string) => void;
   onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
   onSaveSentenceCard?: (params: SaveSentenceCardParams) => void;
   onSaveExpressionError?: (item: any) => any;
@@ -78,7 +87,6 @@ interface CallViewProps {
   savedVocabPhrases: Set<string>;
   onCallStateChange?: (isActive: boolean) => void;
 }
-
 
 interface RallyChatMessage {
   id: string;
@@ -93,23 +101,25 @@ interface RallyChatMessage {
 }
 
 export const CallView: React.FC<CallViewProps> = ({
-  onSaveSentenceCard,
   apiKey,
   model = 'gemini-2.0-flash',
   personas,
+  callSessions,
   onSavePersona,
   onDeletePersona,
   onResetPersonas,
   onUpdatePersonaMemory,
   onSaveCallSession,
+  onUpdateCallSession,
+  onDeleteCallSession,
   onAddToVocab,
   onSaveExpressionError,
   onRecordTokenUsage,
   savedVocabPhrases,
   onCallStateChange,
 }) => {
-  // 画面モード: lobby (一覧) | call (音声通話中) | chat (テキストチャット中) | rally_chat (ラリー特訓中) | summary (通話後サマリー) | rally_summary (ラリー後サマリー)
-  const [viewState, setViewState] = useState<'lobby' | 'call' | 'chat' | 'rally_chat' | 'summary' | 'rally_summary'>('lobby');
+  // 画面モード: lobby (一覧) | call (音声通話中) | chat (テキストチャット中) | rally_chat (ラリー特訓中) | review (振り返り・Q&Aスタジオ)
+  const [viewState, setViewState] = useState<'lobby' | 'call' | 'chat' | 'rally_chat' | 'review'>('lobby');
   const [activeTab, setActiveTab] = useState<'rally' | 'friend'>('rally');
 
   // 瞬間ラリー特訓 State
@@ -121,8 +131,7 @@ export const CallView: React.FC<CallViewProps> = ({
   const [currentSuggestionChips, setCurrentSuggestionChips] = useState<RallySuggestionChip[]>([]);
   const [isRallyLoading, setIsRallyLoading] = useState(false);
   const [equippedFeedbackIds, setEquippedFeedbackIds] = useState<Set<string>>(new Set());
-  const [translatedMessageIds, setTranslatedMessageIds] = useState<Set<string>>(new Set());
-  const [activePersona, setActivePersona] = useState<Persona | null>(null); // null の場合はフリー会話
+  const [activePersona, setActivePersona] = useState<Persona | null>(null);
 
   // 通話状態
   const [connectionState, setConnectionState] = useState<CallConnectionState>('idle');
@@ -146,23 +155,39 @@ export const CallView: React.FC<CallViewProps> = ({
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [isSpeakingMessageId, setIsSpeakingMessageId] = useState<string | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
-
-  // 通話後分析状態
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [latestSummarySession, setLatestSummarySession] = useState<CallSession | null>(null);
-  const [detectedErrors, setDetectedErrors] = useState<DetectedExpressionError[]>([]);
-  const [savedErrorIndices, setSavedErrorIndices] = useState<Set<number>>(new Set());
-  const [currentSessionType, setCurrentSessionType] = useState<'voice' | 'chat'>('voice');
+  const reviewQaEndRef = useRef<HTMLDivElement | null>(null);
 
   // 新規パートナー作成モーダル
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [customPrompt, setCustomPrompt] = useState('');
   const [isCreatingPersona, setIsCreatingPersona] = useState(false);
 
+  // ===================== 振り返り・武器化キュー State =====================
+  const [selectedReviewSessionId, setSelectedReviewSessionId] = useState<string | null>(null);
+  const [reviewTab, setReviewTab] = useState<'arsenal' | 'qa' | 'transcript'>('arsenal');
+  const [reviewQueueFilter, setReviewQueueFilter] = useState<'pending' | 'all'>('pending');
+  const [reviewQaInput, setReviewQaInput] = useState('');
+  const [isAskingReviewQa, setIsAskingReviewQa] = useState(false);
+  const [savedErrorKeys, setSavedErrorKeys] = useState<Set<string>>(new Set());
+  const [toastMessage, setToastMessage] = useState<{ text: string; type?: 'info' | 'success' } | null>(null);
+
+  // カスタム単語追加フォーム (振り返り画面内)
+  const [isAddingCustomVocab, setIsAddingCustomVocab] = useState(false);
+  const [customVocabForm, setCustomVocabForm] = useState({ phrase: '', meaning: '', context: '', note: '' });
+
+  const [currentSessionType, setCurrentSessionType] = useState<'voice' | 'chat'>('voice');
+
   const liveSessionRef = useRef<GeminiLiveSession | null>(null);
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
 
+  // 通知トースト表示ヘルパー
+  const showToast = (text: string, type: 'info' | 'success' = 'info') => {
+    setToastMessage({ text, type });
+    setTimeout(() => {
+      setToastMessage(prev => (prev?.text === text ? null : prev));
+    }, 5000);
+  };
 
   // 初回ロード: トピック一覧をlocalStorageから取得
   useEffect(() => {
@@ -204,7 +229,18 @@ export const CallView: React.FC<CallViewProps> = ({
     }
   }, [callMessages, isSendingChat, viewState]);
 
-  // 音声通話開始ハンドラー
+  // 振り返りQ&Aスクロール
+  useEffect(() => {
+    if (viewState === 'review' && reviewTab === 'qa') {
+      reviewQaEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [viewState, reviewTab, isAskingReviewQa]);
+
+  // 現在選択されている振り返りセッション
+  const activeReviewSession = callSessions.find(s => s.id === selectedReviewSessionId) || null;
+
+  // ===================== 音声通話・チャット開始 =====================
+
   const handleStartCall = async (persona?: Persona | null, isRallyMode: boolean = false, customRallyTopic?: string) => {
     if (!apiKey) {
       alert('Gemini APIキーを設定してください（設定画面から登録可能です）');
@@ -230,9 +266,9 @@ export const CallView: React.FC<CallViewProps> = ({
       isRallyMode,
       customTopic: customRallyTopic || (isRallyMode ? selectedRallyTopic : undefined),
       callbacks: {
-        onStateChange: (state, error) => {
+        onStateChange: (state, errorMsg) => {
           setConnectionState(state);
-          if (error) setErrorMessage(error);
+          if (errorMsg) setErrorMessage(errorMsg);
         },
         onUserTranscript: (text) => {
           setCallMessages((prev) => [
@@ -264,9 +300,9 @@ export const CallView: React.FC<CallViewProps> = ({
             return '';
           });
         },
-        onVolumeChange: (uVol, aVol) => {
-          setUserVolume(uVol);
-          setAssistantVolume(aVol);
+        onVolumeChange: (userVol: number, asstVol: number) => {
+          setUserVolume(userVol);
+          setAssistantVolume(asstVol);
         },
         onInterrupted: () => {
           setCurrentAssistantText('');
@@ -278,7 +314,6 @@ export const CallView: React.FC<CallViewProps> = ({
     await session.start();
   };
 
-  // テキストチャット開始ハンドラー
   const handleStartChat = (persona?: Persona | null) => {
     if (!apiKey) {
       alert('Gemini APIキーを設定してください（設定画面から登録可能です）');
@@ -293,7 +328,6 @@ export const CallView: React.FC<CallViewProps> = ({
     setCallDuration(0);
     startTimeRef.current = Date.now();
 
-    // 初回挨拶メッセージの追加
     const greetingText = selectedPersona
       ? `Hi there! I'm ${selectedPersona.name}. How's everything going with you today?`
       : `Hey! I'm your AI language exchange partner. What would you like to chat about today?`;
@@ -308,7 +342,6 @@ export const CallView: React.FC<CallViewProps> = ({
     ]);
   };
 
-  // チャットメッセージ送信
   const handleSendChatMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim() || isSendingChat || !apiKey) return;
@@ -347,10 +380,10 @@ export const CallView: React.FC<CallViewProps> = ({
         timestamp: new Date().toISOString(),
       };
 
-      setCallMessages(prev => [...prev, assistantMsg]);
+      setCallMessages((prev) => [...prev, assistantMsg]);
     } catch (err: any) {
       console.error('Chat error:', err);
-      setCallMessages(prev => [
+      setCallMessages((prev) => [
         ...prev,
         {
           id: 'asst_err_' + Date.now(),
@@ -364,8 +397,9 @@ export const CallView: React.FC<CallViewProps> = ({
     }
   };
 
-  // 会話セッション終了ハンドラー（音声・チャット共通）
-  const handleEndSession = async () => {
+  // ===================== セッション終了 ＆ バックグラウンド振り返りキューイング =====================
+
+  const handleEndSession = () => {
     if (liveSessionRef.current) {
       liveSessionRef.current.disconnect();
       liveSessionRef.current = null;
@@ -373,7 +407,6 @@ export const CallView: React.FC<CallViewProps> = ({
 
     setConnectionState('disconnected');
 
-    // 直近のアシスタント発話が残っていればメッセージに追加
     let finalMessages = [...callMessages];
     if (currentAssistantText.trim()) {
       finalMessages.push({
@@ -395,8 +428,8 @@ export const CallView: React.FC<CallViewProps> = ({
 
     // 会話セッションのログをスキャンキューへ投入 (理解＆組立同期)
     try {
-      const allText = finalMessages.map(m => m.text).join(' ');
-      const userUtterances = finalMessages.filter(m => m.role === 'user').map(m => m.text);
+      const allText = finalMessages.map((m) => m.text).join(' ');
+      const userUtterances = finalMessages.filter((m) => m.role === 'user').map((m) => m.text);
 
       enqueueMasteryScanTask({
         sourceType: 'call',
@@ -408,145 +441,117 @@ export const CallView: React.FC<CallViewProps> = ({
       console.error('Failed to enqueue call session scan task', e);
     }
 
-    // 分析サマリー画面へ移行
-    setViewState('summary');
-    setIsAnalyzing(true);
+    const sessionId = 'session_' + Date.now();
+    const sessionTitle = persona ? `👫 ${persona.name} との英会話` : '🎙️ フリー英会話セッション';
 
-    try {
-      const analysis = await analyzeCallSessionAndExtractMemory({
-        messages: finalMessages,
-        personaName: persona?.name || 'AI Partner',
-        apiKey,
-        model,
-      });
+    // 初期セッションレコードを即時保存 (ステータス: analyzing)
+    const initialSession: CallSession = {
+      id: sessionId,
+      personaId: persona?.id,
+      personaName: persona?.name || 'フリー会話',
+      personaEmoji: persona?.avatarEmoji || '🎙️',
+      sessionType,
+      title: sessionTitle,
+      startedAt: new Date(Date.now() - duration * 1000).toISOString(),
+      endedAt: new Date().toISOString(),
+      durationSeconds: duration,
+      messages: finalMessages,
+      extractedVocabs: [],
+      recapSummary: 'AIがバックグラウンドで会話を分析中です...',
+      isReviewed: false,
+      reviewAnalysis: {
+        status: 'analyzing',
+        qaMessages: [],
+      },
+    };
 
-      if (analysis.tokenUsage && onRecordTokenUsage) {
-        onRecordTokenUsage(analysis.tokenUsage.promptTokens, analysis.tokenUsage.candidatesTokens);
-      }
+    onSaveCallSession(initialSession);
 
-      // ペルソナの動的記憶を更新（音声・チャット両方の会話内容が蓄積される）
-      if (persona) {
-        onUpdatePersonaMemory(
-          persona.id,
-          {
+    // ノンブロッキング: 即座にロビーへ戻り、ナビゲーションを解放
+    setViewState('lobby');
+    showToast(`📝 『${sessionTitle}』を振り返りキューに追加しました（バックグラウンド分析中）`, 'info');
+
+    // バックグラウンドでAI分析を実行
+    (async () => {
+      try {
+        const analysis = await analyzeCallSessionAndExtractMemory({
+          messages: finalMessages,
+          personaName: persona?.name || 'AI Partner',
+          persona: persona || undefined,
+          apiKey,
+          model,
+        });
+
+        if (analysis.tokenUsage && onRecordTokenUsage) {
+          onRecordTokenUsage(analysis.tokenUsage.promptTokens, analysis.tokenUsage.candidatesTokens);
+        }
+
+        // ペルソナの動的記憶を更新
+        if (persona) {
+          onUpdatePersonaMemory(
+            persona.id,
+            {
+              newLikes: analysis.newLikes,
+              newDislikes: analysis.newDislikes,
+              newTopic: analysis.newTopic
+                ? { topic: analysis.newTopic, summary: analysis.recapSummary || analysis.newTopic }
+                : undefined,
+              newUserNotes: analysis.newUserNotes,
+              newPromises: analysis.newPromises,
+            },
+            new Date().toISOString()
+          );
+        }
+
+        const updater = (s: CallSession): CallSession => ({
+          ...s,
+          extractedVocabs: analysis.extractedVocabs || [],
+          recapSummary: analysis.recapSummary,
+          newLearnedFacts: [
+            ...(analysis.newLikes || []).map((l) => `好きなもの: ${l}`),
+            ...(analysis.newDislikes || []).map((d) => `苦手なもの: ${d}`),
+            ...(analysis.newPromises || []),
+          ],
+          reviewAnalysis: {
+            status: 'ready',
+            recapSummary: analysis.recapSummary,
+            extractedVocabs: analysis.extractedVocabs || [],
+            detectedErrors: (analysis.detectedErrors as any) || [],
             newLikes: analysis.newLikes,
             newDislikes: analysis.newDislikes,
-            newTopic: analysis.newTopic ? { topic: analysis.newTopic, summary: analysis.recapSummary || analysis.newTopic } : undefined,
+            newTopic: analysis.newTopic,
             newUserNotes: analysis.newUserNotes,
             newPromises: analysis.newPromises,
+            analyzedAt: new Date().toISOString(),
+            qaMessages: s.reviewAnalysis?.qaMessages || [],
           },
-          new Date().toISOString()
-        );
+        });
+
+        if (onUpdateCallSession) {
+          onUpdateCallSession(sessionId, updater);
+        } else {
+          updateCallSession(sessionId, updater);
+        }
+
+        showToast(`🎉 『${sessionTitle}』の振り返り・武器化準備が完了しました！いつでも呼び出せます。`, 'success');
+      } catch (err: any) {
+        console.error('Background session analysis error:', err);
+        const failUpdater = (s: CallSession): CallSession => ({
+          ...s,
+          reviewAnalysis: {
+            status: 'failed',
+            errorMessage: err.message || '分析に失敗しました',
+            qaMessages: s.reviewAnalysis?.qaMessages || [],
+          },
+        });
+        if (onUpdateCallSession) {
+          onUpdateCallSession(sessionId, failUpdater);
+        } else {
+          updateCallSession(sessionId, failUpdater);
+        }
       }
-
-      const sessionRecord: CallSession = {
-        id: 'session_' + Date.now(),
-        personaId: persona?.id,
-        personaName: persona?.name || 'フリー会話',
-        sessionType,
-        startedAt: new Date(Date.now() - duration * 1000).toISOString(),
-        endedAt: new Date().toISOString(),
-        durationSeconds: duration,
-        messages: finalMessages,
-        extractedVocabs: analysis.extractedVocabs || [],
-        recapSummary: analysis.recapSummary,
-        newLearnedFacts: [
-          ...analysis.newLikes.map((l) => `好きなもの: ${l}`),
-          ...analysis.newDislikes.map((d) => `苦手なもの: ${d}`),
-          ...(analysis.newPromises || []),
-        ],
-      };
-
-      setDetectedErrors(analysis.detectedErrors || []);
-      setSavedErrorIndices(new Set());
-      onSaveCallSession(sessionRecord);
-      setLatestSummarySession(sessionRecord);
-    } catch (e) {
-      console.error('Failed to analyze session:', e);
-      const fallbackSession: CallSession = {
-        id: 'session_' + Date.now(),
-        personaId: persona?.id,
-        personaName: persona?.name || 'フリー会話',
-        sessionType,
-        startedAt: new Date(Date.now() - duration * 1000).toISOString(),
-        endedAt: new Date().toISOString(),
-        durationSeconds: duration,
-        messages: finalMessages,
-        extractedVocabs: [],
-        recapSummary: '英会話セッションが完了しました。',
-      };
-      onSaveCallSession(fallbackSession);
-      setLatestSummarySession(fallbackSession);
-    } finally {
-      setIsAnalyzing(false);
-    }
+    })();
   };
-
-  // Push-to-Talk トグル
-  const handleTogglePushToTalkMode = () => {
-    const next = !isPushToTalk;
-    setIsPushToTalk(next);
-    if (liveSessionRef.current) {
-      liveSessionRef.current.setPushToTalkMode(next);
-    }
-  };
-
-  // Push-to-Talk 押下・離脱
-  const handlePushToTalkStart = () => {
-    setIsPushToTalkActive(true);
-    if (liveSessionRef.current) {
-      liveSessionRef.current.setPushToTalkActive(true);
-    }
-  };
-
-  const handlePushToTalkEnd = () => {
-    setIsPushToTalkActive(false);
-    if (liveSessionRef.current) {
-      liveSessionRef.current.setPushToTalkActive(false);
-    }
-  };
-
-  // マイクミュートトグル
-  const handleToggleMute = () => {
-    const next = !isMuted;
-    setIsMuted(next);
-    if (liveSessionRef.current) {
-      liveSessionRef.current.setMuted(next);
-    }
-  };
-
-  // 新規パートナー生成
-  const handleCreateCustomPersona = async () => {
-    if (!customPrompt.trim() || !apiKey) return;
-    setIsCreatingPersona(true);
-    try {
-      const { persona, tokenUsage } = await generateCustomPersona({
-        apiKey,
-        userPrompt: customPrompt,
-        model,
-      });
-
-      if (tokenUsage && onRecordTokenUsage) {
-        onRecordTokenUsage(tokenUsage.promptTokens, tokenUsage.candidatesTokens);
-      }
-
-      onSavePersona(persona);
-      setIsCreateModalOpen(false);
-      setCustomPrompt('');
-    } catch (err: any) {
-      alert('パートナーの生成に失敗しました: ' + (err.message || 'エラーが発生しました'));
-    } finally {
-      setIsCreatingPersona(false);
-    }
-  };
-
-  // 時間フォーマット
-  const formatDuration = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
-
 
   // ===================== 瞬間ラリー特訓 ハンドラー =====================
 
@@ -617,7 +622,7 @@ export const CallView: React.FC<CallViewProps> = ({
           nextQuestionJa: '今日のこのトピックについて、何を話したいですか？',
           suggestionChips: [
             { text: "I'd like to start with...", labelJa: '〜から始めたい' },
-            { text: "Actually, I have a quick question about...", labelJa: '〜について質問がある' },
+            { text: 'Actually, I have a quick question about...', labelJa: '〜について質問がある' },
             { text: "Let's dive right into it!", labelJa: '早速始めよう！' },
           ],
           timestamp: new Date().toISOString(),
@@ -678,100 +683,614 @@ export const CallView: React.FC<CallViewProps> = ({
       setRallyMessages((prev) => [...prev, assistantMsg]);
       setCurrentSuggestionChips(result.suggestionChips || []);
     } catch (err) {
-      console.error('Rally response error:', err);
-      setRallyMessages((prev) => [
-        ...prev,
-        {
-          id: 'rally_err_' + Date.now(),
-          role: 'assistant',
-          text: 'Got it! Could you tell me a little more about that?',
-          reaction: 'Got it!',
-          nextQuestion: 'Could you tell me a little more about that?',
-          nextQuestionJa: 'それについてもう少し詳しく教えてもらえますか？',
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      console.error('Failed to reply rally:', err);
     } finally {
       setIsRallyLoading(false);
     }
   };
 
-  const handleEquipWeapon = (feedback: RallyPartnerFeedback, feedbackId: string) => {
-    const targetSentence = feedback.naturalExpression || feedback.grammarFix;
-    const isJapaneseInput = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]/.test(
-      feedback.userOriginalText
-    );
-    const translationText = isJapaneseInput
-      ? feedback.userOriginalText
-      : feedback.explanation || feedback.grammarFix;
-
-    const params: SaveSentenceCardParams = {
-      sentence: targetSentence,
-      translation: translationText,
-      focusType: 'sentence',
-      importance: 5,
-    };
-
-    if (onSaveSentenceCard) {
-      onSaveSentenceCard(params);
-    } else {
-      saveSentenceCardWithSiblings(params);
-    }
-
-    onAddToVocab(
-      targetSentence,
-      translationText,
-      targetSentence,
-      `🎙️ 実践マイフレーズ (瞬間ラリー: ${selectedRallyTopic})`
-    );
-
-    // チャイム音再生
-    playCorrectSound();
-
-    setEquippedFeedbackIds((prev) => new Set([...prev, feedbackId]));
-  };
-
-  const handleToggleTranslation = (msgId: string) => {
-    setTranslatedMessageIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(msgId)) next.delete(msgId);
-      else next.add(msgId);
-      return next;
-    });
-  };
-
   const handleEndRally = () => {
-    // 瞬間ラリーの会話ログをスキャンキューへ投入 (理解＆組立同期)
+    const duration = callDuration;
+    const topic = selectedRallyTopic;
+
+    // 瞬間ラリーのメッセージを標準CallMessageに変換
+    const convertedMessages: CallMessage[] = rallyMessages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      text: m.text,
+      timestamp: m.timestamp,
+    }));
+
+    // 即座に得られているフィードバックから語彙とエラーを抽出
+    const rallyExtractedVocabs: ExtractedCallVocab[] = [];
+    const rallyDetectedErrors: DetectedCallError[] = [];
+
+    rallyMessages.forEach((m) => {
+      if (m.feedback && m.feedback.hasCorrection) {
+        if (m.feedback.naturalExpression) {
+          rallyExtractedVocabs.push({
+            phrase: m.feedback.naturalExpression,
+            meaning: m.feedback.explanation || '洗練された表現',
+            contextSentence: m.text,
+            nuanceNote: '瞬間ラリー特訓で習得した洗練表現',
+          });
+        }
+        rallyDetectedErrors.push({
+          userUtterance: m.text,
+          naturalExpression: m.feedback.naturalExpression || m.feedback.grammarFix || '',
+          corePattern: '瞬間英作文・即答スパーリング',
+          explanation: m.feedback.explanation || '',
+          suggestedCause: 'syntax_order',
+        });
+      }
+    });
+
+    const userTurns = rallyMessages.filter((m) => m.role === 'user').length;
+    const sessionId = 'session_' + Date.now();
+    const sessionTitle = `⚡ 瞬間ラリー: ${topic}`;
+
+    // スキャンタスク投入
     try {
-      const allText = rallyMessages.map(m => m.text).join(' ');
-      const userUtterances = rallyMessages.filter(m => m.role === 'user').map(m => m.text);
-      const equippedPhrases = Array.from(equippedFeedbackIds).map(id => {
-        const matched = rallyMessages.find(m => (m.id + '_fb') === id);
-        return matched?.feedback?.naturalExpression || '';
-      }).filter(Boolean);
+      const allText = rallyMessages.map((m) => m.text).join(' ');
+      const userUtterances = rallyMessages.filter((m) => m.role === 'user').map((m) => m.text);
 
       enqueueMasteryScanTask({
         sourceType: 'call',
-        title: `瞬間ラリー特訓: ${selectedRallyTopic}`,
+        title: sessionTitle,
         text: allText,
         userUtterances,
-        lookedUpTokens: equippedPhrases,
       });
     } catch (e) {
       console.error('Failed to enqueue rally scan task', e);
     }
 
-    setViewState('rally_summary');
+    // 初期セッションレコード保存 (即座にready)
+    const initialSession: CallSession = {
+      id: sessionId,
+      sessionType: 'rally',
+      topic,
+      title: sessionTitle,
+      startedAt: new Date(Date.now() - duration * 1000).toISOString(),
+      endedAt: new Date().toISOString(),
+      durationSeconds: duration,
+      messages: convertedMessages,
+      extractedVocabs: rallyExtractedVocabs,
+      recapSummary: `トピック「${topic}」での瞬間ラリー特訓（${userTurns}往復）`,
+      isReviewed: false,
+      reviewAnalysis: {
+        status: 'ready',
+        recapSummary: `トピック「${topic}」での瞬間ラリー特訓（${userTurns}往復・添削${rallyDetectedErrors.length}件）`,
+        extractedVocabs: rallyExtractedVocabs,
+        detectedErrors: rallyDetectedErrors,
+        analyzedAt: new Date().toISOString(),
+        qaMessages: [],
+      },
+    };
+
+    onSaveCallSession(initialSession);
+
+    // ノンブロッキング: ロビーへ戻る
+    setViewState('lobby');
+    showToast(`📝 『${sessionTitle}』を振り返りキューに追加しました（準備完了）`, 'success');
+
+    // バックグラウンドでさらに深い分析・要約を実行してアップデート
+    (async () => {
+      try {
+        const enriched = await analyzeCallSessionAndExtractMemory({
+          messages: convertedMessages,
+          personaName: 'Rally Partner',
+          extractedVocabs: rallyExtractedVocabs,
+          apiKey,
+          model,
+        });
+
+        const updater = (s: CallSession): CallSession => ({
+          ...s,
+          extractedVocabs: enriched.extractedVocabs || s.extractedVocabs,
+          recapSummary: enriched.recapSummary || s.recapSummary,
+          reviewAnalysis: {
+            status: 'ready',
+            recapSummary: enriched.recapSummary || s.recapSummary,
+            extractedVocabs: enriched.extractedVocabs || s.extractedVocabs,
+            detectedErrors: [
+              ...rallyDetectedErrors,
+              ...((enriched.detectedErrors as any) || []).filter(
+                (ne: any) => !rallyDetectedErrors.some((oe) => oe.userUtterance === ne.userUtterance)
+              ),
+            ],
+            analyzedAt: new Date().toISOString(),
+            qaMessages: s.reviewAnalysis?.qaMessages || [],
+          },
+        });
+
+        if (onUpdateCallSession) {
+          onUpdateCallSession(sessionId, updater);
+        } else {
+          updateCallSession(sessionId, updater);
+        }
+      } catch (e) {
+        console.warn('Background rally enrichment skipped:', e);
+      }
+    })();
   };
 
+  // ===================== 振り返り・武器化スタジオ ハンドラー =====================
+
+  const handleOpenReview = (session: CallSession) => {
+    setSelectedReviewSessionId(session.id);
+    setReviewTab('arsenal');
+    setViewState('review');
+    setSavedErrorKeys(new Set());
+  };
+
+  const handleToggleReviewed = (sessionId: string) => {
+    const updater = (s: CallSession): CallSession => ({
+      ...s,
+      isReviewed: !s.isReviewed,
+    });
+    if (onUpdateCallSession) {
+      onUpdateCallSession(sessionId, updater);
+    } else {
+      updateCallSession(sessionId, updater);
+    }
+    showToast('振り返り状態を更新しました', 'info');
+  };
+
+  const handleDeleteSession = (sessionId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (window.confirm('この会話セッションを削除してもよろしいですか？')) {
+      if (onDeleteCallSession) {
+        onDeleteCallSession(sessionId);
+      } else {
+        deleteCallSession(sessionId);
+      }
+      if (selectedReviewSessionId === sessionId) {
+        setSelectedReviewSessionId(null);
+        setViewState('lobby');
+      }
+      showToast('セッションを削除しました', 'info');
+    }
+  };
+
+  // ⚡ すべて一括武器化
+  const handleBatchEquipAll = (session: CallSession) => {
+    const vocabs = session.reviewAnalysis?.extractedVocabs || session.extractedVocabs || [];
+    let count = 0;
+    vocabs.forEach((v) => {
+      if (v.phrase && !savedVocabPhrases.has(v.phrase.trim().toLowerCase())) {
+        onAddToVocab(v.phrase, v.meaning, v.contextSentence, v.nuanceNote);
+        count++;
+      }
+    });
+    playCorrectSound();
+    showToast(`⚡ ${count} 件のフレーズをすべてAnkiに一括武器化しました！`, 'success');
+  };
+
+  // 🛡️ すべてカルテに記録
+  const handleBatchSaveErrors = (session: CallSession) => {
+    const errors = session.reviewAnalysis?.detectedErrors || [];
+    if (!onSaveExpressionError || errors.length === 0) return;
+
+    let count = 0;
+    errors.forEach((errItem, idx) => {
+      const key = `${errItem.userUtterance}_${errItem.naturalExpression}_${idx}`;
+      if (!savedErrorKeys.has(key)) {
+        onSaveExpressionError({
+          userUtterance: errItem.userUtterance,
+          naturalExpression: errItem.naturalExpression,
+          corePattern: errItem.corePattern,
+          explanation: errItem.explanation,
+          causeCategory: errItem.suggestedCause || 'syntax_order',
+          personaName: session.personaName,
+          sourceSessionId: session.id,
+        });
+        setSavedErrorKeys((prev) => new Set(prev).add(key));
+        count++;
+      }
+    });
+
+    playCorrectSound();
+    showToast(`🛡️ ${count} 件の発話カルテをすべて記録しました！（次回ストーリーに応用出題されます）`, 'success');
+  };
+
+  // 💬 振り返り AI質問・深掘りチャット送信
+  const handleSendReviewQa = async (questionOverride?: string) => {
+    const questionText = (questionOverride || reviewQaInput).trim();
+    if (!questionText || isAskingReviewQa || !activeReviewSession || !apiKey) return;
+
+    setReviewQaInput('');
+    setIsAskingReviewQa(true);
+
+    const userMsg: CallMessage = {
+      id: 'qa_user_' + Date.now(),
+      role: 'user',
+      text: questionText,
+      timestamp: new Date().toISOString(),
+    };
+
+    const currentQaMessages = activeReviewSession.reviewAnalysis?.qaMessages || [];
+    const nextQaHistory = [...currentQaMessages, userMsg];
+
+    // 即時UI反映
+    const optimisticUpdater = (s: CallSession): CallSession => ({
+      ...s,
+      reviewAnalysis: {
+        ...(s.reviewAnalysis || { status: 'ready' }),
+        qaMessages: nextQaHistory,
+      },
+    });
+    if (onUpdateCallSession) {
+      onUpdateCallSession(activeReviewSession.id, optimisticUpdater);
+    } else {
+      updateCallSession(activeReviewSession.id, optimisticUpdater);
+    }
+
+    try {
+      const result = await askCallReviewQuestion({
+        apiKey,
+        model,
+        sessionTitle: activeReviewSession.title,
+        personaName: activeReviewSession.personaName,
+        messages: activeReviewSession.messages,
+        recapSummary: activeReviewSession.reviewAnalysis?.recapSummary || activeReviewSession.recapSummary,
+        detectedErrors: (activeReviewSession.reviewAnalysis?.detectedErrors as any) || [],
+        userQuestion: questionText,
+        history: currentQaMessages,
+      });
+
+      if (result.tokenUsage && onRecordTokenUsage) {
+        onRecordTokenUsage(result.tokenUsage.promptTokens, result.tokenUsage.candidatesTokens);
+      }
+
+      const asstMsg: CallMessage = {
+        id: 'qa_asst_' + Date.now(),
+        role: 'assistant',
+        text: result.replyText,
+        timestamp: new Date().toISOString(),
+      };
+
+      const finalQaMessages = [...nextQaHistory, asstMsg];
+
+      // 推奨語彙があればセッション抽出語彙にも追加
+      let updatedVocabs = activeReviewSession.reviewAnalysis?.extractedVocabs || activeReviewSession.extractedVocabs || [];
+      if (result.suggestedVocab && result.suggestedVocab.length > 0) {
+        const existingKeys = new Set(updatedVocabs.map((v) => v.phrase.trim().toLowerCase()));
+        for (const sv of result.suggestedVocab) {
+          if (!existingKeys.has(sv.phrase.trim().toLowerCase())) {
+            updatedVocabs = [...updatedVocabs, sv];
+            existingKeys.add(sv.phrase.trim().toLowerCase());
+          }
+        }
+      }
+
+      const completeUpdater = (s: CallSession): CallSession => ({
+        ...s,
+        extractedVocabs: updatedVocabs,
+        reviewAnalysis: {
+          ...(s.reviewAnalysis || { status: 'ready' }),
+          extractedVocabs: updatedVocabs,
+          qaMessages: finalQaMessages,
+        },
+      });
+
+      if (onUpdateCallSession) {
+        onUpdateCallSession(activeReviewSession.id, completeUpdater);
+      } else {
+        updateCallSession(activeReviewSession.id, completeUpdater);
+      }
+    } catch (err: any) {
+      console.error('Review Q&A error:', err);
+    } finally {
+      setIsAskingReviewQa(false);
+    }
+  };
+
+  // 手動で語彙を追加
+  const handleAddCustomVocabToSession = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customVocabForm.phrase.trim() || !activeReviewSession) return;
+
+    const newVocab: ExtractedCallVocab = {
+      phrase: customVocabForm.phrase.trim(),
+      meaning: customVocabForm.meaning.trim() || 'カスタム登録語彙',
+      contextSentence: customVocabForm.context.trim() || undefined,
+      nuanceNote: customVocabForm.note.trim() || undefined,
+    };
+
+    const currentVocabs = activeReviewSession.reviewAnalysis?.extractedVocabs || activeReviewSession.extractedVocabs || [];
+    const nextVocabs = [...currentVocabs, newVocab];
+
+    const updater = (s: CallSession): CallSession => ({
+      ...s,
+      extractedVocabs: nextVocabs,
+      reviewAnalysis: {
+        ...(s.reviewAnalysis || { status: 'ready' }),
+        extractedVocabs: nextVocabs,
+      },
+    });
+
+    if (onUpdateCallSession) {
+      onUpdateCallSession(activeReviewSession.id, updater);
+    } else {
+      updateCallSession(activeReviewSession.id, updater);
+    }
+
+    // すぐにAnkiへ登録
+    onAddToVocab(newVocab.phrase, newVocab.meaning, newVocab.contextSentence, newVocab.nuanceNote);
+    playCorrectSound();
+    showToast(`⚔️ 『${newVocab.phrase}』を武器化（Anki登録）しました！`, 'success');
+
+    setCustomVocabForm({ phrase: '', meaning: '', context: '', note: '' });
+    setIsAddingCustomVocab(false);
+  };
+
+  const handleToggleMute = () => {
+    const next = !isMuted;
+    setIsMuted(next);
+    if (liveSessionRef.current) {
+      liveSessionRef.current.setMuted(next);
+    }
+  };
+
+  const handleTogglePushToTalk = () => {
+    const next = !isPushToTalk;
+    setIsPushToTalk(next);
+    if (liveSessionRef.current) {
+      liveSessionRef.current.setPushToTalkMode(next);
+    }
+  };
+
+  const handlePttDown = () => {
+    setIsPushToTalkActive(true);
+    if (liveSessionRef.current) {
+      liveSessionRef.current.setPushToTalkActive(true);
+    }
+  };
+
+  const handlePttUp = () => {
+    setIsPushToTalkActive(false);
+    if (liveSessionRef.current) {
+      liveSessionRef.current.setPushToTalkActive(false);
+    }
+  };
+
+  // 新規パートナー生成
+  const handleCreateCustomPersona = async () => {
+    if (!customPrompt.trim() || !apiKey) return;
+    setIsCreatingPersona(true);
+    try {
+      const { persona, tokenUsage } = await generateCustomPersona({
+        apiKey,
+        userPrompt: customPrompt,
+        model,
+      });
+
+      if (tokenUsage && onRecordTokenUsage) {
+        onRecordTokenUsage(tokenUsage.promptTokens, tokenUsage.candidatesTokens);
+      }
+
+      onSavePersona(persona);
+      setIsCreateModalOpen(false);
+      setCustomPrompt('');
+      showToast(`🎉 新しいパートナー『${persona.name}』を作成しました！`, 'success');
+    } catch (err: any) {
+      alert('パートナーの生成に失敗しました: ' + (err.message || 'エラーが発生しました'));
+    } finally {
+      setIsCreatingPersona(false);
+    }
+  };
+
+  const formatDuration = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const formatRelativeTime = (isoString?: string) => {
+    if (!isoString) return '';
+    try {
+      const diffMs = Date.now() - new Date(isoString).getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 1) return 'たった今';
+      if (diffMins < 60) return `${diffMins}分前`;
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours}時間前`;
+      const diffDays = Math.floor(diffHours / 24);
+      return `${diffDays}日前`;
+    } catch (e) {
+      return '';
+    }
+  };
+
+  // 振り返りキュー一覧のフィルタリング
+  const pendingSessions = callSessions.filter((s) => !s.isReviewed);
+  const displayedSessions = reviewQueueFilter === 'pending' ? pendingSessions : callSessions;
+
   // -------------------------------------------------------------
-  // VIEW: ロビー（パートナー一覧 ＆ フリー会話選択）
+  // VIEW: ロビー（パートナー一覧 ＆ 瞬間ラリー ＆ 振り返りキュー）
   // -------------------------------------------------------------
   if (viewState === 'lobby') {
     return (
       <div className="space-y-6 max-w-5xl mx-auto animate-fadeIn pb-12">
+        {/* Global Toast Notification */}
+        {toastMessage && (
+          <div
+            className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 shadow-xl animate-fadeIn ${
+              toastMessage.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+                : 'bg-blue-950/90 border-blue-500/50 text-blue-200'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 text-xs sm:text-sm font-semibold">
+              <Sparkles className="w-4 h-4 text-emerald-400 animate-pulse flex-shrink-0" />
+              <span>{toastMessage.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToastMessage(null)}
+              className="p-1 hover:bg-slate-800/60 rounded-lg text-slate-400 hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* ==================== 📝 振り返り・武器化キュー (Review & Arsenal Queue) ==================== */}
+        <div className="bg-gradient-to-r from-slate-900/95 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-300 text-lg shadow-inner">
+                📝
+              </div>
+              <div>
+                <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                  <span>振り返り・武器化キュー</span>
+                  {pendingSessions.length > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold border border-amber-500/40 animate-pulse">
+                      {pendingSessions.length} 件の振り返り待ち
+                    </span>
+                  )}
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  通話やラリー終了後に自動キューイング。準備ができたらいつでも呼び出して質問・Anki登録できます。
+                </p>
+              </div>
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-xs font-semibold self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setReviewQueueFilter('pending')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  reviewQueueFilter === 'pending'
+                    ? 'bg-cyan-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                未完了 ({pendingSessions.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setReviewQueueFilter('all')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  reviewQueueFilter === 'all'
+                    ? 'bg-slate-800 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                すべて ({callSessions.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Session Cards List */}
+          {displayedSessions.length === 0 ? (
+            <div className="p-6 text-center bg-slate-950/50 rounded-2xl border border-slate-800/80 space-y-2">
+              <div className="text-2xl">☕</div>
+              <p className="text-xs text-slate-400">
+                {reviewQueueFilter === 'pending'
+                  ? '現在、振り返り待ちのセッションはありません。'
+                  : 'これまでの会話セッション履歴はありません。'}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                瞬間ラリーや友達通話を行うと、ここに自動でセッションがキューイングされます。
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
+              {displayedSessions.slice(0, 6).map((session) => {
+                const isAnalyzingStatus = session.reviewAnalysis?.status === 'analyzing';
+                const vocabCount = (session.reviewAnalysis?.extractedVocabs || session.extractedVocabs || []).length;
+                const errorCount = (session.reviewAnalysis?.detectedErrors || []).length;
+                const qaCount = (session.reviewAnalysis?.qaMessages || []).length;
+
+                return (
+                  <div
+                    key={session.id}
+                    onClick={() => handleOpenReview(session)}
+                    className={`group p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between space-y-3 ${
+                      isAnalyzingStatus
+                        ? 'bg-slate-950/80 border-amber-500/30 hover:border-amber-500/50'
+                        : session.isReviewed
+                        ? 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700'
+                        : 'bg-slate-950/90 border-cyan-500/30 hover:border-cyan-500/60 shadow-lg shadow-cyan-950/20'
+                    }`}
+                  >
+                    {/* Top Row: Title & Status Badge */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-base flex-shrink-0 shadow-inner">
+                          {session.sessionType === 'rally' ? '⚡' : session.personaEmoji || '🎙️'}
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="text-xs sm:text-sm font-bold text-white truncate group-hover:text-cyan-300 transition-colors">
+                            {session.title || session.topic || session.personaName || '英会話セッション'}
+                          </h4>
+                          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                            <span>{formatRelativeTime(session.startedAt)}</span>
+                            <span>•</span>
+                            <span className="font-mono">{formatDuration(session.durationSeconds)}</span>
+                            <span>•</span>
+                            <span>{session.messages.filter((m) => m.role === 'user').length} 往復</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Status Tag */}
+                      <div className="flex-shrink-0">
+                        {isAnalyzingStatus ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-500/40 text-amber-300 text-[10px] font-bold animate-pulse">
+                            <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                            <span>AI分析中...</span>
+                          </span>
+                        ) : session.isReviewed ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-medium">
+                            <Check className="w-2.5 h-2.5" />
+                            <span>完了</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold shadow-sm shadow-emerald-950">
+                            <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                            <span>準備完了</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Middle Row: Content Highlights & Summary Preview */}
+                    <div className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed bg-slate-900/60 p-2 rounded-xl border border-slate-800/60">
+                      {session.reviewAnalysis?.recapSummary || session.recapSummary || 'セッションの概要はありません。'}
+                    </div>
+
+                    {/* Bottom Row: Stats & Action CTA */}
+                    <div className="flex items-center justify-between pt-1 text-[11px] border-t border-slate-800/80">
+                      <div className="flex items-center gap-2 text-slate-400">
+                        {vocabCount > 0 && (
+                          <span className="text-cyan-300 font-semibold">⚔️ 武器 {vocabCount}件</span>
+                        )}
+                        {errorCount > 0 && (
+                          <span className="text-amber-300 font-semibold">🛡️ カルテ {errorCount}件</span>
+                        )}
+                        {qaCount > 0 && (
+                          <span className="text-indigo-300 font-semibold">💬 Q&A {qaCount}件</span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1 text-cyan-400 group-hover:text-cyan-300 font-bold text-xs">
+                        <span>振り返る</span>
+                        <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Mode Switcher Tabs */}
-        <div className="flex items-center justify-center">
+        <div className="flex items-center justify-center pt-2">
           <div className="bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center gap-1 shadow-xl">
             <button
               type="button"
@@ -858,19 +1377,18 @@ export const CallView: React.FC<CallViewProps> = ({
                     <div
                       key={topic}
                       onClick={() => setSelectedRallyTopic(topic)}
-                      className={`group cursor-pointer px-4 py-2.5 rounded-2xl border text-xs sm:text-sm font-medium transition-all flex items-center gap-2 select-none ${
+                      className={`group cursor-pointer inline-flex items-center space-x-2 px-3.5 py-2 rounded-2xl border text-xs sm:text-sm font-semibold transition-all duration-200 select-none ${
                         isSelected
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md shadow-amber-500/10 scale-[1.02] font-bold'
-                          : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700 hover:bg-slate-900'
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/30 font-bold scale-[1.03]'
+                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-amber-500/50 hover:bg-slate-900'
                       }`}
                     >
-                      <span className="truncate max-w-[280px]">{topic}</span>
+                      <span>{topic}</span>
                       {!isDefault && (
                         <button
                           type="button"
                           onClick={(e) => handleDeleteTopic(e, topic)}
-                          className="text-slate-500 hover:text-red-400 p-0.5 rounded-full hover:bg-slate-800 transition-colors"
-                          title="トピックを削除"
+                          className={`p-0.5 rounded hover:bg-black/20 ${isSelected ? 'text-slate-900' : 'text-slate-500 hover:text-red-400'}`}
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -881,86 +1399,50 @@ export const CallView: React.FC<CallViewProps> = ({
               </div>
             </div>
 
-            {/* Ready to Start Quick Action Card */}
-            <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-stretch gap-6">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="space-y-2 text-left">
-                  <div className="inline-flex items-center space-x-2 text-xs font-semibold text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
-                    <span>選択中トピック:</span>
-                    <span className="text-white font-bold">{selectedRallyTopic}</span>
+            {/* Launch Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Option 1: Fast Text Chat Rally */}
+              <div className="bg-slate-900/90 border border-slate-800 hover:border-amber-500/40 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xl group transition-all">
+                <div className="space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
+                    <MessageSquare className="w-6 h-6" />
                   </div>
-                  <h3 className="text-lg sm:text-xl font-extrabold text-white">
-                    準備はいいですか？ AIと瞬間ラリーを開始しましょう！
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-400 max-w-lg">
-                    音声通話（Gemini Live）またはテキストチャットで高速ラリー特訓。言えなかった表現はセッション終了後にまとめて武器化（Anki装備）できます。
+                  <h4 className="text-base font-bold text-white">高速テキスト・チャットラリー</h4>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    スマホやキーボードで高速タイピング。AIが即座に2段階添削と次の質問を返します。
                   </p>
                 </div>
 
-                {/* Push-to-Talk Toggle */}
-                <label className="flex items-center space-x-2 bg-slate-950/80 border border-slate-800 px-3.5 py-2 rounded-xl text-xs text-slate-300 cursor-pointer hover:border-amber-500/30 transition-all self-start sm:self-auto">
-                  <input
-                    type="checkbox"
-                    checked={isPushToTalk}
-                    onChange={(e) => setIsPushToTalk(e.target.checked)}
-                    className="rounded text-amber-500 focus:ring-amber-500 bg-slate-900 border-slate-700"
-                  />
-                  <span>Push to Talk（スペース長押し）</span>
-                </label>
+                <button
+                  type="button"
+                  onClick={() => handleStartRally()}
+                  className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 rounded-2xl text-xs sm:text-sm font-extrabold shadow-lg shadow-amber-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                  <Zap className="w-4 h-4" />
+                  <span>「{selectedRallyTopic}」で特訓開始</span>
+                </button>
               </div>
 
-              {/* Start Buttons: Voice vs Chat */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
+              {/* Option 2: Live Voice Sparring */}
+              <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xl group transition-all">
+                <div className="space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                    <Phone className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-base font-bold text-white">リアルタイム音声ラリー通話</h4>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Gemini Liveの超低遅延音声でネイティブと口頭即答スパーリング。耳と口を限界まで鍛えます。
+                  </p>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => handleStartCall(null, true, selectedRallyTopic)}
-                  className="flex items-center justify-center space-x-2.5 px-6 py-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black rounded-2xl text-sm sm:text-base shadow-xl shadow-amber-500/30 active:scale-95 transition-all"
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs sm:text-sm font-extrabold shadow-lg shadow-emerald-600/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
                 >
-                  <Phone className="w-5 h-5 fill-current" />
-                  <span>⚡ リアルタイム音声通話で特訓（Gemini Live）</span>
+                  <Phone className="w-4 h-4" />
+                  <span>音声通話でスパーリング開始</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleStartRally(selectedRallyTopic)}
-                  className="flex items-center justify-center space-x-2 px-6 py-4 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-amber-500/30 font-bold rounded-2xl text-sm sm:text-base transition-all"
-                >
-                  <MessageSquare className="w-5 h-5" />
-                  <span>💬 テキストチャットで特訓</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 3-Step Feature Guide */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4.5 space-y-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 text-sm font-bold">
-                  1
-                </div>
-                <h4 className="text-xs sm:text-sm font-bold text-white">AIが100%リード</h4>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  あなたが話題を考える必要はありません。トピックに沿ってAIが質問を投げ続けます。
-                </p>
-              </div>
-
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4.5 space-y-2">
-                <div className="w-8 h-8 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 text-sm font-bold">
-                  2
-                </div>
-                <h4 className="text-xs sm:text-sm font-bold text-white">2段階リアルタイム添削</h4>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  🔧 最小限の文法修正（骨格維持）と ✨ 洗練されたネイティブ表現の2つを即座に提示。
-                </p>
-              </div>
-
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4.5 space-y-2">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-sm font-bold">
-                  3
-                </div>
-                <h4 className="text-xs sm:text-sm font-bold text-white">⚔️ ワンタップ武器化</h4>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  言えなかった表現は「武器として装備」ボタンで即座にAnkiに保存。会話を止めずに語彙化。
-                </p>
               </div>
             </div>
           </div>
@@ -969,190 +1451,141 @@ export const CallView: React.FC<CallViewProps> = ({
         {/* ==================== TAB 2: 友達フリートーク ==================== */}
         {activeTab === 'friend' && (
           <div className="space-y-6 animate-fadeIn">
-
-        {/* Header Banner */}
-        <div className="bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/50 border border-blue-500/20 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20"></div>
-
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
-            <div className="space-y-1.5">
-              <div className="inline-flex items-center space-x-2 px-3 py-1 bg-blue-500/10 border border-blue-500/30 rounded-full text-cyan-400 text-xs font-semibold">
-                <Radio className="w-3.5 h-3.5 animate-pulse text-cyan-400" />
-                <span>AI Language Exchange（音声通話 ＆ チャット）</span>
-              </div>
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                AI 英会話 ＆ チャットパートナー
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
-                通話でもチャットでも、話した内容・好み・約束は<strong>パートナーの記憶として完全に共有・保存</strong>されます。
-                日本語で質問しても親身に教えてくれます。
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setIsCreateModalOpen(true)}
-                className="flex items-center space-x-1.5 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 active:scale-95 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-cyan-600/30 transition-all"
-              >
-                <Plus className="w-4 h-4" />
-                <span>新しい相手を作る</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Free Talk Quick Start Banner */}
-        <div className="bg-slate-900/80 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all">
-          <div className="flex items-center space-x-4">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
-              🎙️
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                フリー英会話（設定なしで即スタート）
-              </h3>
-              <p className="text-xs text-slate-400">
-                キャラクター設定なしで、日常雑談や英語の質問を気軽にしたい時に。
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              type="button"
-              onClick={() => handleStartCall(null)}
-              className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-emerald-600/30 transition-all"
-            >
-              <Phone className="w-4 h-4" />
-              <span>通話を開始</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStartChat(null)}
-              className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-blue-600/30 transition-all"
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>チャットを開始</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Persona Cards Grid */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
-              <Smile className="w-4 h-4 text-cyan-400" />
-              マイ・パートナー一覧（記憶保持）
-            </h3>
-            <button
-              type="button"
-              onClick={onResetPersonas}
-              className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
-            >
-              プリセットに戻す
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {personas.map((persona) => {
-              const memory = persona.memory || { likes: [], dislikes: [], recentTopics: [], userNotes: [] };
-              const recentTopic = memory.recentTopics?.[0];
-
-              return (
-                <div
-                  key={persona.id}
-                  className="bg-slate-900/90 border border-slate-800 hover:border-cyan-500/40 rounded-2xl p-5 shadow-xl transition-all duration-200 flex flex-col justify-between space-y-4 group relative"
-                >
-                  {/* Card Header */}
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-850 border border-slate-750 flex items-center justify-center text-2xl shadow-inner group-hover:scale-105 transition-transform">
-                        {persona.avatarEmoji}
-                      </div>
-                      <div>
-                        <h4 className="text-base font-bold text-white flex items-center gap-1.5">
-                          {persona.name}
-                          <span className="text-xs font-normal text-slate-400">({persona.age})</span>
-                        </h4>
-                        <p className="text-xs text-cyan-400 flex items-center gap-1 font-medium">
-                          <Globe className="w-3 h-3" />
-                          {persona.nationality} • {persona.occupation}
-                        </p>
-                      </div>
-                    </div>
-
-                    {!persona.isPreset && (
-                      <button
-                        type="button"
-                        onClick={() => onDeletePersona(persona.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-all"
-                        title="削除"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+            <div className="bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/50 border border-blue-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
+                <div className="space-y-1.5">
+                  <div className="inline-flex items-center space-x-2 px-3 py-1 bg-blue-500/15 border border-blue-500/40 rounded-full text-blue-300 text-xs font-semibold">
+                    <Smile className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                    <span>長期記憶 ＆ ペルソナ英会話</span>
                   </div>
-
-                  {/* Personality & Interests */}
-                  <div className="space-y-2">
-                    <p className="text-xs text-slate-300 leading-relaxed line-clamp-2">
-                      💡 {persona.personality}
-                    </p>
-
-                    <div className="flex flex-wrap gap-1">
-                      {persona.interests.slice(0, 3).map((item, idx) => (
-                        <span
-                          key={idx}
-                          className="text-[10px] px-2 py-0.5 bg-slate-950 text-slate-400 rounded-md border border-slate-800"
-                        >
-                          #{item}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Shared Memory Snapshot */}
-                  <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2.5 text-[11px] space-y-1">
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold">
-                      <span>🧠 パートナーの記憶</span>
-                      <span>会話: {persona.totalConversations || 0}回</span>
-                    </div>
-
-                    {recentTopic ? (
-                      <p className="text-slate-300 line-clamp-1">
-                        💬 <strong className="text-cyan-300">{recentTopic.topic}</strong>: {recentTopic.summary}
-                      </p>
-                    ) : (
-                      <p className="text-slate-500 italic">まだ会話の記録がありません</p>
-                    )}
-                  </div>
-
-                  {/* Action Buttons: 音声通話 ＆ テキストチャット */}
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleStartCall(persona)}
-                      className="flex items-center justify-center space-x-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all"
-                    >
-                      <Phone className="w-3.5 h-3.5" />
-                      <span>通話する</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleStartChat(persona)}
-                      className="flex items-center justify-center space-x-1.5 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition-all"
-                    >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      <span>チャット</span>
-                    </button>
-                  </div>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                    👫 友達フリートーク（Persona Talk）
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+                    世界各地のネイティブ友達と、好きな趣味や日々の出来事を自由にフリートーク。
+                    会話するほど相手があなたを覚え、前回の続きから自然に話しかけてくれます。
+                  </p>
                 </div>
-              );
-            })}
-          </div>
-        </div>
+
+                <div className="flex items-center gap-2">
+                  {onResetPersonas && (
+                    <button
+                      type="button"
+                      onClick={onResetPersonas}
+                      className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 rounded-2xl text-xs font-bold transition-all flex items-center gap-1.5"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>初期化</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setIsCreateModalOpen(true)}
+                    className="inline-flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-2xl text-xs sm:text-sm font-bold shadow-lg shadow-cyan-600/30 transition-all"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>AIパートナーを作成</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Persona Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {personas.map((persona) => {
+                const mem = persona.memory;
+                const lastSpoken = formatRelativeTime(persona.lastSpokenAt);
+
+                return (
+                  <div
+                    key={persona.id}
+                    className="bg-slate-900/90 border border-slate-800 hover:border-cyan-500/40 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xl transition-all relative group"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-14 h-14 rounded-2xl bg-slate-850 border border-slate-750 flex items-center justify-center text-3xl shadow-inner group-hover:scale-105 transition-transform">
+                            {persona.avatarEmoji}
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h4 className="text-base font-bold text-white">{persona.name}</h4>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 font-semibold">
+                                {persona.cefrLevel}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-400">
+                              {persona.nationality} • {persona.occupation} ({persona.age}歳)
+                            </p>
+                          </div>
+                        </div>
+
+                        {!persona.isPreset && (
+                          <button
+                            type="button"
+                            onClick={() => onDeletePersona(persona.id)}
+                            className="text-slate-500 hover:text-red-400 p-1 rounded-lg"
+                            title="削除"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
+                        {persona.personality}
+                      </p>
+
+                      {/* Memory Snapshot */}
+                      {mem && (mem.likes.length > 0 || mem.userNotes.length > 0) && (
+                        <div className="bg-slate-950/70 rounded-2xl p-3 border border-slate-800/80 text-[11px] space-y-1.5">
+                          <span className="text-[10px] uppercase font-bold text-cyan-400 block tracking-wider">
+                            🧠 覚えている記憶
+                          </span>
+                          {mem.likes.length > 0 && (
+                            <p className="text-slate-300">
+                              ❤️ 好きなもの: <span className="text-slate-400">{mem.likes.slice(0, 3).join(', ')}</span>
+                            </p>
+                          )}
+                          {mem.userNotes.length > 0 && (
+                            <p className="text-slate-300">
+                              📝 あなたについて: <span className="text-slate-400">{mem.userNotes[0]}</span>
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 pt-2">
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>{lastSpoken ? `前回会話: ${lastSpoken}` : 'まだ会話していません'}</span>
+                        <span>通話回数: {persona.totalConversations}回</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleStartChat(persona)}
+                          className="py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>チャット</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStartCall(persona)}
+                          className="py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-600/20 transition-all flex items-center justify-center space-x-1.5"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>音声通話</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -1278,15 +1711,14 @@ export const CallView: React.FC<CallViewProps> = ({
     );
   }
 
-
   // =============================================================
   // VIEW: 瞬間ラリー特訓 チャット画面 (Rally Sparring Chat)
   // =============================================================
   if (viewState === 'rally_chat') {
     return (
-      <div className="max-w-4xl mx-auto space-y-3 animate-fadeIn flex flex-col h-[calc(100vh-130px)] min-h-[500px]">
-        {/* Rally Top Bar */}
-        <div className="bg-slate-900/95 border border-amber-500/30 rounded-2xl p-3.5 sm:p-4 shadow-xl flex items-center justify-between flex-shrink-0">
+      <div className="max-w-3xl mx-auto h-[82vh] flex flex-col space-y-3 animate-fadeIn">
+        {/* Rally Header Bar */}
+        <div className="bg-slate-900/90 border border-amber-500/30 rounded-3xl p-4 flex items-center justify-between shadow-xl flex-shrink-0">
           <div className="flex items-center space-x-3">
             <button
               type="button"
@@ -1297,202 +1729,141 @@ export const CallView: React.FC<CallViewProps> = ({
               <ArrowLeft className="w-4 h-4" />
             </button>
 
-            <div className="w-9 h-9 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-lg shadow-inner">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-xl shadow-inner">
               ⚡
             </div>
 
             <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-amber-400">瞬間ラリー特訓</span>
-                <span className="text-[11px] text-slate-400 truncate max-w-[180px] sm:max-w-xs">
-                  • {selectedRallyTopic}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-400">
+              <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-1.5">
+                <span>瞬間ラリー特訓</span>
+                <span className="text-xs font-normal text-amber-300">({selectedRallyTopic})</span>
+              </h3>
+              <div className="flex items-center gap-2 text-[11px] text-amber-400">
                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                <span>経過時間: {formatDuration(callDuration)}</span>
-                <span className="text-amber-300 font-semibold">
-                  • 装備した武器: {equippedFeedbackIds.size}件
-                </span>
+                <span>特訓中 ({formatDuration(callDuration)})</span>
+                <span className="text-slate-400">• 即答スパーリング</span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleEndRally}
-              className="flex items-center space-x-1 px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 rounded-xl text-xs font-bold shadow-md shadow-amber-500/20 transition-all"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>終了 ＆ 記録</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleEndRally}
+            className="flex items-center space-x-1 px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold shadow-md shadow-red-600/20 transition-all"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>特訓終了 ＆ 振り返り</span>
+          </button>
         </div>
 
-        {/* Rally Messages Feed Area */}
-        <div className="flex-1 bg-slate-950/70 border border-slate-800/80 rounded-3xl p-4 sm:p-5 overflow-y-auto space-y-4 shadow-inner">
+        {/* Rally Messages Stream */}
+        <div className="flex-1 bg-slate-950/80 border border-slate-800/80 rounded-3xl p-4 sm:p-6 overflow-y-auto space-y-4 shadow-inner">
           {rallyMessages.map((msg) => {
             const isUser = msg.role === 'user';
-            const showTranslation = translatedMessageIds.has(msg.id);
-            const feedback = msg.feedback;
-            const feedbackId = msg.id + '_fb';
-            const isEquipped = equippedFeedbackIds.has(feedbackId);
+            const fb = msg.feedback;
+            const isEquipped = fb && equippedFeedbackIds.has(msg.id + '_fb');
 
             return (
-              <div key={msg.id} className="space-y-2.5 animate-fadeIn">
-                <div className={`flex items-start gap-2.5 ${isUser ? 'justify-end' : 'justify-start'}`}>
+              <div
+                key={msg.id}
+                className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} space-y-2 animate-fadeIn`}
+              >
+                {/* Message Bubble */}
+                <div className="flex items-start gap-2.5 max-w-[85%] sm:max-w-[75%]">
                   {!isUser && (
-                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-sm flex-shrink-0 mt-0.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-sm flex-shrink-0 mt-0.5">
                       ⚡
                     </div>
                   )}
 
                   <div
-                    className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-3.5 text-xs sm:text-sm leading-relaxed shadow-md relative ${
+                    className={`rounded-2xl p-3.5 text-xs sm:text-sm leading-relaxed shadow-md ${
                       isUser
-                        ? 'bg-amber-600 text-slate-950 font-semibold rounded-tr-xs'
+                        ? 'bg-amber-500 text-slate-950 font-bold rounded-tr-xs'
                         : 'bg-slate-900 border border-slate-800 text-slate-100 rounded-tl-xs'
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{msg.text}</p>
 
-                    {/* AI Message Tools (Pronunciation & Translation) */}
-                    {!isUser && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
-                        <div className="flex items-center space-x-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsSpeakingMessageId(msg.id);
-                              speakText(msg.text, 0.95);
-                              setTimeout(() => setIsSpeakingMessageId(null), 3000);
-                            }}
-                            className="inline-flex items-center space-x-1 text-slate-400 hover:text-amber-300 transition-colors"
-                          >
-                            <Volume2
-                              className={`w-3.5 h-3.5 ${
-                                isSpeakingMessageId === msg.id ? 'text-amber-400 animate-pulse' : ''
-                              }`}
-                            />
-                            <span>発音</span>
-                          </button>
-
-                          {msg.nextQuestionJa && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleTranslation(msg.id)}
-                              className={`inline-flex items-center space-x-1 transition-colors ${
-                                showTranslation ? 'text-amber-400 font-bold' : 'text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              <Globe className="w-3.5 h-3.5" />
-                              <span>{showTranslation ? '和訳を隠す' : '質問の和訳'}</span>
-                            </button>
-                          )}
-                        </div>
-
-                        <span className="text-[10px] text-slate-500">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* AI Question Japanese Translation Drawer */}
-                    {!isUser && showTranslation && msg.nextQuestionJa && (
-                      <div className="mt-2 p-2.5 bg-slate-950/80 border border-amber-500/20 rounded-xl text-xs text-amber-200/90 animate-fadeIn">
-                        <span className="text-[10px] uppercase font-bold text-amber-400 block tracking-wider mb-0.5">
-                          🇯🇵 質問の日本語訳:
-                        </span>
-                        {msg.nextQuestionJa}
-                      </div>
+                    {!isUser && msg.nextQuestionJa && (
+                      <p className="mt-1.5 pt-1.5 border-t border-slate-800/80 text-[11px] text-slate-400">
+                        💡 日本語意図: {msg.nextQuestionJa}
+                      </p>
                     )}
                   </div>
-
-                  {isUser && (
-                    <div className="w-8 h-8 rounded-xl bg-amber-500 border border-amber-400 flex items-center justify-center text-slate-950 text-xs font-bold flex-shrink-0 mt-0.5">
-                      <User className="w-4 h-4" />
-                    </div>
-                  )}
                 </div>
 
-                {/* 2-Tier Immediate Feedback Box (2段階添削 ＆ 武器化) */}
-                {feedback && feedback.hasCorrection && (
-                  <div className="ml-10 max-w-[85%] sm:max-w-[75%] bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/40 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 space-y-3 shadow-xl">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-1.5 text-xs font-bold text-amber-300">
-                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                        <span>即時添削 ＆ 武器化ボックス</span>
-                      </div>
-                      <span className="text-[10px] text-slate-400 font-mono">2-Tier Coaching</span>
+                {/* 2-Stage Feedback Box */}
+                {fb && fb.hasCorrection && (
+                  <div className="max-w-[90%] sm:max-w-[80%] bg-gradient-to-br from-slate-900 to-slate-950 border border-amber-500/40 rounded-2xl p-3.5 space-y-2 text-xs shadow-xl animate-scaleUp">
+                    <div className="flex items-center justify-between border-b border-slate-800/80 pb-1.5">
+                      <span className="font-extrabold text-amber-300 flex items-center gap-1.5 text-[11px]">
+                        <Flame className="w-3.5 h-3.5 text-amber-400" />
+                        2段階添削 ＆ 武器化
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                        瞬間英作文・即答
+                      </span>
                     </div>
 
-                    {/* Tier 1: 🔧 最小限の文法修正 */}
-                    {feedback.grammarFix && feedback.grammarFix !== feedback.userOriginalText && (
-                      <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-2.5 space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-cyan-400 flex items-center gap-1">
-                            🔧 最小限の文法修正 (骨格維持)
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => speakText(feedback.grammarFix, 0.95)}
-                            className="text-slate-400 hover:text-cyan-300 p-0.5"
-                            title="発音を聞く"
-                          >
-                            <Volume2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <p className="text-xs text-slate-200 font-mono font-medium">{feedback.grammarFix}</p>
+                    {/* Step 1: Grammar Fix */}
+                    {fb.grammarFix && (
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] text-cyan-400 font-semibold block">🔧 文法修正:</span>
+                        <p className="text-slate-200 font-mono text-[11px] bg-slate-950/60 p-1.5 rounded-lg border border-slate-800">
+                          {fb.grammarFix}
+                        </p>
                       </div>
                     )}
 
-                    {/* Tier 2: ✨ 洗練された表現 */}
-                    {feedback.naturalExpression && (
-                      <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-2.5 space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
-                            ✨ ネイティブ洗練表現 (おすすめ)
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => speakText(feedback.naturalExpression, 0.95)}
-                            className="text-amber-400 hover:text-amber-200 p-0.5"
-                            title="発音を聞く"
-                          >
-                            <Volume2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <p className="text-xs text-white font-mono font-bold">{feedback.naturalExpression}</p>
+                    {/* Step 2: Native Polished Expression */}
+                    {fb.naturalExpression && (
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] text-emerald-400 font-semibold block">✨ 洗練された表現（武器）:</span>
+                        <p className="text-emerald-300 font-bold text-[12px] bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/30">
+                          "{fb.naturalExpression}"
+                        </p>
                       </div>
                     )}
 
-                    {/* 解説 */}
-                    {feedback.explanation && (
-                      <p className="text-[11px] text-slate-300 leading-relaxed">{feedback.explanation}</p>
+                    {/* Explanation */}
+                    {fb.explanation && (
+                      <p className="text-[11px] text-slate-300 leading-relaxed pt-1">
+                        {fb.explanation}
+                      </p>
                     )}
 
-                    {/* ⚔️ 武器として装備ボタン */}
+                    {/* Weaponization CTA Button */}
                     <div className="pt-1 flex items-center justify-end">
                       <button
                         type="button"
-                        onClick={() => handleEquipWeapon(feedback, feedbackId)}
                         disabled={isEquipped}
-                        className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 ${
+                        onClick={() => {
+                          const phrase = fb.naturalExpression || fb.grammarFix || '';
+                          onAddToVocab(
+                            phrase,
+                            fb.explanation || '瞬間ラリー特訓の洗練表現',
+                            msg.text,
+                            `トピック: ${selectedRallyTopic}`
+                          );
+                          setEquippedFeedbackIds((prev) => new Set(prev).add(msg.id + '_fb'));
+                          playCorrectSound();
+                        }}
+                        className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
                           isEquipped
-                            ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 cursor-default'
-                            : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 shadow-amber-500/20'
+                            ? 'bg-slate-800 text-slate-500 cursor-default'
+                            : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-md shadow-amber-500/30 active:scale-95'
                         }`}
                       >
                         {isEquipped ? (
                           <>
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>✅ 装備完了 (Anki登録済み)</span>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>武器化完了</span>
                           </>
                         ) : (
                           <>
                             <Swords className="w-3.5 h-3.5" />
-                            <span>⚔️ 武器として装備 (Anki登録)</span>
+                            <span>⚔️ この表現を武器化（Anki登録）</span>
                           </>
                         )}
                       </button>
@@ -1504,73 +1875,57 @@ export const CallView: React.FC<CallViewProps> = ({
           })}
 
           {isRallyLoading && (
-            <div className="flex items-start gap-2.5 justify-start animate-fadeIn">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-sm flex-shrink-0">
-                ⚡
-              </div>
-              <div className="bg-slate-900 border border-amber-500/20 rounded-2xl rounded-tl-xs p-3.5 text-xs text-amber-300 flex items-center gap-2">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                <span>ラリー中... (AIが即座に質問・添削を生成)</span>
-              </div>
+            <div className="flex items-center space-x-2 text-amber-400 text-xs p-2">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <span>AIパートナーが即座に返信・添削中...</span>
             </div>
           )}
 
           <div ref={chatMessagesEndRef} />
         </div>
 
-        {/* Suggestion Chips Bar (💡 カンペ候補) */}
-        {currentSuggestionChips.length > 0 && (
-          <div className="space-y-1.5 flex-shrink-0">
-            <div className="flex items-center justify-between text-[11px] px-1 text-slate-400">
-              <span className="flex items-center gap-1 font-semibold text-amber-300">
-                <Sparkles className="w-3 h-3 text-amber-400" />
-                💡 カンペ候補（タップで回答）
-              </span>
-              <span className="text-[10px] text-slate-500">日本語で直接入力してもOK</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {currentSuggestionChips.map((chip, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleSendRallyMessage(chip.text)}
-                  disabled={isRallyLoading}
-                  className="bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 rounded-xl p-2.5 text-left transition-all group disabled:opacity-50"
-                >
-                  <span className="text-[10px] font-bold text-amber-400 block truncate group-hover:text-amber-300">
-                    {chip.labelJa}
-                  </span>
-                  <span className="text-xs text-slate-200 block truncate font-mono mt-0.5">
-                    {chip.text}
-                  </span>
-                </button>
-              ))}
-            </div>
+        {/* Suggestion Chips */}
+        {currentSuggestionChips.length > 0 && !isRallyLoading && (
+          <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 flex-shrink-0">
+            <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-amber-400" />
+              ヒント:
+            </span>
+            {currentSuggestionChips.map((chip, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleSendRallyMessage(chip.text)}
+                className="flex-shrink-0 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 hover:border-amber-400 rounded-xl text-xs transition-all shadow-sm flex items-center gap-1.5"
+              >
+                <span>{chip.text}</span>
+                {chip.labelJa && <span className="text-[10px] text-amber-300/80">({chip.labelJa})</span>}
+              </button>
+            ))}
           </div>
         )}
 
-        {/* Rally Chat Input Form */}
+        {/* Input Bar */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSendRallyMessage();
           }}
-          className="bg-slate-900 border border-amber-500/30 rounded-2xl p-2.5 shadow-xl flex items-center gap-2 flex-shrink-0"
+          className="bg-slate-900 border border-slate-800 rounded-2xl p-2 flex items-center space-x-2 flex-shrink-0 shadow-lg"
         >
           <input
             type="text"
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
-            placeholder="英語で即答、または日本語で言いたいことを入力..."
+            placeholder="英語で即答してみよう...（Enterで送信）"
             disabled={isRallyLoading}
-            className="flex-1 bg-transparent px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none font-medium"
+            className="flex-1 bg-transparent px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none"
+            autoFocus
           />
-
           <button
             type="submit"
             disabled={!chatInput.trim() || isRallyLoading}
-            className="p-2.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-40 text-slate-950 font-bold rounded-xl transition-all shadow-md shadow-amber-500/20 active:scale-95 flex items-center justify-center"
-            title="送信"
+            className="p-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 rounded-xl transition-all shadow-md shadow-amber-500/20 flex-shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>
@@ -1580,153 +1935,15 @@ export const CallView: React.FC<CallViewProps> = ({
   }
 
   // =============================================================
-  // VIEW: 瞬間ラリー特訓 サマリー画面 (Rally Summary)
+  // VIEW: 友達チャット画面 (Fast Text Chat)
   // =============================================================
-  if (viewState === 'rally_summary') {
-    const feedbackList = rallyMessages.filter((m) => m.feedback && m.feedback.hasCorrection);
-
-    return (
-      <div className="max-w-3xl mx-auto space-y-6 animate-fadeIn pb-12">
-        {/* Rally Summary Header */}
-        <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-4">
-          <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-3xl shadow-lg shadow-amber-500/20">
-            ⚡
-          </div>
-
-          <div className="space-y-1">
-            <h3 className="text-xl sm:text-2xl font-extrabold text-white">
-              瞬間ラリー特訓 完了！
-            </h3>
-            <p className="text-xs sm:text-sm text-slate-300">
-              トピック: <strong className="text-amber-300">{selectedRallyTopic}</strong>
-            </p>
-          </div>
-
-          {/* Stats Bar */}
-          <div className="grid grid-cols-3 gap-3 max-w-md mx-auto pt-2">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
-              <span className="text-[10px] text-slate-400 block font-semibold">特訓時間</span>
-              <span className="text-sm sm:base font-bold text-white font-mono">
-                {formatDuration(callDuration)}
-              </span>
-            </div>
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
-              <span className="text-[10px] text-slate-400 block font-semibold">ラリー往復数</span>
-              <span className="text-sm sm:base font-bold text-amber-300 font-mono">
-                {rallyMessages.filter((m) => m.role === 'user').length} 往復
-              </span>
-            </div>
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
-              <span className="text-[10px] text-slate-400 block font-semibold">⚔️ 装備した武器</span>
-              <span className="text-sm sm:base font-bold text-emerald-400 font-mono">
-                {equippedFeedbackIds.size} 件
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Feedback List Review */}
-        {feedbackList.length > 0 && (
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
-            <div>
-              <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                <Swords className="w-4 h-4 text-amber-400" />
-                <span>今回の添削 ＆ 武器フレーズ一覧</span>
-              </h4>
-              <p className="text-xs text-slate-400 mt-0.5">
-                まだ装備していないフレーズはここからAnkiに追加できます。
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {feedbackList.map((msg, idx) => {
-                const fb = msg.feedback!;
-                const feedbackId = msg.id + '_fb';
-                const isEquipped = equippedFeedbackIds.has(feedbackId);
-
-                return (
-                  <div
-                    key={idx}
-                    className="p-4 bg-slate-950 border border-slate-800 hover:border-amber-500/30 rounded-2xl space-y-2.5 transition-all"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1 flex-1">
-                        <div className="text-xs text-slate-400">
-                          あなたの発言: <span className="text-slate-200">{fb.userOriginalText}</span>
-                        </div>
-                        <div className="text-xs sm:text-sm font-bold text-amber-300 font-mono">
-                          ✨ {fb.naturalExpression || fb.grammarFix}
-                        </div>
-                        {fb.explanation && (
-                          <div className="text-[11px] text-slate-400">{fb.explanation}</div>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleEquipWeapon(fb, feedbackId)}
-                        disabled={isEquipped}
-                        className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 ${
-                          isEquipped
-                            ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300'
-                            : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20'
-                        }`}
-                      >
-                        {isEquipped ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-400" />
-                            <span>装備済み</span>
-                          </>
-                        ) : (
-                          <>
-                            <Swords className="w-3 h-3" />
-                            <span>武器として装備</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Action Buttons */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-          <button
-            type="button"
-            onClick={() => handleStartRally(selectedRallyTopic)}
-            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-2xl text-xs sm:text-sm shadow-lg shadow-amber-500/20 transition-all"
-          >
-            <Zap className="w-4 h-4" />
-            <span>同じトピックでもう一度特訓</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setViewState('lobby')}
-            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-2xl text-xs sm:text-sm transition-all"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>ロビーに戻る</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // -------------------------------------------------------------
-  // VIEW: テキストチャット画面（共通記憶保持）
-  // -------------------------------------------------------------
   if (viewState === 'chat') {
     const persona = activePersona;
-    const memory = persona?.memory;
 
     return (
-      <div className="max-w-4xl mx-auto space-y-4 animate-fadeIn flex flex-col h-[calc(100vh-140px)] min-h-[500px]">
-        {/* Chat Top Bar */}
-        <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-4 shadow-xl flex items-center justify-between flex-shrink-0">
+      <div className="max-w-3xl mx-auto h-[82vh] flex flex-col space-y-3 animate-fadeIn">
+        {/* Chat Header */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 flex items-center justify-between shadow-xl flex-shrink-0">
           <div className="flex items-center space-x-3">
             <button
               type="button"
@@ -1753,17 +1970,11 @@ export const CallView: React.FC<CallViewProps> = ({
               <div className="flex items-center gap-2 text-[11px] text-cyan-400">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                 <span>チャット対話中 ({formatDuration(callDuration)})</span>
-                {memory?.likes && memory.likes.length > 0 && (
-                  <span className="hidden sm:inline text-slate-400">
-                    • 好き: {memory.likes.slice(0, 2).join(', ')}
-                  </span>
-                )}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* 音声通話へ即時切り替えボタン */}
             <button
               type="button"
               onClick={() => handleStartCall(persona)}
@@ -1771,10 +1982,9 @@ export const CallView: React.FC<CallViewProps> = ({
               title="音声通話に切り替え"
             >
               <Phone className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">通話に切替</span>
+              <span className="hidden sm:inline">音声通話へ</span>
             </button>
 
-            {/* 会話を終了してサマリー保存 */}
             <button
               type="button"
               onClick={handleEndSession}
@@ -1786,7 +1996,7 @@ export const CallView: React.FC<CallViewProps> = ({
           </div>
         </div>
 
-        {/* Chat Messages List Area */}
+        {/* Chat Messages */}
         <div className="flex-1 bg-slate-950/70 border border-slate-800/80 rounded-3xl p-4 sm:p-6 overflow-y-auto space-y-4 shadow-inner">
           {callMessages.map((msg) => {
             const isUser = msg.role === 'user';
@@ -1810,7 +2020,6 @@ export const CallView: React.FC<CallViewProps> = ({
                 >
                   <p className="whitespace-pre-wrap">{msg.text}</p>
 
-                  {/* Assistant Message Extra Action: 発音再生 & 単語登録 */}
                   {!isUser && (
                     <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
                       <button
@@ -1820,62 +2029,46 @@ export const CallView: React.FC<CallViewProps> = ({
                           speakText(msg.text, 0.95);
                           setTimeout(() => setIsSpeakingMessageId(null), 3000);
                         }}
-                        className="inline-flex items-center space-x-1 text-slate-400 hover:text-cyan-300 transition-colors"
+                        className="flex items-center space-x-1 hover:text-cyan-400 transition-colors"
                       >
                         <Volume2 className={`w-3.5 h-3.5 ${isSpeakingMessageId === msg.id ? 'text-cyan-400 animate-pulse' : ''}`} />
-                        <span>発音を聞く</span>
+                        <span>音声を聞く</span>
                       </button>
-
-                      <span className="text-[10px] text-slate-500">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
                     </div>
                   )}
                 </div>
-
-                {isUser && (
-                  <div className="w-8 h-8 rounded-xl bg-blue-700 border border-blue-600 flex items-center justify-center text-white text-xs flex-shrink-0 mt-0.5">
-                    <User className="w-4 h-4" />
-                  </div>
-                )}
               </div>
             );
           })}
 
           {isSendingChat && (
-            <div className="flex items-start gap-2.5 justify-start animate-fadeIn">
-              <div className="w-8 h-8 rounded-xl bg-slate-850 border border-slate-750 flex items-center justify-center text-sm flex-shrink-0">
-                {persona?.avatarEmoji || '🤖'}
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-xs p-3.5 text-xs text-slate-400 flex items-center gap-2">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-                <span>{persona?.name || 'AI'}が入力中...</span>
-              </div>
+            <div className="flex items-center space-x-2 text-cyan-400 text-xs p-2">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <span>{persona?.name || '相手'} が入力中...</span>
             </div>
           )}
 
           <div ref={chatMessagesEndRef} />
         </div>
 
-        {/* Chat Input Form */}
+        {/* Input Bar */}
         <form
           onSubmit={handleSendChatMessage}
-          className="bg-slate-900 border border-slate-800 rounded-2xl p-2.5 shadow-xl flex items-center gap-2 flex-shrink-0"
+          className="bg-slate-900 border border-slate-800 rounded-2xl p-2 flex items-center space-x-2 flex-shrink-0 shadow-lg"
         >
           <input
             type="text"
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
-            placeholder={`${persona?.name || '相手'}に英語で話しかける（日本語で質問もOK）...`}
+            placeholder="メッセージを入力...（Enterで送信）"
             disabled={isSendingChat}
             className="flex-1 bg-transparent px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none"
+            autoFocus
           />
-
           <button
             type="submit"
             disabled={!chatInput.trim() || isSendingChat}
-            className="p-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white rounded-xl transition-all shadow-md shadow-blue-600/20 active:scale-95 flex items-center justify-center"
-            title="送信"
+            className="p-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl transition-all shadow-md shadow-blue-600/20 flex-shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>
@@ -1884,231 +2077,132 @@ export const CallView: React.FC<CallViewProps> = ({
     );
   }
 
-  // -------------------------------------------------------------
-  // VIEW: 音声通話中画面（Gemini Live WebSocket）
-  // -------------------------------------------------------------
+  // =============================================================
+  // VIEW: 音声通話中画面 (Live Voice Call)
+  // =============================================================
   if (viewState === 'call') {
     const persona = activePersona;
 
     return (
-      <div className="max-w-xl mx-auto space-y-6 animate-fadeIn">
-        {/* Call Container Box */}
-        <div className="bg-gradient-to-b from-slate-900 via-slate-900/95 to-slate-950 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden flex flex-col items-center text-center space-y-6">
-          {/* Subtle Ambient Glow */}
-          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-          {/* Top Status & Controls */}
-          <div className="w-full flex items-center justify-between text-xs text-slate-400">
-            <div className="flex items-center space-x-2">
-              <span
-                className={`w-2.5 h-2.5 rounded-full ${
-                  connectionState === 'connected'
-                    ? 'bg-emerald-400 animate-pulse'
-                    : connectionState === 'connecting'
-                    ? 'bg-amber-400 animate-ping'
-                    : 'bg-red-400'
-                }`}
-              />
-              <span className="font-semibold text-slate-200 uppercase tracking-wider text-[10px]">
-                {connectionState === 'connected'
-                  ? 'LIVE CALL'
-                  : connectionState === 'connecting'
-                  ? 'CONNECTING...'
-                  : 'DISCONNECTED'}
-              </span>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <span className="font-mono text-xs px-2.5 py-0.5 bg-slate-950 rounded-full border border-slate-800 text-cyan-300">
-                {formatDuration(callDuration)}
-              </span>
-
-              {/* チャットへ即時切り替えボタン */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (liveSessionRef.current) liveSessionRef.current.disconnect();
-                  handleStartChat(persona);
-                }}
-                className="p-1.5 text-slate-400 hover:text-white bg-slate-950 hover:bg-slate-800 rounded-lg border border-slate-800 transition-colors"
-                title="チャットに切り替え"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Avatar & Voice Ripple Waves */}
-          <div className="relative py-2">
-            {/* Pulsing Ripple circles based on volume */}
-            <div
-              className="absolute inset-0 rounded-full bg-cyan-500/20 blur-xl transition-all duration-100 -z-10"
-              style={{
-                transform: `scale(${1 + assistantVolume * 2})`,
-                opacity: assistantVolume > 0.05 ? 0.8 : 0.2,
-              }}
-            />
-            <div
-              className="absolute inset-0 rounded-full bg-blue-500/20 blur-2xl transition-all duration-100 -z-10"
-              style={{
-                transform: `scale(${1 + userVolume * 2.5})`,
-                opacity: userVolume > 0.05 ? 0.8 : 0.1,
-              }}
-            />
-
-            <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-3xl bg-slate-850 border-2 border-slate-750 flex items-center justify-center text-5xl sm:text-6xl shadow-2xl relative">
-              {persona?.avatarEmoji || '🎙️'}
-
-              {/* Status mini badge */}
-              <div className="absolute -bottom-2 -right-2 px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-full text-[10px] font-bold text-cyan-400 shadow-md">
-                {persona?.cefrLevel || 'Live'}
-              </div>
-            </div>
-          </div>
-
-          {/* Persona Info */}
+      <div className="max-w-2xl mx-auto space-y-6 animate-fadeIn pb-12">
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center text-center space-y-6 relative overflow-hidden">
+          {/* Header Info */}
           <div className="space-y-1">
-            <h3 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-              {persona?.name || 'フリー英会話パートナー'}
+            <span className="text-xs px-3 py-1 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-semibold inline-block">
+              {connectionState === 'connected'
+                ? `通話中 • ${formatDuration(callDuration)}`
+                : connectionState === 'connecting'
+                ? '接続中...'
+                : '待機中'}
+            </span>
+            <h3 className="text-xl sm:text-2xl font-bold text-white">
+              {persona?.name || 'フリー英会話'}
             </h3>
-            <p className="text-xs text-slate-400 font-medium">
-              {persona ? `${persona.nationality} • ${persona.occupation}` : '自由な雑談 ＆ 英語質問'}
-            </p>
+            {persona && (
+              <p className="text-xs text-slate-400">
+                {persona.nationality} • {persona.occupation}
+              </p>
+            )}
           </div>
 
-          {/* Real-time Subtitles / Transcription Box */}
+          {/* Error message */}
+          {errorMessage && (
+            <div className="p-3 bg-red-950/60 border border-red-500/40 rounded-xl text-red-300 text-xs">
+              {errorMessage}
+            </div>
+          )}
+
+          {/* Avatar Orb Visualizer */}
+          <div className="relative flex items-center justify-center my-4">
+            <div
+              className="absolute w-44 h-44 rounded-full bg-cyan-500/20 blur-xl transition-transform duration-100"
+              style={{ transform: `scale(${1 + assistantVolume * 2})` }}
+            />
+            <div
+              className="absolute w-36 h-36 rounded-full bg-blue-600/30 blur-lg transition-transform duration-100"
+              style={{ transform: `scale(${1 + userVolume * 2})` }}
+            />
+            <div className="w-28 h-28 rounded-3xl bg-slate-850 border-2 border-cyan-500/40 flex items-center justify-center text-5xl shadow-2xl relative z-10">
+              {persona?.avatarEmoji || '🎙️'}
+            </div>
+          </div>
+
+          {/* Real-time Subtitles */}
           {showSubtitles && (
-            <div className="w-full bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 min-h-[90px] max-h-[140px] overflow-y-auto text-left space-y-2 text-xs leading-relaxed shadow-inner">
+            <div className="w-full bg-slate-950/80 rounded-2xl p-4 border border-slate-800/80 min-h-[90px] flex items-center justify-center text-xs sm:text-sm text-slate-200">
               {currentAssistantText ? (
-                <div className="space-y-1 animate-fadeIn">
-                  <span className="text-[10px] text-cyan-400 font-bold block">
-                    {persona?.name || 'AI'}:
-                  </span>
-                  <p className="text-slate-100 font-medium">{currentAssistantText}</p>
-                </div>
+                <p className="text-cyan-300 animate-fadeIn">{currentAssistantText}</p>
               ) : callMessages.length > 0 ? (
-                <div className="space-y-1">
-                  <span className="text-[10px] text-slate-500 font-bold block">
-                    {callMessages[callMessages.length - 1].role === 'user' ? 'You' : persona?.name || 'AI'}:
+                <p className="text-slate-300">
+                  <span className="text-slate-500 mr-2">
+                    {callMessages[callMessages.length - 1].role === 'user' ? 'You:' : `${persona?.name || 'AI'}:`}
                   </span>
-                  <p className="text-slate-300">
-                    {callMessages[callMessages.length - 1].text}
-                  </p>
-                </div>
-              ) : (
-                <p className="text-slate-500 text-center pt-5 italic">
-                  マイクに向かって話しかけてください…
+                  {callMessages[callMessages.length - 1].text}
                 </p>
+              ) : (
+                <p className="text-slate-500 italic">声を発すると自動でリアルタイム認識されます...</p>
               )}
             </div>
           )}
 
-          {/* Error / Disconnected display with action buttons */}
-          {(errorMessage || connectionState === 'error' || connectionState === 'disconnected') && (
-            <div className="w-full p-4 bg-red-950/90 border border-red-500/50 rounded-2xl text-red-200 text-xs text-center space-y-3 shadow-lg animate-fadeIn">
-              <div className="font-bold flex items-center justify-center space-x-1.5 text-red-300">
-                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-                <span>{errorMessage || 'Live API 通話が切断されました'}</span>
-              </div>
-              <p className="text-[11px] text-red-300/80">
-                Live WebSocketが制限されている場合でも、「高速チャット」で快適に対話練習が可能です。
-              </p>
-              <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => handleStartCall(persona, activeTab === 'rally')}
-                  className="px-3.5 py-1.5 bg-red-800/60 hover:bg-red-700/80 text-white rounded-xl font-bold transition-colors flex items-center space-x-1"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>再接続</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (liveSessionRef.current) liveSessionRef.current.disconnect();
-                    handleStartChat(persona);
-                  }}
-                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-colors flex items-center space-x-1 shadow-md"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>チャットへ切り替え</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Push-to-Talk Toggle Bar */}
-          <div className="w-full flex items-center justify-between px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs">
-            <span className="text-slate-300 font-medium">
-              🎙️ じっくり考えるモード (Push-to-Talk)
-            </span>
-            <button
-              type="button"
-              onClick={handleTogglePushToTalkMode}
-              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                isPushToTalk
-                  ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              {isPushToTalk ? 'ON（長押し時のみ発言）' : 'OFF（自動割り込み）'}
-            </button>
-          </div>
-
-          {/* Push-to-Talk Button (when enabled) */}
+          {/* Push to talk button if active */}
           {isPushToTalk && (
-            <div className="w-full">
+            <div className="w-full max-w-xs">
               <button
                 type="button"
-                onMouseDown={handlePushToTalkStart}
-                onMouseUp={handlePushToTalkEnd}
-                onTouchStart={handlePushToTalkStart}
-                onTouchEnd={handlePushToTalkEnd}
-                className={`w-full py-4 rounded-2xl font-bold text-sm transition-all shadow-xl select-none ${
+                onMouseDown={handlePttDown}
+                onMouseUp={handlePttUp}
+                onTouchStart={handlePttDown}
+                onTouchEnd={handlePttUp}
+                className={`w-full py-3.5 rounded-2xl font-bold text-xs sm:text-sm transition-all shadow-lg select-none ${
                   isPushToTalkActive
-                    ? 'bg-cyan-500 text-slate-950 scale-95 ring-4 ring-cyan-400/50 shadow-cyan-500/40'
-                    : 'bg-slate-850 hover:bg-slate-800 text-cyan-300 border border-cyan-500/40'
+                    ? 'bg-amber-500 text-slate-950 scale-95 shadow-amber-500/40'
+                    : 'bg-slate-800 hover:bg-slate-750 text-amber-300 border border-amber-500/30'
                 }`}
               >
-                {isPushToTalkActive ? '🗣️ 話しています（離すと送信）' : '👆 押している間だけ話す'}
+                {isPushToTalkActive ? '🎙️ 発話中（離すと送信）' : '押している間だけ話す (Push-to-Talk)'}
               </button>
             </div>
           )}
 
-          {/* Action Control Buttons */}
+          {/* Controls Bar */}
           <div className="flex items-center justify-center space-x-4 pt-2">
-            {/* Mute Button */}
             <button
               type="button"
               onClick={handleToggleMute}
               className={`p-4 rounded-full border transition-all ${
-                isMuted
-                  ? 'bg-amber-950/80 border-amber-500/40 text-amber-400'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                isMuted ? 'bg-amber-950 border-amber-500/40 text-amber-400' : 'bg-slate-800 border-slate-700 text-white'
               }`}
-              title={isMuted ? 'ミュート解除' : 'ミュート'}
+              title={isMuted ? 'ミュート解除' : 'マイクミュート'}
             >
               {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
             </button>
 
-            {/* End Call Button (Big Red) */}
+            <button
+              type="button"
+              onClick={handleTogglePushToTalk}
+              className={`p-4 rounded-full border transition-all ${
+                isPushToTalk ? 'bg-amber-950/80 border-amber-500/40 text-amber-400' : 'bg-slate-800 border-slate-700 text-slate-400'
+              }`}
+              title="Push-to-talk モード切替"
+            >
+              <Zap className="w-5 h-5" />
+            </button>
+
             <button
               type="button"
               onClick={handleEndSession}
-              className="p-5 bg-red-600 hover:bg-red-500 active:scale-95 text-white rounded-full shadow-xl shadow-red-600/40 transition-all border-2 border-red-400"
-              title="通話を終了してサマリーを生成"
+              className="p-5 bg-red-600 hover:bg-red-500 text-white rounded-full shadow-xl shadow-red-600/40 transition-all border-2 border-red-400"
+              title="通話を終了して振り返りキューへ"
             >
               <PhoneOff className="w-6 h-6" />
             </button>
 
-            {/* Subtitles Toggle */}
             <button
               type="button"
               onClick={() => setShowSubtitles(!showSubtitles)}
               className={`p-4 rounded-full border transition-all ${
-                showSubtitles
-                  ? 'bg-cyan-950/80 border-cyan-500/40 text-cyan-400'
-                  : 'bg-slate-800 border-slate-700 text-slate-400'
+                showSubtitles ? 'bg-cyan-950 border-cyan-500/40 text-cyan-400' : 'bg-slate-800 border-slate-700 text-slate-400'
               }`}
               title={showSubtitles ? '字幕を非表示' : '字幕を表示'}
             >
@@ -2120,259 +2214,616 @@ export const CallView: React.FC<CallViewProps> = ({
     );
   }
 
-  // -------------------------------------------------------------
-  // VIEW: 通話後サマリー ＆ 抽出語彙登録画面 (音声・チャット共通)
-  // -------------------------------------------------------------
-  if (viewState === 'summary') {
-    const session = latestSummarySession;
-    const persona = activePersona;
+  // =============================================================
+  // VIEW: 振り返り・武器化 ＆ AI質問スタジオ (Interactive Review Studio)
+  // =============================================================
+  if (viewState === 'review' && activeReviewSession) {
+    const session = activeReviewSession;
+    const analysis = session.reviewAnalysis;
+    const isAnalyzing = analysis?.status === 'analyzing';
+    const vocabs = analysis?.extractedVocabs || session.extractedVocabs || [];
+    const errors = analysis?.detectedErrors || [];
+    const qaMessages = analysis?.qaMessages || [];
+
+    const unaddedVocabCount = vocabs.filter((v) => !savedVocabPhrases.has(v.phrase.trim().toLowerCase())).length;
 
     return (
-      <div className="max-w-2xl mx-auto space-y-6 animate-fadeIn">
-        {/* Summary Header */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-4">
-          <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center text-3xl shadow-lg shadow-emerald-950/50">
-            🎉
+      <div className="max-w-4xl mx-auto space-y-6 animate-fadeIn pb-16">
+        {/* Review Studio Header */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center space-x-3.5">
+            <button
+              type="button"
+              onClick={() => setViewState('lobby')}
+              className="p-2.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
+              title="ロビーへ戻る"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+
+            <div className="w-12 h-12 rounded-2xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-2xl shadow-inner">
+              {session.sessionType === 'rally' ? '⚡' : session.personaEmoji || '🎙️'}
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-extrabold text-white">
+                  {session.title || session.personaName || '英会話セッション'}
+                </h2>
+                {session.isReviewed && (
+                  <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-bold border border-slate-700">
+                    ✅ 振り返り完了
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                <span>{new Date(session.startedAt).toLocaleString('ja-JP')}</span>
+                <span>•</span>
+                <span className="font-mono">{formatDuration(session.durationSeconds)}</span>
+                <span>•</span>
+                <span>{session.messages.filter((m) => m.role === 'user').length} 往復</span>
+              </div>
+            </div>
           </div>
 
-          <div className="space-y-1">
-            <h3 className="text-xl sm:text-2xl font-bold text-white">
-              {currentSessionType === 'chat' ? 'チャットセッション完了！' : '英会話通話セッション完了！'}
-            </h3>
-            <p className="text-xs sm:text-sm text-slate-300">
-              {persona?.name || 'パートナー'} との会話内容を分析し、新しい記憶と語彙を抽出しました。
-            </p>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => handleToggleReviewed(session.id)}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 ${
+                session.isReviewed
+                  ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                  : 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-600/30 hover:bg-emerald-500'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{session.isReviewed ? '未完了に戻す' : '振り返り完了にする'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => handleDeleteSession(session.id, e)}
+              className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors"
+              title="セッションを削除"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
-
-          {/* Loading Indicator */}
-          {isAnalyzing && (
-            <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-center space-x-2 text-cyan-400 text-xs">
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>AIが会話のサマリーと重要語彙を抽出中...</span>
-            </div>
-          )}
-
-          {/* Recap Summary Box */}
-          {session?.recapSummary && (
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 text-left space-y-2 text-xs leading-relaxed">
-              <span className="text-[10px] uppercase font-bold text-cyan-400 block tracking-wider">
-                📝 会話の要約 (Recap)
-              </span>
-              <p className="text-slate-200">{session.recapSummary}</p>
-            </div>
-          )}
-
-          {/* New Learned Facts Snapshot */}
-          {session?.newLearnedFacts && session.newLearnedFacts.length > 0 && (
-            <div className="bg-blue-950/40 border border-blue-500/30 rounded-2xl p-4 text-left space-y-2 text-xs">
-              <span className="text-[10px] uppercase font-bold text-blue-400 block tracking-wider">
-                🧠 パートナーについて新しく覚えたこと
-              </span>
-              <ul className="list-disc list-inside space-y-1 text-slate-300">
-                {session.newLearnedFacts.map((fact, idx) => (
-                  <li key={idx}>{fact}</li>
-                ))}
-              </ul>
-            </div>
-          )}
         </div>
 
-        {/* Section 1: 🎴 定型句・単語のAnki登録 */}
-        {session?.extractedVocabs && session.extractedVocabs.length > 0 && (
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
+        {/* Status Alert if analyzing */}
+        {isAnalyzing && (
+          <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-2xl flex items-center justify-between text-amber-300 text-xs">
+            <div className="flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+              <span>AIがバックグラウンドで会話の深層構文と重要表現を分析中です...</span>
+            </div>
+            <span className="text-[10px] text-amber-400/80">自動更新されます</span>
+          </div>
+        )}
+
+        {/* Tab Switcher */}
+        <div className="flex items-center border-b border-slate-800 gap-2 pb-1">
+          <button
+            type="button"
+            onClick={() => setReviewTab('arsenal')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
+              reviewTab === 'arsenal'
+                ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/25'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Swords className="w-4 h-4 text-cyan-300" />
+            <span>⚔️ 武器化 ＆ 発話カルテ</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-black/20 text-[10px]">
+              {vocabs.length + errors.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setReviewTab('qa')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
+              reviewTab === 'qa'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/25'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <HelpCircle className="w-4 h-4 text-indigo-300" />
+            <span>💬 AI質問・深掘り相談</span>
+            {qaMessages.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-black/20 text-[10px]">
+                {qaMessages.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setReviewTab('transcript')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
+              reviewTab === 'transcript'
+                ? 'bg-slate-800 text-white shadow-md'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4 text-slate-400" />
+            <span>📜 全文対話ログ</span>
+          </button>
+        </div>
+
+        {/* ==================== TAB 1: ⚔️ 武器化 ＆ 発話カルテ ==================== */}
+        {reviewTab === 'arsenal' && (
+          <div className="space-y-6 animate-fadeIn">
+            {/* Batch Action Bar */}
+            <div className="bg-gradient-to-r from-slate-900 to-indigo-950/50 border border-slate-800 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xl">
               <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                  <BookMarked className="w-4 h-4 text-cyan-400" />
-                  1. 定型句・単語（Ankiで覚えるもの）
-                </h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  会話に出てきた定型表現や単語です。Ankiの忘却曲線で自動復習されます。
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Flame className="w-4 h-4 text-amber-400" />
+                  ワンタップ一括登録
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  抽出された語彙・構文カルテをまとめて自分の武器庫・カルテDBに装備します。
                 </p>
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => handleBatchEquipAll(session)}
+                  disabled={vocabs.length === 0 || unaddedVocabCount === 0}
+                  className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-600/30 transition-all active:scale-95"
+                >
+                  <Swords className="w-3.5 h-3.5" />
+                  <span>⚡ すべて一括武器化 ({unaddedVocabCount})</span>
+                </button>
+
+                {errors.length > 0 && onSaveExpressionError && (
+                  <button
+                    type="button"
+                    onClick={() => handleBatchSaveErrors(session)}
+                    className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/30 transition-all active:scale-95"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>🛡️ すべてカルテに記録</span>
+                  </button>
+                )}
               </div>
             </div>
 
-            <div className="space-y-2.5">
-              {session.extractedVocabs.map((vocab, idx) => {
-                const isSaved = savedVocabPhrases.has(vocab.phrase.trim().toLowerCase());
+            {/* Recap Summary Box */}
+            {session.recapSummary && (
+              <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-5 space-y-2 text-xs shadow-lg">
+                <span className="text-[10px] uppercase font-bold text-cyan-400 block tracking-wider">
+                  📝 会話の要約 (Recap)
+                </span>
+                <p className="text-slate-200 leading-relaxed">{session.recapSummary}</p>
+              </div>
+            )}
 
-                return (
-                  <div
-                    key={idx}
-                    className="p-3.5 bg-slate-950 border border-slate-800 hover:border-cyan-500/40 rounded-2xl flex items-start justify-between gap-3 transition-all"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-bold text-white">{vocab.phrase}</span>
-                        <span className="text-xs font-semibold text-cyan-400">{vocab.meaning}</span>
-                      </div>
+            {/* Section A: 🎴 定型句・単語のAnki武器化 */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                    <BookMarked className="w-4 h-4 text-cyan-400" />
+                    1. 武器化フレーズ（Anki忘却曲線で自動復習）
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    会話で使われた実用的な単語・定型表現です。Ankiへ登録すると次回の復習デッキに並びます。
+                  </p>
+                </div>
 
-                      {vocab.contextSentence && (
-                        <p className="text-[11px] font-serif text-slate-300 italic">
-                          "{vocab.contextSentence}"
-                        </p>
-                      )}
+                <button
+                  type="button"
+                  onClick={() => setIsAddingCustomVocab(!isAddingCustomVocab)}
+                  className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>手動追加</span>
+                </button>
+              </div>
 
-                      {vocab.nuanceNote && (
-                        <p className="text-[10px] text-slate-400">💡 {vocab.nuanceNote}</p>
-                      )}
-                    </div>
-
+              {/* Custom Add Vocab Form */}
+              {isAddingCustomVocab && (
+                <form
+                  onSubmit={handleAddCustomVocabToSession}
+                  className="p-4 bg-slate-950 border border-cyan-500/40 rounded-2xl space-y-3 animate-fadeIn"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      value={customVocabForm.phrase}
+                      onChange={(e) => setCustomVocabForm({ ...customVocabForm, phrase: e.target.value })}
+                      placeholder="英語フレーズ（例: make ends meet）"
+                      className="bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-cyan-400"
+                      required
+                    />
+                    <input
+                      type="text"
+                      value={customVocabForm.meaning}
+                      onChange={(e) => setCustomVocabForm({ ...customVocabForm, meaning: e.target.value })}
+                      placeholder="日本語の意味（例: 生計を立てる、収支を合わせる）"
+                      className="bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-cyan-400"
+                      required
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      value={customVocabForm.context}
+                      onChange={(e) => setCustomVocabForm({ ...customVocabForm, context: e.target.value })}
+                      placeholder="例文（省略可）"
+                      className="bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    />
+                    <input
+                      type="text"
+                      value={customVocabForm.note}
+                      onChange={(e) => setCustomVocabForm({ ...customVocabForm, note: e.target.value })}
+                      placeholder="ニュアンスメモ（省略可）"
+                      className="bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
                     <button
                       type="button"
-                      disabled={isSaved}
-                      onClick={() =>
-                        onAddToVocab(
-                          vocab.phrase,
-                          vocab.meaning,
-                          vocab.contextSentence,
-                          vocab.nuanceNote
-                        )
-                      }
-                      className={`flex-shrink-0 flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                        isSaved
-                          ? 'bg-slate-800 text-slate-500 cursor-default'
-                          : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-md shadow-cyan-600/30'
-                      }`}
+                      onClick={() => setIsAddingCustomVocab(false)}
+                      className="px-3 py-1.5 bg-slate-800 text-slate-400 rounded-lg text-xs"
                     >
-                      {isSaved ? (
-                        <>
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Anki登録済</span>
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Ankiへ登録</span>
-                        </>
-                      )}
+                      キャンセル
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold"
+                    >
+                      Ankiに武器化
                     </button>
                   </div>
-                );
-              })}
+                </form>
+              )}
+
+              {/* Vocabs Grid */}
+              {vocabs.length === 0 ? (
+                <div className="p-4 bg-slate-950/60 rounded-2xl text-center text-xs text-slate-500">
+                  抽出された語彙はありません。「手動追加」から好きなフレーズを登録できます。
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {vocabs.map((vocab, idx) => {
+                    const isSaved = savedVocabPhrases.has(vocab.phrase.trim().toLowerCase());
+
+                    return (
+                      <div
+                        key={idx}
+                        className="p-3.5 bg-slate-950 border border-slate-800 hover:border-cyan-500/40 rounded-2xl flex items-start justify-between gap-3 transition-all"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm font-bold text-white">{vocab.phrase}</span>
+                            <span className="text-xs font-semibold text-cyan-400">{vocab.meaning}</span>
+                          </div>
+
+                          {vocab.contextSentence && (
+                            <p className="text-[11px] font-serif text-slate-300 italic">
+                              "{vocab.contextSentence}"
+                            </p>
+                          )}
+
+                          {vocab.nuanceNote && (
+                            <p className="text-[10px] text-slate-400">💡 {vocab.nuanceNote}</p>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={isSaved}
+                          onClick={() => {
+                            onAddToVocab(vocab.phrase, vocab.meaning, vocab.contextSentence, vocab.nuanceNote);
+                            playCorrectSound();
+                            showToast(`⚔️ 『${vocab.phrase}』をAnkiに武器化しました！`, 'success');
+                          }}
+                          className={`flex-shrink-0 flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            isSaved
+                              ? 'bg-slate-800 text-slate-500 cursor-default'
+                              : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-md shadow-cyan-600/30 active:scale-95'
+                          }`}
+                        >
+                          {isSaved ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>武器化済</span>
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>⚔️ 武器化 (Anki)</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
+
+            {/* Section B: 📋 発話カルテ（偽英語・構文ミスの添削 ＆ カルテDB保存） */}
+            {errors.length > 0 && (
+              <div className="bg-slate-900/90 border border-amber-500/30 rounded-3xl p-6 space-y-4 shadow-xl">
+                <div>
+                  <h4 className="text-sm sm:text-base font-bold text-amber-300 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    2. 発話カルテ：偽英語・構文ミスの添削 ＆ 本質分析
+                  </h4>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    カルテに記録すると、<strong>次回のストーリー生成でこの文法・語法パターンを自然に応用した文章</strong>が自動生成されます。
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  {errors.map((errItem, idx) => {
+                    const errorKey = `${errItem.userUtterance}_${errItem.naturalExpression}_${idx}`;
+                    const isSaved = savedErrorKeys.has(errorKey);
+
+                    const causeLabels: Record<ErrorCauseCategory, string> = {
+                      vocabulary: '単語・表現不足',
+                      syntax_order: '語順・文の組立',
+                      direct_translation: '日本語の直訳',
+                      tense_modals: '時制・助動詞ミス',
+                      preposition_colloc: '前置詞・コロケーション',
+                      other: 'その他',
+                    };
+
+                    return (
+                      <div
+                        key={idx}
+                        className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 transition-all hover:border-amber-500/40"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 font-bold border border-red-500/30 text-[10px]">
+                              あなたの発話
+                            </span>
+                            <span className="text-slate-300 line-through decoration-red-500/60 font-medium">
+                              "{errItem.userUtterance}"
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 font-bold border border-emerald-500/30 text-[10px]">
+                              自然な英語
+                            </span>
+                            <span className="text-emerald-300 font-bold">
+                              "{errItem.naturalExpression}"
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/90 rounded-xl p-3 text-xs space-y-1.5 border border-slate-800/80">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-bold text-cyan-300">
+                              💡 本質パターン: {errItem.corePattern}
+                            </span>
+                            <span className="text-[10px] text-amber-400 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-500/20">
+                              {(causeLabels as any)[errItem.suggestedCause || 'syntax_order'] || '構文・語順'}
+                            </span>
+                          </div>
+                          <p className="text-slate-300 text-[11px] leading-relaxed">
+                            {errItem.explanation}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center justify-end">
+                          <button
+                            type="button"
+                            disabled={isSaved}
+                            onClick={() => {
+                              if (onSaveExpressionError) {
+                                onSaveExpressionError({
+                                  userUtterance: errItem.userUtterance,
+                                  naturalExpression: errItem.naturalExpression,
+                                  corePattern: errItem.corePattern,
+                                  explanation: errItem.explanation,
+                                  causeCategory: errItem.suggestedCause || 'syntax_order',
+                                  personaName: session.personaName,
+                                  sourceSessionId: session.id,
+                                });
+                                setSavedErrorKeys((prev) => new Set(prev).add(errorKey));
+                                playCorrectSound();
+                                showToast('🛡️ カルテに記録しました！次回ストーリーに応用出題されます', 'success');
+                              }
+                            }}
+                            className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                              isSaved
+                                ? 'bg-slate-800 text-slate-500 cursor-default'
+                                : 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/30 active:scale-95'
+                            }`}
+                          >
+                            {isSaved ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>カルテに記録済</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>カルテに記録（次回ストーリーで克服）</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Section 2: 📋 発話カルテ（偽英語・組立ミスの本質分析 ＆ カルテDB保存） */}
-        {detectedErrors && detectedErrors.length > 0 && (
-          <div className="bg-slate-900/90 border border-amber-500/30 rounded-3xl p-6 space-y-4 shadow-xl">
-            <div>
-              <h4 className="text-sm font-bold text-amber-300 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                2. 発話カルテ：偽英語・構文ミスの添削 ＆ 本質分析
-              </h4>
-              <p className="text-[11px] text-slate-300 mt-0.5">
-                カルテに記録すると、<strong>次回のストーリー生成でこの文法・語法パターンを自然に応用した文章</strong>が自動生成されます。
-              </p>
+        {/* ==================== TAB 2: 💬 AI質問・深掘り相談 ==================== */}
+        {reviewTab === 'qa' && (
+          <div className="space-y-4 animate-fadeIn">
+            {/* Coach Banner */}
+            <div className="bg-slate-900/90 border border-indigo-500/30 rounded-3xl p-5 shadow-xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-950 border border-indigo-500/40 flex items-center justify-center text-xl shadow-inner">
+                  👨‍🏫
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-white">
+                    AIパーソナルコーチにセッションの疑問を質問
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    この会話ログの文脈を完璧に把握したAIコーチが、ニュアンスの差や自然な言い換えを徹底解説します。
+                  </p>
+                </div>
+              </div>
             </div>
 
-            <div className="space-y-3">
-              {detectedErrors.map((errItem, idx) => {
-                const isSaved = savedErrorIndices.has(idx);
+            {/* Quick Prompt Chips */}
+            <div className="flex items-center gap-2 overflow-x-auto py-1">
+              <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-indigo-400" />
+                クイック質問:
+              </span>
+              {[
+                '💡 もっと自然なネイティブ表現を教えて',
+                '🔍 私の発言の文法ミスを詳しく解説して',
+                '🎯 今回の会話で使えそうなスラング・慣用句は？',
+                '💼 ビジネスで使えるフォーマルな言い換えは？',
+              ].map((promptText, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  disabled={isAskingReviewQa}
+                  onClick={() => handleSendReviewQa(promptText)}
+                  className="flex-shrink-0 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-indigo-300 border border-indigo-500/30 hover:border-indigo-400 rounded-xl text-xs transition-all shadow-sm"
+                >
+                  {promptText}
+                </button>
+              ))}
+            </div>
 
-                const causeLabels: Record<ErrorCauseCategory, string> = {
-                  vocabulary: '単語・表現不足',
-                  syntax_order: '語順・文の組立',
-                  direct_translation: '日本語の直訳',
-                  tense_modals: '時制・助動詞ミス',
-                  preposition_colloc: '前置詞・コロケーション',
-                  other: 'その他',
-                };
+            {/* Q&A Chat Area */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-3xl p-4 sm:p-6 min-h-[360px] max-h-[520px] overflow-y-auto space-y-4 shadow-inner">
+              {qaMessages.length === 0 ? (
+                <div className="h-48 flex flex-col items-center justify-center text-center space-y-2 text-slate-500">
+                  <MessageSquare className="w-8 h-8 text-slate-600" />
+                  <p className="text-xs">
+                    まだ質問はありません。上のクイック質問を押すか、下の入力欄から自由に質問してください。
+                  </p>
+                </div>
+              ) : (
+                qaMessages.map((msg) => {
+                  const isUser = msg.role === 'user';
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex items-start gap-2.5 ${isUser ? 'justify-end' : 'justify-start'} animate-fadeIn`}
+                    >
+                      {!isUser && (
+                        <div className="w-8 h-8 rounded-xl bg-indigo-950 border border-indigo-500/40 flex items-center justify-center text-sm flex-shrink-0 mt-0.5">
+                          👨‍🏫
+                        </div>
+                      )}
+
+                      <div
+                        className={`max-w-[85%] sm:max-w-[78%] rounded-2xl p-4 text-xs sm:text-sm leading-relaxed shadow-md ${
+                          isUser
+                            ? 'bg-indigo-600 text-white rounded-tr-xs font-semibold'
+                            : 'bg-slate-900 border border-slate-800 text-slate-100 rounded-tl-xs space-y-2'
+                        }`}
+                      >
+                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+
+              {isAskingReviewQa && (
+                <div className="flex items-center space-x-2 text-indigo-400 text-xs p-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>AIコーチが回答を生成中...</span>
+                </div>
+              )}
+
+              <div ref={reviewQaEndRef} />
+            </div>
+
+            {/* Input Bar */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendReviewQa();
+              }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl p-2 flex items-center space-x-2 shadow-lg"
+            >
+              <input
+                type="text"
+                value={reviewQaInput}
+                onChange={(e) => setReviewQaInput(e.target.value)}
+                placeholder="この会話についてAIコーチに質問する...（例: なぜこの前置詞を使うの？ネイティブならどう言う？）"
+                disabled={isAskingReviewQa}
+                className="flex-1 bg-transparent px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!reviewQaInput.trim() || isAskingReviewQa}
+                className="p-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl transition-all shadow-md shadow-indigo-600/20 flex-shrink-0"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* ==================== TAB 3: 📜 全文対話ログ ==================== */}
+        {reviewTab === 'transcript' && (
+          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 space-y-4 shadow-xl animate-fadeIn">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-slate-400" />
+                全文対話ログ ({session.messages.length} ターン)
+              </h4>
+            </div>
+
+            <div className="space-y-3 max-h-[550px] overflow-y-auto p-1">
+              {session.messages.map((msg, idx) => {
+                const isUser = msg.role === 'user';
 
                 return (
                   <div
-                    key={idx}
-                    className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 transition-all hover:border-amber-500/40"
+                    key={msg.id || idx}
+                    className={`p-3.5 rounded-2xl border text-xs sm:text-sm leading-relaxed ${
+                      isUser
+                        ? 'bg-blue-950/30 border-blue-500/30 ml-8 text-slate-200'
+                        : 'bg-slate-950/80 border-slate-800 mr-8 text-slate-100'
+                    }`}
                   >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 font-bold border border-red-500/30 text-[10px]">
-                          あなたの発話
-                        </span>
-                        <span className="text-slate-300 line-through decoration-red-500/60 font-medium">
-                          "{errItem.userUtterance}"
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 font-bold border border-emerald-500/30 text-[10px]">
-                          自然な英語
-                        </span>
-                        <span className="text-emerald-300 font-bold">
-                          "{errItem.naturalExpression}"
-                        </span>
-                      </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                      <span className="font-bold flex items-center gap-1">
+                        {isUser ? '👤 あなた' : `🤖 ${session.personaName || 'AI Partner'}`}
+                      </span>
+                      {!isUser && (
+                        <button
+                          type="button"
+                          onClick={() => speakText(msg.text, 0.95)}
+                          className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300"
+                        >
+                          <Volume2 className="w-3 h-3" />
+                          <span>音声再生</span>
+                        </button>
+                      )}
                     </div>
-
-                    <div className="bg-slate-900/90 rounded-xl p-3 text-xs space-y-1.5 border border-slate-800/80">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="font-bold text-cyan-300">
-                          💡 本質パターン: {errItem.corePattern}
-                        </span>
-                        <span className="text-[10px] text-amber-400 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-500/20">
-                          {(causeLabels as any)[errItem.suggestedCause || 'grammar'] || '構文・語順'}
-                        </span>
-                      </div>
-                      <p className="text-slate-300 text-[11px] leading-relaxed">
-                        {errItem.explanation}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center justify-end">
-                      <button
-                        type="button"
-                        disabled={isSaved}
-                        onClick={() => {
-                          if (onSaveExpressionError) {
-                            onSaveExpressionError({
-                              userUtterance: errItem.userUtterance,
-                              naturalExpression: errItem.naturalExpression,
-                              corePattern: errItem.corePattern,
-                              explanation: errItem.explanation,
-                              causeCategory: errItem.suggestedCause,
-                              personaName: persona?.name,
-                              sourceSessionId: session?.id,
-                            });
-                            setSavedErrorIndices(prev => new Set(prev).add(idx));
-                          }
-                        }}
-                        className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                          isSaved
-                            ? 'bg-slate-800 text-slate-500 cursor-default'
-                            : 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/30'
-                        }`}
-                      >
-                        {isSaved ? (
-                          <>
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>カルテに記録済</span>
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>カルテに記録（次回ストーリーで克服）</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
+                    <p className="whitespace-pre-wrap">{msg.text}</p>
                   </div>
                 );
               })}
             </div>
           </div>
         )}
-
-        {/* Back to Lobby Button */}
-        <div className="text-center pt-2">
-          <button
-            type="button"
-            onClick={() => setViewState('lobby')}
-            className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-xs sm:text-sm font-bold shadow-lg shadow-blue-600/30 transition-all"
-          >
-            パートナー一覧へ戻る
-          </button>
-        </div>
       </div>
     );
   }
