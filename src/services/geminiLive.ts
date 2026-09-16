@@ -16,13 +16,32 @@ export interface GeminiLiveSessionOptions {
   persona?: Persona | null;
   isPushToTalk: boolean;
   voiceName?: string;
+  isRallyMode?: boolean;
+  customTopic?: string;
   callbacks: GeminiLiveCallbacks;
 }
 
 /**
  * ペルソナとバイリンガルサポート用のシステムプロンプト生成
  */
-export function buildLiveSystemInstruction(persona?: Persona | null): string {
+export function buildLiveSystemInstruction(persona?: Persona | null, isRallyMode?: boolean, customTopic?: string): string {
+  if (isRallyMode) {
+    const topic = customTopic || '日常のカジュアルな雑談';
+    return `あなたは音声通話による瞬間英会話スパーリングパートナー「Rally Coach」です。
+ユーザーとテンポの良い超高速英会話ラリーを行ってください。
+
+【今回の会話トピック・シチュエーション】
+"${topic}"
+
+【最重要会話ルール】
+1. 【超ショートラリー（1〜2文）】: 一度に長く喋りすぎず、1〜2文（5〜8秒程度）のテンポ良い日常英語で返答し、必ず最後に相手に質問を返して会話のキャッチボールを維持してください。
+2. 【開始時の第一声】: 接続開始直後、あなたから元気に「Hey! Ready for our sparring on ${topic}?」のように挨拶と最初の質問を投げかけて会話をスタートしてください。
+3. 【バイリンガル・ヘルパー機能】:
+   - ユーザーが英語で話しているときは、自然な英語で会話を続けてください。
+   - もしユーザーが日本語で話したり詰まった場合は、即座に自然な英語表現を教えて「言ってみて！」と促し、英語へ戻してください。
+4. 【考え中への寛容さ】: ユーザーが言葉を探しているときは遮らずに待ってください。`;
+  }
+
   let personaPrompt = '';
   
   if (persona) {
@@ -167,7 +186,7 @@ export class GeminiLiveSession {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     const voiceName = this.options.persona?.voiceName || this.options.voiceName || 'Aoede';
-    const systemPrompt = buildLiveSystemInstruction(this.options.persona);
+    const systemPrompt = buildLiveSystemInstruction(this.options.persona, this.options.isRallyMode, this.options.customTopic);
 
     const setupMsg = {
       setup: {

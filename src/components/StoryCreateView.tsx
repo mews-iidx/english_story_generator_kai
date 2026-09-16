@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CefrLevel } from '../types/settings';
 import { ContentType } from '../types/story';
-import { Sparkles, RefreshCw, Minus, Plus, Layers, Clock, Mic, MessageSquare, BookOpen, Link, FileText, Compass } from 'lucide-react';
+import { Sparkles, RefreshCw, Minus, Plus, Layers, Clock, Mic, MessageSquare, BookOpen, FileText } from 'lucide-react';
 import { getUnmasteredTargetPatterns, getUnmasteredTargetVocabs } from '../services/storage';
 
 interface StoryCreateViewProps {
@@ -10,7 +10,7 @@ interface StoryCreateViewProps {
   isGenerating: boolean;
   generatingTheme?: string;
   generatingProgress?: { current: number; total: number; message: string };
-  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType, storyCount?: number, isContinuous?: boolean) => void;
+  onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType) => void;
   onOpenImportModal: () => void;
   onNavigateToBookshelf: () => void;
 }
@@ -26,8 +26,6 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
   onNavigateToBookshelf,
 }) => {
   const [contentType, setContentType] = useState<ContentType>('podcast');
-  const [storyCount, setStoryCount] = useState<number>(1);
-  const [isContinuous, setIsContinuous] = useState<boolean>(true);
   const [promptInput, setPromptInput] = useState('');
   const [wordCount, setWordCount] = useState<number>(700);
 
@@ -40,13 +38,9 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
     setWordCount(prev => Math.max(100, Math.min(2500, (prev || 700) + delta)));
   };
 
-  const changeStoryCount = (delta: number) => {
-    setStoryCount(prev => Math.max(1, Math.min(5, (prev || 1) + delta)));
-  };
-
   const handleStartGeneration = () => {
-    if (isGenerating) return;
-    onGenerateStory(promptInput, wordCount, contentType, storyCount, isContinuous);
+    onGenerateStory(promptInput, wordCount, contentType);
+    setPromptInput('');
   };
 
   const quickTopics = [
@@ -116,18 +110,24 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
         </div>
       </div>
 
-      {/* Generation Status Indicator (if currently running) */}
+      {/* Generation Status Indicator (if currently running in background) */}
       {isGenerating && (
-        <div className="p-4 bg-blue-950/60 border border-blue-500/40 rounded-3xl flex items-center justify-between gap-4 animate-pulse">
-          <div className="flex items-center space-x-3">
-            <RefreshCw className="w-5 h-5 text-blue-400 animate-spin" />
+        <div className="bg-gradient-to-r from-blue-950/70 via-indigo-950/60 to-purple-950/70 border border-blue-500/40 rounded-3xl p-5 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-pulse">
+          <div className="flex items-center space-x-3.5 text-center sm:text-left">
+            <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/30 flex-shrink-0">
+              <RefreshCw className="w-5 h-5 text-white animate-spin" />
+            </div>
             <div>
-              <div className="text-sm font-bold text-white">
-                バックグラウンドでストーリーを執筆中...
-                {generatingProgress && ` [${generatingProgress.current}/${generatingProgress.total} 話]`}
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-blue-300">バックグラウンド執筆中</span>
+                {generatingProgress && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-extrabold">
+                    {generatingProgress.message || '生成中'}
+                  </span>
+                )}
               </div>
-              <div className="text-xs text-blue-300">
-                {generatingTheme ? `テーマ: 「${generatingTheme}」 | ` : ''}{generatingProgress?.message || 'AIが構成・英文・翻訳・重要語彙を精査しています'}
+              <div className="text-sm font-bold text-white truncate max-w-sm pt-0.5">
+                {generatingTheme ? `『${generatingTheme}』` : '新しい物語を執筆中...'}
               </div>
             </div>
           </div>
@@ -181,114 +181,12 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 2: Story Count & Continuity */}
-        <div className="space-y-4 pt-2 border-t border-slate-800/80">
-          <div className="flex items-center justify-between">
-            <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
-              <Compass className="w-4 h-4 text-blue-400" />
-              <span>2. 連続生成数（話数）と連続性:</span>
-            </label>
-            <span className="text-xs font-bold text-blue-400">
-              {storyCount === 1 ? '単発 1話' : `${storyCount}話 ${isContinuous ? '連載' : 'オムニバス'}`}
-            </span>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-            {/* Story count spinner */}
-            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-2xl p-1">
-              <button
-                type="button"
-                onClick={() => changeStoryCount(-1)}
-                disabled={storyCount <= 1}
-                className="px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-xl transition-colors font-bold text-sm"
-                title="1話減らす"
-              >
-                <Minus className="w-4 h-4" />
-              </button>
-              <div className="w-16 text-center text-base sm:text-lg font-bold text-blue-400 select-none">
-                {storyCount} 話
-              </div>
-              <button
-                type="button"
-                onClick={() => changeStoryCount(1)}
-                disabled={storyCount >= 5}
-                className="px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-xl transition-colors font-bold text-sm"
-                title="1話増やす"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Quick Count Preset Chips */}
-            <div className="flex items-center space-x-1.5 text-xs">
-              {[1, 2, 3, 5].map((count) => (
-                <button
-                  key={count}
-                  type="button"
-                  onClick={() => setStoryCount(count)}
-                  className={`px-3 py-2 rounded-xl font-semibold transition-colors ${
-                    storyCount === count
-                      ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                  }`}
-                >
-                  {count === 1 ? '1話（単発）' : `${count}話`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Continuity Toggle (shown when storyCount > 1) */}
-          {storyCount > 1 && (
-            <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2 animate-fadeIn">
-              <div className="text-xs font-bold text-slate-300">ストーリーの連続性:</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsContinuous(true)}
-                  className={`p-3 rounded-xl border text-left transition-all ${
-                    isContinuous
-                      ? 'bg-blue-600/20 border-blue-500 text-white ring-1 ring-blue-500'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2 font-bold text-xs sm:text-sm">
-                    <Link className="w-3.5 h-3.5 text-blue-400" />
-                    <span>🔗 連続ストーリー（連載）</span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-1 leading-tight">
-                    前話のあらすじを引き継ぐ連続ストーリー（前編・中編・完結編など）
-                  </p>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsContinuous(false)}
-                  className={`p-3 rounded-xl border text-left transition-all ${
-                    !isContinuous
-                      ? 'bg-blue-600/20 border-blue-500 text-white ring-1 ring-blue-500'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2 font-bold text-xs sm:text-sm">
-                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>📄 独立ストーリー（オムニバス）</span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-1 leading-tight">
-                    同じ学習ターゲット構文を異なるシチュエーションで味わう短編集
-                  </p>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Step 3: CEFR Level */}
+        {/* Step 2: CEFR Level */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <div className="flex items-center justify-between">
             <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
               <Layers className="w-4 h-4 text-blue-400" />
-              <span>3. 英語難易度レベルを選択:</span>
+              <span>2. 英語難易度レベルを選択:</span>
             </label>
             <span className="text-xs text-blue-400 font-bold">
               {levelDescriptions[currentLevel]?.name}
@@ -319,11 +217,11 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 4: Word Count Target */}
+        {/* Step 3: Word Count Target */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
             <Clock className="w-4 h-4 text-blue-400" />
-            <span>4. 1話あたりの目標単語数（ボリューム）:</span>
+            <span>3. 目標単語数（ボリューム）:</span>
           </label>
 
           <div className="flex items-center flex-wrap gap-3">
@@ -345,7 +243,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
                 onChange={(e) => setWordCount(Number(e.target.value) || 700)}
                 className="w-20 bg-transparent text-center text-base sm:text-lg font-bold text-blue-400 outline-none"
               />
-              <span className="text-xs font-semibold text-slate-400 pr-2">words / 話</span>
+              <span className="text-xs font-semibold text-slate-400 pr-2">words</span>
               <button
                 type="button"
                 onClick={() => changeWordCount(100)}
@@ -375,10 +273,10 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           </div>
         </div>
 
-        {/* Step 5: Theme / Prompt & Target Preview */}
+        {/* Step 4: Theme / Prompt & Target Preview */}
         <div className="space-y-3 pt-2 border-t border-slate-800/80">
           <label className="text-xs sm:text-sm font-bold text-white block">
-            5. テーマ・シチュエーション（任意）:
+            4. テーマ・シチュエーション（任意）:
           </label>
 
           <input
@@ -386,7 +284,7 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             value={promptInput}
             onChange={(e) => setPromptInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !isGenerating) {
+              if (e.key === 'Enter') {
                 handleStartGeneration();
               }
             }}
@@ -429,31 +327,19 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
         {/* Action Button: Start generation in background */}
         <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-slate-400">
-            ※生成開始後、すぐに本棚に戻って読書を続けられます（バックグラウンド生成）
+            ※生成ボタンを押すとキューに追加され、バックグラウンドで自動執筆されます（連続追加可能）
           </p>
 
           <button
             onClick={handleStartGeneration}
-            disabled={isGenerating}
-            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-8 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white rounded-2xl text-sm font-bold shadow-xl shadow-blue-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-8 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white rounded-2xl text-sm font-bold shadow-xl shadow-blue-600/30 transition-all cursor-pointer"
           >
-            {isGenerating ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>生成中（{generatingProgress ? `[${generatingProgress.current}/${generatingProgress.total}]` : '執筆中...'}）</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4" />
-                <span>
-                  {storyCount === 1
-                    ? 'スクリプトを生成する'
-                    : isContinuous
-                    ? `${storyCount}話の連続ストーリーを一括生成する`
-                    : `${storyCount}編の独立ストーリーを一括生成する`}
-                </span>
-              </>
-            )}
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            <span>
+              {isGenerating
+                ? '✨ キューに追加して生成（現在執筆中）'
+                : '✨ スクリプトを生成する'}
+            </span>
           </button>
         </div>
       </div>

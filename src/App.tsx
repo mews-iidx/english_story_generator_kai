@@ -58,7 +58,6 @@ import {
   loadExpressionErrors,
   saveExpressionError,
   deleteExpressionError,
-  incrementExpressionReinforced,
   addTokenUsage,
   resetAllData,
   loadStoryQueue,
@@ -109,6 +108,7 @@ export const App: React.FC = () => {
   // 物語バックグラウンド順次生成キュー
   const [queueTasks, setQueueTasks] = useState<StoryQueueTask[]>(() => loadStoryQueue());
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
+  const [isCallActive, setIsCallActive] = useState(false);
   const isProcessingQueueRef = React.useRef(false);
 
   // 単語・複数単語タップ選択＆ボトムシート翻訳状態
@@ -348,10 +348,37 @@ export const App: React.FC = () => {
         }
       );
 
-      // ストーリー保存
-      res.stories.forEach(story => {
-        saveStory(story);
-      });
+      // ストーリー保存 & 連載番号付け (1/2, 2/2...)
+      const currentList = loadStories();
+      const seriesId = nextTask.seriesId;
+
+      if (seriesId) {
+        const existingSeriesStories = currentList.filter(s => s.seriesId === seriesId);
+        const newEpIndex = existingSeriesStories.length + 1;
+        const newTotalEp = newEpIndex;
+
+        // 生成されたストーリーに episodeIndex と totalEpisodes を設定
+        res.stories.forEach((story, idx) => {
+          story.seriesId = seriesId;
+          story.episodeIndex = newEpIndex + idx;
+          story.totalEpisodes = newTotalEp;
+          story.seriesType = 'continuous';
+          saveStory(story);
+        });
+
+        // 既存のエピソードの totalEpisodes を更新
+        existingSeriesStories.forEach(s => {
+          s.totalEpisodes = newTotalEp;
+          s.seriesType = 'continuous';
+          saveStory(s);
+        });
+      } else {
+        res.stories.forEach(story => {
+          story.episodeIndex = 1;
+          story.totalEpisodes = 1;
+          saveStory(story);
+        });
+      }
 
       if (res.totalPromptTokens || res.totalCandidatesTokens) {
         handleRecordTokenUsage(res.totalPromptTokens, res.totalCandidatesTokens);
@@ -403,15 +430,29 @@ export const App: React.FC = () => {
   // 次話（続き）のキュー追加
   const handleQueueNextEpisode = (story: Story) => {
     const title = story.titleJa || story.title;
-    const nextEpIndex = (story.episodeIndex || 1) + 1;
+    let seriesId = story.seriesId;
+    if (!seriesId) {
+      seriesId = 'series_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      story.seriesId = seriesId;
+      story.episodeIndex = 1;
+      story.totalEpisodes = 1;
+      story.seriesType = 'continuous';
+      saveStory(story);
+      setStories(loadStories());
+    }
+
+    const currentEpIndex = story.episodeIndex || 1;
+    const nextEpIndex = currentEpIndex + 1;
     const taskTitle = `『${title}』の続き (第${nextEpIndex}話)`;
-    const promptText = `前話「${title}」のあらすじ: ${story.summary || '主人公たちの冒険'}。この物語の自然な続きとなる第${nextEpIndex}話を執筆してください。`;
+    const promptText = `前話「${title}」のあらすじ: ${story.summary || '主人公たちの物語'}。この物語の自然な続きとなる第${nextEpIndex}話を執筆してください。`;
 
     enqueueStoryTask({
       title: taskTitle,
       topic: story.summary,
+      seriesId,
       seriesType: 'continuous',
       storyCount: 1,
+      totalEpisodes: nextEpIndex,
       params: {
         apiKey: settings.geminiApiKey,
         model: settings.geminiModel,
@@ -443,12 +484,10 @@ export const App: React.FC = () => {
     setQueueTasks(loadStoryQueue());
   };
 
-  const handleGenerateStoryInBackground = async (
+  const handleGenerateStoryInBackground = (
     userPrompt?: string,
     wordCount = 700,
-    contentType: ContentType = 'podcast',
-    storyCount = 1,
-    isContinuous = true
+    contentType: ContentType = 'podcast'
   ) => {
     if (!settings.geminiApiKey) {
       alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
@@ -456,85 +495,28 @@ export const App: React.FC = () => {
       return;
     }
 
-    setIsGenerating(true);
-    setGeneratingTheme(userPrompt || '');
-    setGeneratingProgress({ current: 1, total: storyCount, message: '執筆準備中...' });
-    setActiveTab('bookshelf');
+    const title = userPrompt ? `『${userPrompt.slice(0, 20)}』` : '新しいストーリー';
 
-    try {
-      const currentStoryList = loadStories();
-      const recentSummaries = extractRecentSummaries(currentStoryList, 5);
-      const currentVocabs = loadVocabs();
-      const errorList = loadExpressionErrors();
+    enqueueStoryTask({
+      title,
+      topic: userPrompt,
+      seriesType: 'single',
+      storyCount: 1,
+      totalEpisodes: 1,
+      params: {
+        apiKey: settings.geminiApiKey,
+        model: settings.geminiModel,
+        cefrLevel: settings.cefrLevel,
+        contentType,
+        userPrompt,
+        targetVocabs: [],
+        recentSummaries: [],
+        targetWordCount: wordCount,
+      },
+    });
 
-      // 単語のクールダウン付き選定（直近話の重複防止）
-      const selectedDueVocabs = pickTargetVocabsForStory(currentVocabs, 4, currentStoryList);
-      // 偽英語・発話カルテからの本質パターン選定
-      const targetErrorPatterns = pickTargetErrorPatternsForStory(errorList, 2);
-
-      // CEFRマスターDBからの未習得構文・単語の自動選定
-      const levelKey = (settings.cefrLevel === 'C1' ? 'B2' : settings.cefrLevel) as 'A1' | 'A2' | 'B1' | 'B2';
-      const targetPatterns = getUnmasteredTargetPatterns(levelKey, 3);
-      const targetVocabMaster = getUnmasteredTargetVocabs(levelKey, 4);
-
-      const res = await generateStorySeriesWithGemini(
-        {
-          apiKey: settings.geminiApiKey,
-          model: settings.geminiModel,
-          cefrLevel: settings.cefrLevel,
-          contentType,
-          storyCount,
-          isContinuous,
-          userPrompt,
-          targetVocabs: selectedDueVocabs,
-          targetPatterns,
-          targetVocabMaster,
-          targetErrorPatterns,
-          recentSummaries,
-          targetWordCount: wordCount,
-        },
-        (current, total, message) => {
-          setGeneratingProgress({ current, total, message });
-        }
-      );
-
-      // ストーリーで応用強化されたパターンのカウントアップ
-      targetErrorPatterns.forEach(p => {
-        incrementExpressionReinforced(p.corePattern);
-      });
-
-      if (res.totalPromptTokens || res.totalCandidatesTokens) {
-        handleRecordTokenUsage(res.totalPromptTokens, res.totalCandidatesTokens);
-      }
-
-      // 生成されたストーリーを保存
-      res.stories.forEach(story => {
-        saveStory(story);
-      });
-
-      const updatedStories = loadStories();
-      setStories(updatedStories);
-
-      if (storyCount > 1) {
-        if (isContinuous) {
-          setNotificationToast(`🎉 連続ストーリー『${res.stories[0]?.titleJa || res.stories[0]?.title}』（全${storyCount}話）が本棚に追加されました！`);
-        } else {
-          setNotificationToast(`🎉 ${storyCount}編の独立ストーリーが本棚に追加されました！`);
-        }
-      } else {
-        const first = res.stories[0];
-        setNotificationToast(`🎉 新しいエピソード『${first?.titleJa || first?.title}』が本棚に追加されました！`);
-      }
-
-      triggerAutoSync(vocabs, updatedStories);
-    } catch (err: any) {
-      console.error('Generation error', err);
-      alert(`スクリプト生成に失敗しました:\n${err.message}`);
-    } finally {
-      setIsGenerating(false);
-      setGeneratingTheme('');
-      setGeneratingProgress(undefined);
-    }
+    setQueueTasks(loadStoryQueue());
+    setNotificationToast(`⏳ ${title} を生成キューに追加しました！`);
   };
 
   // 外部JSONインポートハンドラー
@@ -924,6 +906,7 @@ export const App: React.FC = () => {
         onInstallPWA={handleInstallPWA}
         isGenerating={isGenerating}
         generatingTheme={generatingTheme}
+        isCallActive={isCallActive}
       />
 
       {/* Non-intrusive notification toast for completed background generation */}
@@ -1051,6 +1034,7 @@ export const App: React.FC = () => {
                 onSaveExpressionError={handleSaveExpressionError}
                 onRecordTokenUsage={handleRecordTokenUsage}
                 savedVocabPhrases={savedVocabPhrases}
+                onCallStateChange={(active: boolean) => setIsCallActive(active)}
               />
             )}
 

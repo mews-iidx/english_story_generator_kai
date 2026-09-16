@@ -75,6 +75,7 @@ interface CallViewProps {
   onSaveExpressionError?: (item: any) => any;
   onRecordTokenUsage?: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases: Set<string>;
+  onCallStateChange?: (isActive: boolean) => void;
 }
 
 
@@ -104,6 +105,7 @@ export const CallView: React.FC<CallViewProps> = ({
   onSaveExpressionError,
   onRecordTokenUsage,
   savedVocabPhrases,
+  onCallStateChange,
 }) => {
   // 画面モード: lobby (一覧) | call (音声通話中) | chat (テキストチャット中) | rally_chat (ラリー特訓中) | summary (通話後サマリー) | rally_summary (ラリー後サマリー)
   const [viewState, setViewState] = useState<'lobby' | 'call' | 'chat' | 'rally_chat' | 'summary' | 'rally_summary'>('lobby');
@@ -170,6 +172,12 @@ export const CallView: React.FC<CallViewProps> = ({
     }
   }, []);
 
+  // 通話中ステート通知（ナビゲーションロック用）
+  useEffect(() => {
+    const isActive = viewState === 'call' || viewState === 'chat' || viewState === 'rally_chat';
+    onCallStateChange?.(isActive);
+  }, [viewState, onCallStateChange]);
+
   // 通話タイマー
   useEffect(() => {
     if ((viewState === 'call' && connectionState === 'connected') || viewState === 'chat' || viewState === 'rally_chat') {
@@ -196,7 +204,7 @@ export const CallView: React.FC<CallViewProps> = ({
   }, [callMessages, isSendingChat, viewState]);
 
   // 音声通話開始ハンドラー
-  const handleStartCall = async (persona?: Persona | null) => {
+  const handleStartCall = async (persona?: Persona | null, isRallyMode: boolean = false, customRallyTopic?: string) => {
     if (!apiKey) {
       alert('Gemini APIキーを設定してください（設定画面から登録可能です）');
       return;
@@ -218,6 +226,8 @@ export const CallView: React.FC<CallViewProps> = ({
       voiceName: selectedPersona?.voiceName || 'Aoede',
       persona: selectedPersona || undefined,
       isPushToTalk,
+      isRallyMode,
+      customTopic: customRallyTopic || (isRallyMode ? selectedRallyTopic : undefined),
       callbacks: {
         onStateChange: (state, error) => {
           setConnectionState(state);
@@ -871,28 +881,53 @@ export const CallView: React.FC<CallViewProps> = ({
             </div>
 
             {/* Ready to Start Quick Action Card */}
-            <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-6">
-              <div className="space-y-2 text-center sm:text-left">
-                <div className="inline-flex items-center space-x-2 text-xs font-semibold text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
-                  <span>選択中トピック:</span>
-                  <span className="text-white font-bold">{selectedRallyTopic}</span>
+            <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-stretch gap-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-2 text-left">
+                  <div className="inline-flex items-center space-x-2 text-xs font-semibold text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
+                    <span>選択中トピック:</span>
+                    <span className="text-white font-bold">{selectedRallyTopic}</span>
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-extrabold text-white">
+                    準備はいいですか？ AIと瞬間ラリーを開始しましょう！
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-400 max-w-lg">
+                    音声通話（Gemini Live）またはテキストチャットで高速ラリー特訓。言えなかった表現はセッション終了後にまとめて武器化（Anki装備）できます。
+                  </p>
                 </div>
-                <h3 className="text-lg sm:text-xl font-extrabold text-white">
-                  準備はいいですか？ AIと瞬間ラリーを開始しましょう！
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-400 max-w-lg">
-                  困ったときは「💡 カンペ候補」や「🌐 AI質問の和訳」が使えます。日本語で返答しても自動で英語化＆武器化されます。
-                </p>
+
+                {/* Push-to-Talk Toggle */}
+                <label className="flex items-center space-x-2 bg-slate-950/80 border border-slate-800 px-3.5 py-2 rounded-xl text-xs text-slate-300 cursor-pointer hover:border-amber-500/30 transition-all self-start sm:self-auto">
+                  <input
+                    type="checkbox"
+                    checked={isPushToTalk}
+                    onChange={(e) => setIsPushToTalk(e.target.checked)}
+                    className="rounded text-amber-500 focus:ring-amber-500 bg-slate-900 border-slate-700"
+                  />
+                  <span>Push to Talk（スペース長押し）</span>
+                </label>
               </div>
 
-              <button
-                type="button"
-                onClick={() => handleStartRally(selectedRallyTopic)}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black rounded-2xl text-sm sm:text-base shadow-xl shadow-amber-500/30 active:scale-95 transition-all"
-              >
-                <Zap className="w-5 h-5 fill-current" />
-                <span>⚡ 瞬間ラリーを開始（チャット）</span>
-              </button>
+              {/* Start Buttons: Voice vs Chat */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => handleStartCall(null, true, selectedRallyTopic)}
+                  className="flex items-center justify-center space-x-2.5 px-6 py-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black rounded-2xl text-sm sm:text-base shadow-xl shadow-amber-500/30 active:scale-95 transition-all"
+                >
+                  <Phone className="w-5 h-5 fill-current" />
+                  <span>⚡ リアルタイム音声通話で特訓（Gemini Live）</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleStartRally(selectedRallyTopic)}
+                  className="flex items-center justify-center space-x-2 px-6 py-4 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-amber-500/30 font-bold rounded-2xl text-sm sm:text-base transition-all"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                  <span>💬 テキストチャットで特訓</span>
+                </button>
+              </div>
             </div>
 
             {/* 3-Step Feature Guide */}

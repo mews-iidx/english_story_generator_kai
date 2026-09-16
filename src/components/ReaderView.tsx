@@ -593,7 +593,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </div>
 
         <div className="flex items-center space-x-2 text-xs">
-          {currentStory.episodeIndex && currentStory.totalEpisodes && (
+          {currentStory.episodeIndex && currentStory.totalEpisodes && currentStory.totalEpisodes > 1 && (
             <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
               <Film className="w-3 h-3" />
               第 {currentStory.episodeIndex}/{currentStory.totalEpisodes} 話

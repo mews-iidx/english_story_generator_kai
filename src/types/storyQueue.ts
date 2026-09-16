@@ -7,6 +7,8 @@ export interface StoryQueueTask {
   id: string;
   title: string;
   topic?: string;
+  seriesId?: string;
+  parentStoryId?: string;
   seriesType: 'single' | 'continuous' | 'omnibus';
   storyCount: number;
   currentEpisodeIndex: number;

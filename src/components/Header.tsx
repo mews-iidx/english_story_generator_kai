@@ -14,6 +14,7 @@ interface HeaderProps {
   onInstallPWA?: () => void;
   isGenerating?: boolean;
   generatingTheme?: string;
+  isCallActive?: boolean;
 }
 
 interface TabItem {
@@ -34,6 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   onInstallPWA,
   isGenerating,
   generatingTheme,
+  isCallActive = false,
 }) => {
   const tabs: TabItem[] = [
     { id: 'bookshelf', label: '物語', icon: BookOpen },
@@ -45,6 +47,14 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'settings', label: '設定', icon: Settings },
   ];
 
+  const handleTabClick = (tabId: NavTab) => {
+    if (isCallActive && tabId !== 'call') {
+      alert('⚠️ 通話・特訓セッション中です。画面上の終了ボタンを押してから他のメニューへ移動してください。');
+      return;
+    }
+    setActiveTab(tabId);
+  };
+
   return (
     <>
       {/* 1. Desktop & Mobile Top Header */}
@@ -52,7 +62,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="max-w-5xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between">
           {/* Logo */}
           <div 
-            onClick={() => setActiveTab('bookshelf')}
+            onClick={() => handleTabClick('bookshelf')}
             className="flex items-center space-x-2 cursor-pointer group"
           >
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-cyan-500/20 group-hover:scale-105 transition-transform border border-cyan-400/30">
@@ -73,18 +83,25 @@ export const Header: React.FC<HeaderProps> = ({
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
+              const isCallTab = tab.id === 'call';
+
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => handleTabClick(tab.id)}
                   className={`relative flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                     isActive
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : isCallActive && isCallTab
+                      ? 'bg-rose-950/60 border border-rose-500/40 text-rose-300 animate-pulse'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   <span>{tab.label}</span>
+                  {isCallActive && isCallTab && (
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                  )}
                   {tab.badge !== undefined && (
                     <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950">
                       {tab.badge}
@@ -97,10 +114,22 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right Action */}
           <div className="flex items-center space-x-2">
+            {/* Active Call Pill */}
+            {isCallActive && (
+              <div
+                onClick={() => setActiveTab('call')}
+                className="flex items-center space-x-1.5 px-2.5 py-1 bg-rose-950/80 border border-rose-500/50 rounded-xl text-xs text-rose-300 cursor-pointer animate-pulse"
+                title="通話中（タップで通話画面へ）"
+              >
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                <span className="text-[11px] font-bold">🔴 通話・特訓中</span>
+              </div>
+            )}
+
             {/* Background generation pill */}
             {isGenerating && (
               <div 
-                onClick={() => setActiveTab('create')}
+                onClick={() => handleTabClick('create')}
                 className="flex items-center space-x-1.5 px-2.5 py-1 bg-blue-950/70 border border-blue-500/40 rounded-xl text-xs text-blue-300 cursor-pointer hover:bg-blue-900/50 transition-colors animate-pulse"
                 title={generatingTheme ? `AIが「${generatingTheme}」を裏で執筆中です` : 'AIが裏で物語を執筆中です'}
               >
@@ -135,23 +164,30 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </header>
 
-      {/* 2. Mobile Bottom Navigation Bar (8 compact items) */}
+      {/* 2. Mobile Bottom Navigation Bar */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/90 px-1 py-1.5 flex items-center justify-around shadow-2xl safe-area-pb">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
+          const isCallTab = tab.id === 'call';
+
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabClick(tab.id)}
               className={`relative flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all flex-1 ${
                 isActive
                   ? 'text-blue-400 font-bold'
+                  : isCallActive && isCallTab
+                  ? 'text-rose-400 font-bold animate-pulse'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <div className="relative">
                 <Icon className={`w-4 h-4 transition-transform ${isActive ? 'scale-110' : ''}`} />
+                {isCallActive && isCallTab && (
+                  <span className="absolute -top-1 -left-1 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                )}
                 {tab.badge !== undefined && (
                   <span className="absolute -top-1 -right-2 min-w-[14px] h-3.5 px-0.5 rounded-full text-[8px] font-bold bg-amber-500 text-slate-950 flex items-center justify-center">
                     {tab.badge}

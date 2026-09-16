@@ -1322,6 +1322,8 @@ export async function chatWithRallyPartner(params: RallyPartnerParams): Promise<
     };
   }
 
+  const isFirstTurn = history.length === 0;
+
   const systemInstruction = `You are "Rally Bot", an energetic, conversational English sparring partner and immediate fluency coach.
 Your goal is to keep an engaging, fast-paced conversational rally with the learner while helping them immediately "weaponize" any unsaid or awkward English into useful sentences.
 
@@ -1335,19 +1337,18 @@ Your goal is to keep an engaging, fast-paced conversational rally with the learn
    - Do NOT give long lectures in your conversational speech.
 
 2. TWO-TIER FEEDBACK (VERY IMPORTANT):
-   Analyze the user's latest input:
+   ${isFirstTurn ? 'This is the opening turn, so set hasCorrection to false.' : `Analyze the user's latest input:
    - If the user wrote in Japanese (because they didn't know how to say it in English), treat "hasCorrection" as true. Provide:
      • grammarFix: A clear, correct direct English translation.
      • naturalExpression: A super natural, idiomatic native expression.
      • explanation: "日本語でおっしゃった内容を英語化しました。"
    - If the user wrote in English:
-     • If it has fatal grammar errors (tense, missing preposition, wrong auxiliary, subject-verb agreement):
-       - grammarFix: Fix ONLY the fatal grammar mistakes while keeping the user's exact words and structure as intact as possible.
-       - naturalExpression: Provide how a native speaker would naturally/casually say this idea.
-       - explanation: 1-2 friendly Japanese sentences explaining the exact fix.
+     • If it has fatal grammar errors:
+       - grammarFix: Fix ONLY the fatal grammar mistakes.
+       - naturalExpression: Provide how a native speaker would naturally say this.
+       - explanation: 1-2 friendly Japanese sentences explaining the fix.
      • If their English is already 100% natural and error-free:
-       - hasCorrection: false.
-       - grammarFix & naturalExpression can be the user's sentence or a cool synonym.
+       - hasCorrection: false.`}
 
 3. 3 SUGGESTION CHIPS (カンペ候補):
    Generate 3 diverse, natural ways the user could reply to your nextQuestion:
@@ -1378,7 +1379,7 @@ Return ONLY a pure JSON object:
   ]
 }`;
 
-  const formattedHistory = history.slice(-8).map(h => ({
+  const formattedHistory = history.slice(-6).map(h => ({
     role: h.role === 'user' ? 'user' : 'model',
     parts: [{ text: h.text }],
   }));
@@ -1394,11 +1395,15 @@ Return ONLY a pure JSON object:
   const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
 
   for (const currentModel of candidateModels) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
+
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemInstruction }] },
           contents,
@@ -1408,6 +1413,8 @@ Return ONLY a pure JSON object:
           },
         }),
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
@@ -1424,9 +1431,9 @@ Return ONLY a pure JSON object:
       const parsed = JSON.parse(cleaned);
 
       return {
-        reaction: parsed.reaction || 'Got it!',
-        nextQuestion: parsed.nextQuestion || 'What do you think?',
-        nextQuestionJa: parsed.nextQuestionJa || 'あなたはどう思いますか？',
+        reaction: parsed.reaction || 'Great to chat with you!',
+        nextQuestion: parsed.nextQuestion || `Let's talk about ${topicPrompt}. What comes to mind first?`,
+        nextQuestionJa: parsed.nextQuestionJa || `「${topicPrompt}」について、まずどんなことが思い浮かびますか？`,
         feedback: parsed.feedback ? {
           hasCorrection: Boolean(parsed.feedback.hasCorrection),
           userOriginalText: parsed.feedback.userOriginalText || userText,
@@ -1434,18 +1441,30 @@ Return ONLY a pure JSON object:
           naturalExpression: parsed.feedback.naturalExpression || parsed.feedback.grammarFix || userText,
           explanation: parsed.feedback.explanation || '',
         } : undefined,
-        suggestionChips: Array.isArray(parsed.suggestionChips) ? parsed.suggestionChips : [],
+        suggestionChips: Array.isArray(parsed.suggestionChips) && parsed.suggestionChips.length > 0
+          ? parsed.suggestionChips
+          : [
+              { text: `Well, when it comes to ${topicPrompt}, I usually think about...`, labelJa: "個人的には〜を思い浮かべると答える" },
+              { text: "Actually, to be honest, I...", labelJa: "正直に言うと〜だと答える" },
+              { text: "What do you think about it first?", labelJa: "AI側の意見を逆に聞き返す" },
+            ],
         tokenUsage: usage,
       };
     } catch (err) {
+      clearTimeout(timeoutId);
       console.warn(`chatWithRallyPartner failed with ${currentModel}:`, err);
     }
   }
 
+  // Instant dynamic fallback (zero wait)
   return {
-    reaction: 'Thanks for sharing!',
-    nextQuestion: 'Could you tell me a little more about that?',
-    nextQuestionJa: 'それについてもう少し詳しく教えてもらえますか？',
-    suggestionChips: [],
+    reaction: `Hey! Excited to spar with you on "${topicPrompt}".`,
+    nextQuestion: `To start off, what's your personal take or favorite experience regarding ${topicPrompt}?`,
+    nextQuestionJa: `まず最初に、「${topicPrompt}」に関してあなたの個人的な体験や考えを教えてください！`,
+    suggestionChips: [
+      { text: `Well, when it comes to ${topicPrompt}, I usually...`, labelJa: "〜に関して言うと、普段は…と答える" },
+      { text: `Honestly, I don't have much experience, but...`, labelJa: "あまり経験はないけど…と答える" },
+      { text: `What's your own favorite thing about it?`, labelJa: "AI側のおすすめを聞き返す" },
+    ],
   };
 }
