@@ -65,6 +65,8 @@ import {
   cancelStoryTask,
   removeStoryTask,
   updateStoryTask,
+  clearStoryQueueHistory,
+  sanitizeStuckStoryQueue,
   getUnmasteredTargetPatterns,
   getUnmasteredTargetVocabs,
 } from './services/storage';
@@ -106,7 +108,7 @@ export const App: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // 物語バックグラウンド順次生成キュー
-  const [queueTasks, setQueueTasks] = useState<StoryQueueTask[]>(() => loadStoryQueue());
+  const [queueTasks, setQueueTasks] = useState<StoryQueueTask[]>(() => sanitizeStuckStoryQueue());
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [isCallActive, setIsCallActive] = useState(false);
   const isProcessingQueueRef = React.useRef(false);
@@ -293,11 +295,21 @@ export const App: React.FC = () => {
     if (isProcessingQueueRef.current) return;
     const currentQueue = loadStoryQueue();
     const nextTask = currentQueue.find(t => t.status === 'pending');
-    if (!nextTask) return;
+    
+    // 待機中タスクがない場合は生成状態を確実に解除
+    if (!nextTask) {
+      isProcessingQueueRef.current = false;
+      setIsGenerating(false);
+      setGeneratingTheme('');
+      setGeneratingProgress(undefined);
+      setQueueTasks(currentQueue);
+      return;
+    }
 
     if (!settings.geminiApiKey) {
       updateStoryTask(nextTask.id, t => ({ ...t, status: 'failed', error: 'APIキーが設定されていません' }));
       setQueueTasks(loadStoryQueue());
+      setIsGenerating(false);
       return;
     }
 
@@ -388,7 +400,7 @@ export const App: React.FC = () => {
         ...t,
         status: 'completed',
         completedAt: new Date().toISOString(),
-        generatedStories: res.stories,
+        generatedStoryIds: res.stories.map(s => s.id),
       }));
 
       const updatedStories = loadStories();
@@ -404,17 +416,21 @@ export const App: React.FC = () => {
         error: err?.message || '生成エラーが発生しました',
       }));
       setQueueTasks(loadStoryQueue());
+      setNotificationToast(`⚠️ 『${nextTask.title}』の生成中にエラーが発生しました`);
     } finally {
       isProcessingQueueRef.current = false;
       const remainingQueue = loadStoryQueue();
       const hasMore = remainingQueue.some(t => t.status === 'pending');
       setIsGenerating(hasMore);
+      setQueueTasks(remainingQueue);
       if (!hasMore) {
         setGeneratingTheme('');
         setGeneratingProgress(undefined);
       } else {
         // 次のタスクへ連続実行
-        setTimeout(processNextQueueTask, 500);
+        setTimeout(() => {
+          processNextQueueTask();
+        }, 300);
       }
     }
   }, [settings, vocabs, handleRecordTokenUsage, triggerAutoSync]);
@@ -424,8 +440,14 @@ export const App: React.FC = () => {
     const hasPending = queueTasks.some(t => t.status === 'pending');
     if (hasPending && !isProcessingQueueRef.current) {
       processNextQueueTask();
+    } else if (!hasPending && !queueTasks.some(t => t.status === 'generating')) {
+      if (isGenerating) {
+        setIsGenerating(false);
+        setGeneratingTheme('');
+        setGeneratingProgress(undefined);
+      }
     }
-  }, [queueTasks, processNextQueueTask]);
+  }, [queueTasks, processNextQueueTask, isGenerating]);
 
   // 次話（続き）のキュー追加
   const handleQueueNextEpisode = (story: Story) => {
@@ -472,6 +494,13 @@ export const App: React.FC = () => {
   const handleCancelQueueTask = (taskId: string) => {
     const updated = cancelStoryTask(taskId);
     setQueueTasks(updated);
+    const hasPendingOrGenerating = updated.some(t => t.status === 'pending' || t.status === 'generating');
+    if (!hasPendingOrGenerating) {
+      isProcessingQueueRef.current = false;
+      setIsGenerating(false);
+      setGeneratingTheme('');
+      setGeneratingProgress(undefined);
+    }
   };
 
   const handleRemoveQueueTask = (taskId: string) => {
@@ -482,6 +511,11 @@ export const App: React.FC = () => {
   const handleRetryQueueTask = (task: StoryQueueTask) => {
     updateStoryTask(task.id, t => ({ ...t, status: 'pending', error: undefined }));
     setQueueTasks(loadStoryQueue());
+  };
+
+  const handleClearQueueHistory = () => {
+    const updated = clearStoryQueueHistory();
+    setQueueTasks(updated);
   };
 
   const handleGenerateStoryInBackground = (
@@ -995,6 +1029,8 @@ export const App: React.FC = () => {
                 isGenerating={isGenerating}
                 generatingTheme={generatingTheme}
                 generatingProgress={generatingProgress}
+                queueTasks={queueTasks}
+                onOpenQueueModal={() => setIsQueueModalOpen(true)}
                 onGenerateStory={handleGenerateStoryInBackground}
                 onOpenImportModal={() => setIsImportModalOpen(true)}
                 onNavigateToBookshelf={() => setActiveTab('bookshelf')}
@@ -1095,6 +1131,7 @@ export const App: React.FC = () => {
         onCancelTask={handleCancelQueueTask}
         onRemoveTask={handleRemoveQueueTask}
         onRetryTask={handleRetryQueueTask}
+        onClearHistory={handleClearQueueHistory}
         isProcessing={isGenerating}
       />
 

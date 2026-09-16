@@ -1917,7 +1917,8 @@ export function loadStoryQueue(): StoryQueueTask[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.STORY_QUEUE);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed: StoryQueueTask[] = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     console.error('Failed to load story queue', e);
     return [];
@@ -1926,7 +1927,22 @@ export function loadStoryQueue(): StoryQueueTask[] {
 
 export function saveStoryQueue(tasks: StoryQueueTask[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.STORY_QUEUE, JSON.stringify(tasks));
+    // スリム化 & 履歴件数制限（最大10件）
+    // generatedStories の巨大オブジェクトをストレージから除外し、QuotaExceededError を完全に防ぐ
+    const activeTasks = tasks.filter(t => t.status === 'pending' || t.status === 'generating');
+    const historyTasks = tasks
+      .filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
+      .slice(-10);
+
+    const pruned: StoryQueueTask[] = [...activeTasks, ...historyTasks].map(t => {
+      const { generatedStories, ...rest } = t;
+      return {
+        ...rest,
+        generatedStoryIds: t.generatedStoryIds || (generatedStories ? generatedStories.map(s => s.id) : []),
+      };
+    });
+
+    localStorage.setItem(STORAGE_KEYS.STORY_QUEUE, JSON.stringify(pruned));
   } catch (e) {
     console.error('Failed to save story queue', e);
   }
@@ -1941,7 +1957,6 @@ export function enqueueStoryTask(task: Omit<StoryQueueTask, 'id' | 'createdAt' |
     status: 'pending',
     currentEpisodeIndex: 0,
     totalEpisodes: task.totalEpisodes || task.storyCount || 1,
-    generatedStories: [],
   };
   queue.push(newTask);
   saveStoryQueue(queue);
@@ -1952,7 +1967,7 @@ export function cancelStoryTask(taskId: string): StoryQueueTask[] {
   const queue = loadStoryQueue();
   const updated = queue.map(t => {
     if (t.id === taskId && (t.status === 'pending' || t.status === 'generating')) {
-      return { ...t, status: 'cancelled' as StoryQueueStatus };
+      return { ...t, status: 'cancelled' as StoryQueueStatus, error: 'ユーザーによってキャンセルされました' };
     }
     return t;
   });
@@ -1967,6 +1982,13 @@ export function removeStoryTask(taskId: string): StoryQueueTask[] {
   return updated;
 }
 
+export function clearStoryQueueHistory(): StoryQueueTask[] {
+  const queue = loadStoryQueue();
+  const activeOnly = queue.filter(t => t.status === 'pending' || t.status === 'generating');
+  saveStoryQueue(activeOnly);
+  return activeOnly;
+}
+
 export function updateStoryTask(taskId: string, updater: (task: StoryQueueTask) => StoryQueueTask): StoryQueueTask | null {
   const queue = loadStoryQueue();
   const idx = queue.findIndex(t => t.id === taskId);
@@ -1974,6 +1996,22 @@ export function updateStoryTask(taskId: string, updater: (task: StoryQueueTask) 
   const updated = updater(queue[idx]);
   queue[idx] = updated;
   saveStoryQueue(queue);
+  return updated;
+}
+
+export function sanitizeStuckStoryQueue(): StoryQueueTask[] {
+  const queue = loadStoryQueue();
+  let hasStuck = false;
+  const updated = queue.map(t => {
+    if (t.status === 'generating') {
+      hasStuck = true;
+      return { ...t, status: 'failed' as StoryQueueStatus, error: '前回のセッションで中断されました' };
+    }
+    return t;
+  });
+  if (hasStuck) {
+    saveStoryQueue(updated);
+  }
   return updated;
 }
 

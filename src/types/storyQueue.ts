@@ -19,7 +19,8 @@ export interface StoryQueueTask {
     storyCount?: number;
     isContinuous?: boolean;
   };
-  generatedStories: Story[];
+  generatedStoryIds?: string[];
+  generatedStories?: Story[];
   createdAt: string;
   startedAt?: string;
   completedAt?: string;

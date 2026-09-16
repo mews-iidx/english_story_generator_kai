@@ -4,12 +4,16 @@ import { ContentType } from '../types/story';
 import { Sparkles, RefreshCw, Minus, Plus, Layers, Clock, Mic, MessageSquare, BookOpen, FileText } from 'lucide-react';
 import { getUnmasteredTargetPatterns, getUnmasteredTargetVocabs } from '../services/storage';
 
+import { StoryQueueTask } from '../types/storyQueue';
+
 interface StoryCreateViewProps {
   currentLevel: CefrLevel;
   onLevelChange: (level: CefrLevel) => void;
   isGenerating: boolean;
   generatingTheme?: string;
   generatingProgress?: { current: number; total: number; message: string };
+  queueTasks?: StoryQueueTask[];
+  onOpenQueueModal?: () => void;
   onGenerateStory: (prompt?: string, wordCount?: number, contentType?: ContentType) => void;
   onOpenImportModal: () => void;
   onNavigateToBookshelf: () => void;
@@ -21,10 +25,14 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
   isGenerating,
   generatingTheme,
   generatingProgress,
+  queueTasks = [],
+  onOpenQueueModal,
   onGenerateStory,
   onOpenImportModal,
   onNavigateToBookshelf,
 }) => {
+  const pendingCount = queueTasks.filter(t => t.status === 'pending').length;
+  const isBusy = isGenerating || queueTasks.some(t => t.status === 'generating' || t.status === 'pending');
   const [contentType, setContentType] = useState<ContentType>('podcast');
   const [promptInput, setPromptInput] = useState('');
   const [wordCount, setWordCount] = useState<number>(700);
@@ -110,9 +118,9 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
         </div>
       </div>
 
-      {/* Generation Status Indicator (if currently running in background) */}
-      {isGenerating && (
-        <div className="bg-gradient-to-r from-blue-950/70 via-indigo-950/60 to-purple-950/70 border border-blue-500/40 rounded-3xl p-5 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-pulse">
+      {/* Generation Status Indicator (if currently running in background or queued) */}
+      {isBusy && (
+        <div className="bg-gradient-to-r from-blue-950/80 via-indigo-950/70 to-purple-950/80 border border-blue-500/40 rounded-3xl p-5 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
           <div className="flex items-center space-x-3.5 text-center sm:text-left">
             <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/30 flex-shrink-0">
               <RefreshCw className="w-5 h-5 text-white animate-spin" />
@@ -120,6 +128,11 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-xs font-bold text-blue-300">バックグラウンド執筆中</span>
+                {pendingCount > 0 && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-500/40 font-bold">
+                    残り待機: {pendingCount}件
+                  </span>
+                )}
                 {generatingProgress && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-extrabold">
                     {generatingProgress.message || '生成中'}
@@ -132,12 +145,23 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onNavigateToBookshelf}
-            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-colors whitespace-nowrap"
-          >
-            本棚を見る
-          </button>
+          <div className="flex items-center space-x-2">
+            {onOpenQueueModal && (
+              <button
+                onClick={onOpenQueueModal}
+                className="px-3.5 py-2 bg-slate-950 hover:bg-slate-850 text-blue-300 border border-blue-500/40 rounded-xl text-xs font-bold transition-colors whitespace-nowrap flex items-center space-x-1.5"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>キュー確認</span>
+              </button>
+            )}
+            <button
+              onClick={onNavigateToBookshelf}
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-colors whitespace-nowrap"
+            >
+              本棚を見る
+            </button>
+          </div>
         </div>
       )}
 
@@ -336,8 +360,8 @@ export const StoryCreateView: React.FC<StoryCreateViewProps> = ({
           >
             <Sparkles className="w-4 h-4 text-amber-300" />
             <span>
-              {isGenerating
-                ? '✨ キューに追加して生成（現在執筆中）'
+              {isBusy
+                ? `✨ キューに追加して生成 (執筆中${pendingCount > 0 ? `・待機${pendingCount}件` : ''})`
                 : '✨ スクリプトを生成する'}
             </span>
           </button>

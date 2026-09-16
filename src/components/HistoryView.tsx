@@ -85,7 +85,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
       {/* Active Queue Banner */}
-      {queueTasks.some(t => t.status === 'generating' || t.status === 'pending') && (
+      {(isGenerating || queueTasks.some(t => t.status === 'generating' || t.status === 'pending')) && (
         <div className="bg-gradient-to-r from-blue-950/80 to-indigo-950/80 border border-blue-500/40 rounded-3xl p-4 sm:p-5 shadow-xl flex items-center justify-between flex-wrap gap-3 animate-fadeIn">
           <div className="flex items-center space-x-3">
             <div className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-500/40 flex items-center justify-center text-blue-300">
@@ -96,7 +96,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 バックグラウンド順次生成中...
               </div>
               <div className="text-sm font-extrabold text-white">
-                {queueTasks.find(t => t.status === 'generating')?.title || '待機中タスクを処理中'}
+                {queueTasks.find(t => t.status === 'generating')?.title || (generatingTheme ? `『${generatingTheme}』` : '待機中タスクを処理中')}
                 <span className="text-xs font-normal text-slate-300 ml-2">
                   (残り待機: {queueTasks.filter(t => t.status === 'pending').length}件)
                 </span>
@@ -279,25 +279,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         )}
       </div>
 
-      {/* Background Generating Notification Card */}
-      {isGenerating && (
-        <div className="bg-gradient-to-r from-blue-950/70 via-slate-900 to-indigo-950/70 border border-blue-500/40 rounded-2xl p-4 shadow-lg flex items-center justify-between gap-3 animate-fadeIn">
-          <div className="flex items-center space-x-3">
-            <RefreshCw className="w-5 h-5 text-sky-400 animate-spin flex-shrink-0" />
-            <div>
-              <span className="text-xs sm:text-sm font-bold text-white block">
-                AIが新しい物語・エピソードを裏で執筆中...
-              </span>
-              <span className="text-[11px] text-slate-300">
-                {generatingTheme ? `テーマ: 「${generatingTheme}」` : '完成すると自動で本棚の先頭に追加されます'}
-              </span>
-            </div>
-          </div>
-          <span className="text-[11px] px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
-            執筆中
-          </span>
-        </div>
-      )}
+
 
       {/* 2. Bookshelf Grid */}
       {filteredStories.length > 0 ? (

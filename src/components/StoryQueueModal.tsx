@@ -17,6 +17,7 @@ interface StoryQueueModalProps {
   onCancelTask: (taskId: string) => void;
   onRemoveTask: (taskId: string) => void;
   onRetryTask?: (task: StoryQueueTask) => void;
+  onClearHistory?: () => void;
   isProcessing?: boolean;
 }
 
@@ -27,6 +28,7 @@ export const StoryQueueModal: React.FC<StoryQueueModalProps> = ({
   onCancelTask,
   onRemoveTask,
   onRetryTask,
+  onClearHistory,
   isProcessing = false,
 }) => {
   if (!isOpen) return null;
@@ -161,9 +163,19 @@ export const StoryQueueModal: React.FC<StoryQueueModalProps> = ({
           {/* 3. 履歴（完了・キャンセル・失敗） */}
           {historyTasks.length > 0 && (
             <div className="space-y-3 pt-3 border-t border-slate-800">
-              <h3 className="text-xs font-bold text-slate-400 tracking-wider">
-                最近の履歴 ({historyTasks.length}件)
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-slate-400 tracking-wider">
+                  最近の履歴 ({historyTasks.length}件)
+                </h3>
+                {onClearHistory && (
+                  <button
+                    onClick={onClearHistory}
+                    className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors font-semibold"
+                  >
+                    履歴を消去
+                  </button>
+                )}
+              </div>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {historyTasks.slice(-10).reverse().map((t) => (
                   <div
