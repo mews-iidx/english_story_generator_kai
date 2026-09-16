@@ -516,3 +516,44 @@ export function extractRecentSummaries(stories: Story[], limit: number = 4): str
     .map(s => `• 「${s.title}」: ${s.summary}`)
     .filter(Boolean);
 }
+
+
+/**
+ * 兄弟カード（対になる英和・和英カード）をグルーピングするための正規化キー
+ */
+export function getSiblingGroupKey(v: VocabItem): string {
+  if (v.siblingId) {
+    return `sib:${[v.id, v.siblingId].sort().join('-')}`;
+  }
+  const sent = (v.sentence || v.exampleSentence || '').trim().toLowerCase();
+  if (sent) return `sent:${sent}`;
+  const phrase = (v.focusWord || v.phrase || '').trim().toLowerCase();
+  if (phrase) return `phrase:${phrase}`;
+  return `id:${v.id}`;
+}
+
+/**
+ * 2つのカードが兄弟関係（同一センテンス/単語の英和と和英）にあるかを判定
+ */
+export function areSiblings(a: VocabItem, b: VocabItem): boolean {
+  if (a.id === b.id) return false;
+  if (a.siblingId && (a.siblingId === b.id || b.siblingId === a.id)) return true;
+
+  const dirA = a.cardDirection || 'en_to_ja';
+  const dirB = b.cardDirection || (a.cardDirection === 'en_to_ja' ? 'ja_to_en' : 'en_to_ja');
+  if (dirA === dirB) return false;
+
+  const sentA = (a.sentence || a.exampleSentence || '').trim().toLowerCase();
+  const sentB = (b.sentence || b.exampleSentence || '').trim().toLowerCase();
+  if (sentA && sentB && sentA === sentB) return true;
+
+  const phraseA = (a.focusWord || a.phrase || '').trim().toLowerCase();
+  const phraseB = (b.focusWord || b.phrase || '').trim().toLowerCase();
+  if (phraseA && phraseB && phraseA === phraseB) {
+    if (a.focusType === 'word' || b.focusType === 'word' || (!sentA && !sentB)) {
+      return true;
+    }
+  }
+
+  return false;
+}

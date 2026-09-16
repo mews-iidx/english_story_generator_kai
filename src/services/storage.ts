@@ -10,7 +10,7 @@ import { Story } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { ChatMessage } from '../types/chat';
 import { Persona, CallSession } from '../types/persona';
-import { calculateLapseSRS, calculateSuccessSRS, calculateAnkiSRS, addDaysToDate } from '../utils/srs';
+import { calculateLapseSRS, calculateSuccessSRS, calculateAnkiSRS, addDaysToDate, getSiblingGroupKey, areSiblings } from '../utils/srs';
 
 const STORAGE_KEYS = {
   SETTINGS: 'storykai_settings_v1',
@@ -517,17 +517,19 @@ export function recordAnkiRating(
 
   vocabs[index] = updated;
 
-  // Sibling Burying (兄弟カード延期): 今日中に解いた兄弟カードがあれば明日に延期
-  if (item.siblingId) {
-    const siblingIndex = vocabs.findIndex(v => v.id === item.siblingId);
-    if (siblingIndex >= 0) {
-      const today = getTodayDateString();
-      const tomorrow = addDaysToDate(1);
-      const sibling = vocabs[siblingIndex];
-      vocabs[siblingIndex] = {
-        ...sibling,
+  // Sibling Burying (兄弟カード延期): 今日中に解いた兄弟カード（和英/英和のペア）があれば確実に明日に延期
+  const today = getTodayDateString();
+  const tomorrow = addDaysToDate(1);
+  const currentKey = getSiblingGroupKey(item);
+
+  for (let i = 0; i < vocabs.length; i++) {
+    if (i === index) continue;
+    const other = vocabs[i];
+    if (areSiblings(item, other) || getSiblingGroupKey(other) === currentKey) {
+      vocabs[i] = {
+        ...other,
         buriedUntilDate: tomorrow,
-        nextReviewDate: sibling.nextReviewDate <= today ? tomorrow : sibling.nextReviewDate,
+        nextReviewDate: (other.nextReviewDate && other.nextReviewDate <= today) ? tomorrow : (other.nextReviewDate || tomorrow),
       };
     }
   }
@@ -1692,20 +1694,30 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     ? (v: VocabItem) => v.phrase.toLowerCase() === card1.phrase.toLowerCase() && v.cardDirection === 'en_to_ja'
     : (v: VocabItem) => v.sentence === card1.sentence && v.cardDirection === 'en_to_ja';
 
-  const existingIdx1 = vocabs.findIndex(matchFn1);
-  if (existingIdx1 >= 0) {
-    vocabs[existingIdx1] = { ...vocabs[existingIdx1], ...card1, id: vocabs[existingIdx1].id };
-  } else {
-    vocabs.unshift(card1);
-  }
-
   const matchFn2 = isWord
     ? (v: VocabItem) => v.phrase.toLowerCase() === card2.phrase.toLowerCase() && v.cardDirection === 'ja_to_en'
     : (v: VocabItem) => v.sentence === card2.sentence && v.cardDirection === 'ja_to_en';
 
+  const existingIdx1 = vocabs.findIndex(matchFn1);
   const existingIdx2 = vocabs.findIndex(matchFn2);
+
+  const finalId1 = existingIdx1 >= 0 ? vocabs[existingIdx1].id : id1;
+  const finalId2 = existingIdx2 >= 0 ? vocabs[existingIdx2].id : id2;
+
+  card1.id = finalId1;
+  card1.siblingId = finalId2;
+
+  card2.id = finalId2;
+  card2.siblingId = finalId1;
+
+  if (existingIdx1 >= 0) {
+    vocabs[existingIdx1] = { ...vocabs[existingIdx1], ...card1 };
+  } else {
+    vocabs.unshift(card1);
+  }
+
   if (existingIdx2 >= 0) {
-    vocabs[existingIdx2] = { ...vocabs[existingIdx2], ...card2, id: vocabs[existingIdx2].id };
+    vocabs[existingIdx2] = { ...vocabs[existingIdx2], ...card2 };
   } else {
     vocabs.unshift(card2);
   }
@@ -2114,13 +2126,32 @@ export function loadDueAnkiDeckWithLimits(): {
   dueReviews.sort((a, b) => (a.nextReviewDate || '').localeCompare(b.nextReviewDate || ''));
   newCards.sort((a, b) => (b.importance || 3) - (a.importance || 3));
 
-  const selectedReviews = dueReviews.slice(0, reviewLimit);
-  const selectedNew = newCards.slice(0, newLimit);
+  const seenKeys = new Set<string>();
+  const selectedReviews: VocabItem[] = [];
+  for (const card of dueReviews) {
+    if (selectedReviews.length >= reviewLimit) break;
+    const key = getSiblingGroupKey(card);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      selectedReviews.push(card);
+    }
+  }
+
+  const selectedNew: VocabItem[] = [];
+  for (const card of newCards) {
+    if (selectedNew.length >= newLimit) break;
+    const key = getSiblingGroupKey(card);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      selectedNew.push(card);
+    }
+  }
+
   const backlogNewCount = Math.max(0, newCards.length - selectedNew.length);
 
   return {
     studyDeck: [...selectedReviews, ...selectedNew],
-    totalDueCount: dueReviews.length + newCards.length,
+    totalDueCount: selectedReviews.length + selectedNew.length,
     newCardsCount: selectedNew.length,
     reviewCardsCount: selectedReviews.length,
     backlogNewCount,

@@ -8,7 +8,7 @@ import { speakText } from '../utils/speech';
 import confetti from 'canvas-confetti';
 import { AnkiFlashcardView } from './AnkiFlashcardView';
 import { getTodayDateString } from '../utils/srs';
-import { loadAnkiUnifiedDeck } from '../services/storage';
+// import { loadAnkiUnifiedDeck } from '../services/storage';
 
 interface QuizViewProps {
   apiKey: string;
@@ -234,7 +234,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
       {/* Subtab 1: Anki 4-step Flashcard Mode */}
       {activeSubTab === 'anki' && (
         <AnkiFlashcardView
-          vocabs={loadAnkiUnifiedDeck()}
+          vocabs={vocabs}
           onRateCard={(id, rating) => {
             if (onRateAnkiCard) onRateAnkiCard(id, rating);
           }}

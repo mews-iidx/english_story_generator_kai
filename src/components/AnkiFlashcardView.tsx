@@ -3,7 +3,7 @@ import { VocabItem } from '../types/vocab';
 import { Volume2, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool, Sliders, X, Check } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
-import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
+import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS, getSiblingGroupKey, areSiblings } from '../utils/srs';
 import { cleanTranslationText, loadSettings, saveSettings } from '../services/storage';
 
 export type AnkiCardFilter = 'all' | 'word' | 'pattern' | 'en_to_ja' | 'ja_to_en';
@@ -162,14 +162,22 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
     FILTER_OPTIONS.forEach(opt => {
       const matched = vocabs.filter(opt.filterFn);
-      const dueCount = matched.filter(v => {
-        if (v.buriedUntilDate && v.buriedUntilDate > today) return false;
-        return (
+      const seenSiblingKeys = new Set<string>();
+      let dueCount = 0;
+      for (const v of matched) {
+        if (v.buriedUntilDate && v.buriedUntilDate > today) continue;
+        const isDue =
           v.cardState === 'learning' ||
           v.cardState === 'relearning' ||
-          ((!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today)
-        );
-      }).length;
+          ((!v.cardState || v.cardState === 'new' || v.cardState === 'review') && (v.nextReviewDate || '') <= today);
+        if (isDue) {
+          const key = getSiblingGroupKey(v);
+          if (!seenSiblingKeys.has(key)) {
+            seenSiblingKeys.add(key);
+            dueCount++;
+          }
+        }
+      }
 
       stats[opt.id] = {
         total: matched.length,
@@ -197,25 +205,38 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   // 操作取り消し（Undo）履歴スタック
   const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
 
-  // セッション初期化ヘルパー (上限設定を適用)
+  // セッション初期化ヘルパー (上限設定および兄弟カード同日重複防止を適用)
   const initSession = useCallback((targetVocabs: VocabItem[], allowExtraStudy: boolean = false) => {
     const activeCards = targetVocabs.filter(v => !v.buriedUntilDate || v.buriedUntilDate <= today);
-    const learningCards = activeCards.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
     
-    // 復習対象（既存カードで今日が期日のもの）
+    // 兄弟カード（対になる英和・和英）の同日重複出題を完全に防ぐための追跡Set
+    const seenSiblingKeys = new Set<string>();
+
+    // 1. 学習中・再学習中（赤・オレンジ）カード
+    const rawLearningCards = activeCards.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
+    const learningCards: VocabItem[] = [];
+    for (const card of rawLearningCards) {
+      const key = getSiblingGroupKey(card);
+      if (!seenSiblingKeys.has(key)) {
+        seenSiblingKeys.add(key);
+        learningCards.push(card);
+      }
+    }
+    
+    // 2. 復習対象（既存カードで今日が期日のもの）
     const dueReviewCards = activeCards.filter(v => 
       (v.cardState === 'review' || (v.repetitionCount && v.repetitionCount > 0)) && 
       v.cardState !== 'learning' && 
       v.cardState !== 'relearning' && 
-      v.nextReviewDate <= today
+      (v.nextReviewDate || '') <= today
     );
 
-    // 新規カード（未学習）
+    // 3. 新規カード（未学習）
     const newCards = activeCards.filter(v => 
       (!v.cardState || v.cardState === 'new' || !v.repetitionCount || v.repetitionCount === 0) &&
       v.cardState !== 'learning' && 
       v.cardState !== 'relearning' &&
-      v.nextReviewDate <= today
+      (v.nextReviewDate || '') <= today
     );
 
     let initialReviews: VocabItem[] = [];
@@ -223,9 +244,21 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     let remainingBacklog = 0;
 
     if (allowExtraStudy) {
-      // 上限枠なしの全件出題
+      // エクストラ学習（未マスターのカードをランダム出題、ただし同日兄弟ペアは1枚のみ）
       const unmastered = targetVocabs.filter(v => (v.repetitionCount ?? 0) < 4);
-      initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
+      const candidates = unmastered.length > 0 ? unmastered : targetVocabs;
+      const shuffledCandidates = shuffleArray(candidates);
+      
+      const extraPicked: VocabItem[] = [];
+      const extraSeenKeys = new Set<string>();
+      for (const card of shuffledCandidates) {
+        const key = getSiblingGroupKey(card);
+        if (!extraSeenKeys.has(key)) {
+          extraSeenKeys.add(key);
+          extraPicked.push(card);
+        }
+      }
+      initialReviews = extraPicked;
       initialLearning = [];
       remainingBacklog = 0;
     } else if (dueReviewCards.length > 0 || newCards.length > 0 || learningCards.length > 0) {
@@ -233,16 +266,36 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       const maxReviews = appSettings.ankiMaxReviewsPerDay ?? 200;
       const maxNew = appSettings.ankiNewCardsPerDay ?? 20;
 
-      // 優先度・期日順にソート
+      // 優先度順にソート
+      // 復習カードは期日超過が古い順
       const sortedReviews = [...dueReviewCards].sort((a, b) => (a.nextReviewDate || '').localeCompare(b.nextReviewDate || ''));
-      const sortedNew = [...newCards].sort((a, b) => (b.importance || 3) - (a.importance || 3));
+      // 新規カードは重要度順（同等のものはランダム）
+      const shuffledNew = shuffleArray(newCards);
+      const sortedNew = shuffledNew.sort((a, b) => (b.importance || 3) - (a.importance || 3));
 
-      const selectedReviews = sortedReviews.slice(0, maxReviews);
-      const selectedNew = sortedNew.slice(0, maxNew);
+      const selectedReviews: VocabItem[] = [];
+      for (const card of sortedReviews) {
+        if (selectedReviews.length >= maxReviews) break;
+        const key = getSiblingGroupKey(card);
+        if (!seenSiblingKeys.has(key)) {
+          seenSiblingKeys.add(key);
+          selectedReviews.push(card);
+        }
+      }
 
-      remainingBacklog = (dueReviewCards.length - selectedReviews.length) + (newCards.length - selectedNew.length);
+      const selectedNew: VocabItem[] = [];
+      for (const card of sortedNew) {
+        if (selectedNew.length >= maxNew) break;
+        const key = getSiblingGroupKey(card);
+        if (!seenSiblingKeys.has(key)) {
+          seenSiblingKeys.add(key);
+          selectedNew.push(card);
+        }
+      }
 
-      // 本日の復習期日・新規カードをシャッフルして出題
+      remainingBacklog = Math.max(0, (dueReviewCards.length - selectedReviews.length) + (newCards.length - selectedNew.length));
+
+      // 本日の復習期日・新規カードをしっかりシャッフルして出題
       initialReviews = shuffleArray([...selectedReviews, ...selectedNew]);
       initialLearning = learningCards;
     } else {
@@ -386,8 +439,11 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       ...srsResult,
     };
 
-    let nextReviewQ = reviewQueue.filter(c => c.id !== currentCard.id);
-    let nextLearningP = learningPool.filter(c => c.id !== currentCard.id);
+    const currentKey = getSiblingGroupKey(currentCard);
+
+    // 回答したカード自身、およびその兄弟カード（対になる和英/英和カード）をキューから即座に除外（同日出題を完全阻止）
+    let nextReviewQ = reviewQueue.filter(c => c.id !== currentCard.id && !areSiblings(currentCard, c) && getSiblingGroupKey(c) !== currentKey);
+    let nextLearningP = learningPool.filter(c => c.id !== currentCard.id && !areSiblings(currentCard, c) && getSiblingGroupKey(c) !== currentKey);
     const nextGraduated = new Set(graduatedIds);
 
     if (srsResult.cardState === 'learning' || srsResult.cardState === 'relearning') {
