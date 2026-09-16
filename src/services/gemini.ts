@@ -33,7 +33,7 @@ export interface GeneratedStoryResult {
   };
 }
 
-const FALLBACK_MODELS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const FALLBACK_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite'];
 
 export async function generateStoryWithGemini(params: GenerateStoryParams): Promise<GeneratedStoryResult> {
   const { 
@@ -1500,7 +1500,7 @@ export interface RallyPartnerResult {
  * 瞬間ラリー特訓（スパーリング＆即時武器化）対話AI
  */
 export async function chatWithRallyPartner(params: RallyPartnerParams): Promise<RallyPartnerResult> {
-  const { userText, topicPrompt = '日常のカジュアルな雑談', history, apiKey, model = 'gemini-3.7-flash' } = params;
+  const { userText, topicPrompt = '日常のカジュアルな雑談', history, apiKey, model = 'gemini-2.0-flash' } = params;
 
   if (!apiKey) {
     return {
@@ -1583,7 +1583,9 @@ Return ONLY a pure JSON object:
           contents,
           generationConfig: {
             temperature: 0.4,
+            maxOutputTokens: 350,
             responseMimeType: 'application/json',
+            ...(currentModel.includes('3.7') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
           },
         }),
       });

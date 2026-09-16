@@ -1,3 +1,4 @@
+import { MarkdownRenderer } from './MarkdownRenderer';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Persona,
@@ -2741,7 +2742,11 @@ export const CallView: React.FC<CallViewProps> = ({
                             : 'bg-slate-900 border border-slate-800 text-slate-100 rounded-tl-xs space-y-2'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                        {isUser ? (
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                        ) : (
+                          <MarkdownRenderer content={msg.text} />
+                        )}
                       </div>
                     </div>
                   );

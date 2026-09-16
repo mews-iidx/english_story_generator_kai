@@ -1,3 +1,4 @@
+import { MarkdownRenderer } from './MarkdownRenderer';
 import React, { useState, useRef, useEffect } from 'react';
 import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
@@ -226,7 +227,11 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
                     : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
                 }`}
               >
-                <div className="whitespace-pre-wrap">{m.text}</div>
+                {m.sender === 'user' ? (
+                  <div className="whitespace-pre-wrap">{m.text}</div>
+                ) : (
+                  <MarkdownRenderer content={m.text} />
+                )}
 
                 {/* AI回答から抽出された重要表現カード */}
                 {m.suggestedVocabs && m.suggestedVocabs.length > 0 && (
