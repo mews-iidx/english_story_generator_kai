@@ -1047,6 +1047,7 @@ export const App: React.FC = () => {
                 onUpdatePersonaMemory={handleUpdatePersonaMemory}
                 onSaveCallSession={handleSaveCallSession}
                 onAddToVocab={handleAddToVocab}
+                onSaveSentenceCard={handleSaveSentenceCard}
                 onSaveExpressionError={handleSaveExpressionError}
                 onRecordTokenUsage={handleRecordTokenUsage}
                 savedVocabPhrases={savedVocabPhrases}

@@ -27,6 +27,7 @@ const STORAGE_KEYS = {
   READING_LOGS: 'storykai_reading_logs_v1',
   DRILL_LOGS: 'storykai_drill_logs_v1',
   STORY_QUEUE: 'storykai_story_queue_v1',
+  RALLY_TOPICS: 'storykai_rally_topics_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -1962,4 +1963,52 @@ export function updateStoryTask(taskId: string, updater: (task: StoryQueueTask) 
   queue[idx] = updated;
   saveStoryQueue(queue);
   return updated;
+}
+
+
+// ===================== RALLY TOPICS =====================
+export const DEFAULT_RALLY_TOPICS: string[] = [
+  '☕ カフェでの注文・スモールトーク',
+  '🗣️ Language Exchange (お互いの趣味・言語学習)',
+  '💼 仕事の近況・週末の予定',
+  '✈️ 海外旅行・空港・ホテルでのトラブル解決',
+  '🎬 お気に入りの映画・本・エンタメ談義',
+];
+
+export function loadRallyTopics(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.RALLY_TOPICS);
+    if (!raw) return DEFAULT_RALLY_TOPICS;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_RALLY_TOPICS;
+  } catch (e) {
+    console.error('Failed to load rally topics', e);
+    return DEFAULT_RALLY_TOPICS;
+  }
+}
+
+export function saveRallyTopics(topics: string[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.RALLY_TOPICS, JSON.stringify(topics));
+  } catch (e) {
+    console.error('Failed to save rally topics', e);
+  }
+}
+
+export function addCustomRallyTopic(topic: string): string[] {
+  const trimmed = topic.trim();
+  if (!trimmed) return loadRallyTopics();
+  const current = loadRallyTopics();
+  if (current.includes(trimmed)) return current;
+  const updated = [trimmed, ...current];
+  saveRallyTopics(updated);
+  return updated;
+}
+
+export function deleteRallyTopic(topic: string): string[] {
+  const current = loadRallyTopics();
+  const updated = current.filter(t => t !== topic);
+  const finalTopics = updated.length > 0 ? updated : DEFAULT_RALLY_TOPICS;
+  saveRallyTopics(finalTopics);
+  return finalTopics;
 }

@@ -1,9 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Persona, CallSession, CallMessage } from '../types/persona';
 import { GeminiLiveSession, CallConnectionState } from '../services/geminiLive';
-import { analyzeCallSessionAndExtractMemory, generateCustomPersona, chatWithPersona, DetectedExpressionError } from '../services/gemini';
+import {
+  analyzeCallSessionAndExtractMemory,
+  generateCustomPersona,
+  chatWithPersona,
+  DetectedExpressionError,
+  chatWithRallyPartner,
+  RallyPartnerFeedback,
+  RallySuggestionChip,
+} from '../services/gemini';
 import { ErrorCauseCategory } from '../types/expressionError';
 import { speakText } from '../utils/speech';
+import {
+  loadRallyTopics,
+  addCustomRallyTopic,
+  deleteRallyTopic,
+  DEFAULT_RALLY_TOPICS,
+  SaveSentenceCardParams,
+  saveSentenceCardWithSiblings,
+} from '../services/storage';
+import { playCorrectSound } from '../utils/audio';
 import {
   Phone,
   PhoneOff,
@@ -25,6 +42,11 @@ import {
   Volume2,
   ArrowLeft,
   User,
+  Zap,
+  Swords,
+  Check,
+  Flame,
+  Bookmark,
 } from 'lucide-react';
 
 interface CallViewProps {
@@ -48,12 +70,27 @@ interface CallViewProps {
   ) => void;
   onSaveCallSession: (session: CallSession) => void;
   onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
+  onSaveSentenceCard?: (params: SaveSentenceCardParams) => void;
   onSaveExpressionError?: (item: any) => any;
   onRecordTokenUsage?: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases: Set<string>;
 }
 
+
+interface RallyChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  reaction?: string;
+  nextQuestion?: string;
+  nextQuestionJa?: string;
+  feedback?: RallyPartnerFeedback;
+  suggestionChips?: RallySuggestionChip[];
+}
+
 export const CallView: React.FC<CallViewProps> = ({
+  onSaveSentenceCard,
   apiKey,
   model = 'gemini-2.0-flash',
   personas,
@@ -67,8 +104,20 @@ export const CallView: React.FC<CallViewProps> = ({
   onRecordTokenUsage,
   savedVocabPhrases,
 }) => {
-  // 画面モード: lobby (一覧) | call (音声通話中) | chat (テキストチャット中) | summary (通話後サマリー)
-  const [viewState, setViewState] = useState<'lobby' | 'call' | 'chat' | 'summary'>('lobby');
+  // 画面モード: lobby (一覧) | call (音声通話中) | chat (テキストチャット中) | rally_chat (ラリー特訓中) | summary (通話後サマリー) | rally_summary (ラリー後サマリー)
+  const [viewState, setViewState] = useState<'lobby' | 'call' | 'chat' | 'rally_chat' | 'summary' | 'rally_summary'>('lobby');
+  const [activeTab, setActiveTab] = useState<'rally' | 'friend'>('rally');
+
+  // 瞬間ラリー特訓 State
+  const [rallyTopics, setRallyTopics] = useState<string[]>(DEFAULT_RALLY_TOPICS);
+  const [selectedRallyTopic, setSelectedRallyTopic] = useState<string>(DEFAULT_RALLY_TOPICS[0]);
+  const [isCustomTopicModalOpen, setIsCustomTopicModalOpen] = useState(false);
+  const [customTopicInput, setCustomTopicInput] = useState('');
+  const [rallyMessages, setRallyMessages] = useState<RallyChatMessage[]>([]);
+  const [currentSuggestionChips, setCurrentSuggestionChips] = useState<RallySuggestionChip[]>([]);
+  const [isRallyLoading, setIsRallyLoading] = useState(false);
+  const [equippedFeedbackIds, setEquippedFeedbackIds] = useState<Set<string>>(new Set());
+  const [translatedMessageIds, setTranslatedMessageIds] = useState<Set<string>>(new Set());
   const [activePersona, setActivePersona] = useState<Persona | null>(null); // null の場合はフリー会話
 
   // 通話状態
@@ -110,9 +159,19 @@ export const CallView: React.FC<CallViewProps> = ({
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
 
+
+  // 初回ロード: トピック一覧をlocalStorageから取得
+  useEffect(() => {
+    const loaded = loadRallyTopics();
+    setRallyTopics(loaded);
+    if (loaded.length > 0 && !loaded.includes(selectedRallyTopic)) {
+      setSelectedRallyTopic(loaded[0]);
+    }
+  }, []);
+
   // 通話タイマー
   useEffect(() => {
-    if ((viewState === 'call' && connectionState === 'connected') || viewState === 'chat') {
+    if ((viewState === 'call' && connectionState === 'connected') || viewState === 'chat' || viewState === 'rally_chat') {
       if (!startTimeRef.current) startTimeRef.current = Date.now();
       timerRef.current = window.setInterval(() => {
         setCallDuration(Math.floor((Date.now() - startTimeRef.current) / 1000));
@@ -461,12 +520,384 @@ export const CallView: React.FC<CallViewProps> = ({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+
+  // ===================== 瞬間ラリー特訓 ハンドラー =====================
+
+  const handleAddCustomTopic = () => {
+    const trimmed = customTopicInput.trim();
+    if (!trimmed) return;
+    const updated = addCustomRallyTopic(trimmed);
+    setRallyTopics(updated);
+    setSelectedRallyTopic(trimmed);
+    setCustomTopicInput('');
+    setIsCustomTopicModalOpen(false);
+  };
+
+  const handleDeleteTopic = (e: React.MouseEvent, topic: string) => {
+    e.stopPropagation();
+    const updated = deleteRallyTopic(topic);
+    setRallyTopics(updated);
+    if (selectedRallyTopic === topic) {
+      setSelectedRallyTopic(updated[0] || '日常英会話');
+    }
+  };
+
+  const handleStartRally = async (targetTopic?: string) => {
+    const topic = targetTopic || selectedRallyTopic;
+    setViewState('rally_chat');
+    setRallyMessages([]);
+    setCurrentSuggestionChips([]);
+    setChatInput('');
+    setCallDuration(0);
+    startTimeRef.current = Date.now();
+    setIsRallyLoading(true);
+
+    try {
+      const result = await chatWithRallyPartner({
+        userText: `Hello! I'm ready for our sparring session on: ${topic}`,
+        topicPrompt: topic,
+        history: [],
+        apiKey,
+        model,
+      });
+
+      if (result.tokenUsage && onRecordTokenUsage) {
+        onRecordTokenUsage(result.tokenUsage.promptTokens, result.tokenUsage.candidatesTokens);
+      }
+
+      const initialAssistantMsg: RallyChatMessage = {
+        id: 'rally_asst_' + Date.now(),
+        role: 'assistant',
+        text: `${result.reaction} ${result.nextQuestion}`,
+        reaction: result.reaction,
+        nextQuestion: result.nextQuestion,
+        nextQuestionJa: result.nextQuestionJa,
+        suggestionChips: result.suggestionChips,
+        timestamp: new Date().toISOString(),
+      };
+
+      setRallyMessages([initialAssistantMsg]);
+      setCurrentSuggestionChips(result.suggestionChips || []);
+    } catch (err) {
+      console.error('Failed to start rally:', err);
+      setRallyMessages([
+        {
+          id: 'rally_err_' + Date.now(),
+          role: 'assistant',
+          text: "Let's begin! What would you like to share about this topic today?",
+          reaction: "Let's begin!",
+          nextQuestion: 'What would you like to share about this topic today?',
+          nextQuestionJa: '今日のこのトピックについて、何を話したいですか？',
+          suggestionChips: [
+            { text: "I'd like to start with...", labelJa: '〜から始めたい' },
+            { text: "Actually, I have a quick question about...", labelJa: '〜について質問がある' },
+            { text: "Let's dive right into it!", labelJa: '早速始めよう！' },
+          ],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setIsRallyLoading(false);
+    }
+  };
+
+  const handleSendRallyMessage = async (overrideText?: string) => {
+    const text = (overrideText || chatInput).trim();
+    if (!text || isRallyLoading) return;
+
+    const userMsg: RallyChatMessage = {
+      id: 'rally_usr_' + Date.now(),
+      role: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+
+    const newHistory = [...rallyMessages, userMsg];
+    setRallyMessages(newHistory);
+    setChatInput('');
+    setCurrentSuggestionChips([]);
+    setIsRallyLoading(true);
+
+    try {
+      const historyForApi = newHistory.map((m) => ({
+        role: m.role,
+        text: m.text,
+      }));
+
+      const result = await chatWithRallyPartner({
+        userText: text,
+        topicPrompt: selectedRallyTopic,
+        history: historyForApi,
+        apiKey,
+        model,
+      });
+
+      if (result.tokenUsage && onRecordTokenUsage) {
+        onRecordTokenUsage(result.tokenUsage.promptTokens, result.tokenUsage.candidatesTokens);
+      }
+
+      const assistantMsg: RallyChatMessage = {
+        id: 'rally_asst_' + Date.now(),
+        role: 'assistant',
+        text: `${result.reaction} ${result.nextQuestion}`,
+        reaction: result.reaction,
+        nextQuestion: result.nextQuestion,
+        nextQuestionJa: result.nextQuestionJa,
+        feedback: result.feedback,
+        suggestionChips: result.suggestionChips,
+        timestamp: new Date().toISOString(),
+      };
+
+      setRallyMessages((prev) => [...prev, assistantMsg]);
+      setCurrentSuggestionChips(result.suggestionChips || []);
+    } catch (err) {
+      console.error('Rally response error:', err);
+      setRallyMessages((prev) => [
+        ...prev,
+        {
+          id: 'rally_err_' + Date.now(),
+          role: 'assistant',
+          text: 'Got it! Could you tell me a little more about that?',
+          reaction: 'Got it!',
+          nextQuestion: 'Could you tell me a little more about that?',
+          nextQuestionJa: 'それについてもう少し詳しく教えてもらえますか？',
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setIsRallyLoading(false);
+    }
+  };
+
+  const handleEquipWeapon = (feedback: RallyPartnerFeedback, feedbackId: string) => {
+    const targetSentence = feedback.naturalExpression || feedback.grammarFix;
+    const isJapaneseInput = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]/.test(
+      feedback.userOriginalText
+    );
+    const translationText = isJapaneseInput
+      ? feedback.userOriginalText
+      : feedback.explanation || feedback.grammarFix;
+
+    const params: SaveSentenceCardParams = {
+      sentence: targetSentence,
+      translation: translationText,
+      focusType: 'sentence',
+      importance: 5,
+    };
+
+    if (onSaveSentenceCard) {
+      onSaveSentenceCard(params);
+    } else {
+      saveSentenceCardWithSiblings(params);
+    }
+
+    onAddToVocab(
+      targetSentence,
+      translationText,
+      targetSentence,
+      `🎙️ 実践マイフレーズ (瞬間ラリー: ${selectedRallyTopic})`
+    );
+
+    // チャイム音再生
+    playCorrectSound();
+
+    setEquippedFeedbackIds((prev) => new Set([...prev, feedbackId]));
+  };
+
+  const handleToggleTranslation = (msgId: string) => {
+    setTranslatedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId);
+      else next.add(msgId);
+      return next;
+    });
+  };
+
+  const handleEndRally = () => {
+    setViewState('rally_summary');
+  };
+
   // -------------------------------------------------------------
   // VIEW: ロビー（パートナー一覧 ＆ フリー会話選択）
   // -------------------------------------------------------------
   if (viewState === 'lobby') {
     return (
-      <div className="space-y-6 max-w-5xl mx-auto animate-fadeIn">
+      <div className="space-y-6 max-w-5xl mx-auto animate-fadeIn pb-12">
+        {/* Mode Switcher Tabs */}
+        <div className="flex items-center justify-center">
+          <div className="bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center gap-1 shadow-xl">
+            <button
+              type="button"
+              onClick={() => setActiveTab('rally')}
+              className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                activeTab === 'rally'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/25 scale-[1.02]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Zap className="w-4 h-4 text-yellow-300 animate-bounce" />
+              <span>⚡ 瞬間ラリー特訓（即答＆武器化）</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('friend')}
+              className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                activeTab === 'friend'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-600/25 scale-[1.02]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Smile className="w-4 h-4 text-cyan-300" />
+              <span>👫 友達フリートーク（記憶＆雑談）</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ==================== TAB 1: 瞬間ラリー特訓 ==================== */}
+        {activeTab === 'rally' && (
+          <div className="space-y-6 animate-fadeIn">
+            {/* Rally Header Banner */}
+            <div className="bg-gradient-to-r from-amber-950/60 via-slate-900 to-orange-950/50 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20"></div>
+
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
+                <div className="space-y-1.5">
+                  <div className="inline-flex items-center space-x-2 px-3 py-1 bg-amber-500/15 border border-amber-500/40 rounded-full text-amber-300 text-xs font-semibold">
+                    <Flame className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                    <span>即答スパーリング ＆ 2段階添削武器化</span>
+                  </div>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                    ⚡ 瞬間ラリー特訓（Rally & Arsenal）
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+                    AIがテンポよく質問を投げかけるので、あなたは<strong>「即答するだけ」</strong>に集中！
+                    言えなかった表現や文法ミスは瞬時に<strong>【🔧文法修正 ＆ ✨洗練表現】</strong>で2段階添削され、ワンタップでAnkiに装備できます。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Topic & Scenario Customization Bar */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                    <Bookmark className="w-4 h-4 text-amber-400" />
+                    🎯 特訓トピック・シチュエーションを選択
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    練習したい場面や語彙プロンプトを選んでください。いつでも新しく追加・保存できます。
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCustomTopicModalOpen(true)}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>カスタムトピックを追加</span>
+                </button>
+              </div>
+
+              {/* Topic Chips Grid */}
+              <div className="flex flex-wrap gap-2.5 pt-1">
+                {rallyTopics.map((topic) => {
+                  const isSelected = selectedRallyTopic === topic;
+                  const isDefault = DEFAULT_RALLY_TOPICS.includes(topic);
+
+                  return (
+                    <div
+                      key={topic}
+                      onClick={() => setSelectedRallyTopic(topic)}
+                      className={`group cursor-pointer px-4 py-2.5 rounded-2xl border text-xs sm:text-sm font-medium transition-all flex items-center gap-2 select-none ${
+                        isSelected
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md shadow-amber-500/10 scale-[1.02] font-bold'
+                          : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700 hover:bg-slate-900'
+                      }`}
+                    >
+                      <span className="truncate max-w-[280px]">{topic}</span>
+                      {!isDefault && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteTopic(e, topic)}
+                          className="text-slate-500 hover:text-red-400 p-0.5 rounded-full hover:bg-slate-800 transition-colors"
+                          title="トピックを削除"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Ready to Start Quick Action Card */}
+            <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-6">
+              <div className="space-y-2 text-center sm:text-left">
+                <div className="inline-flex items-center space-x-2 text-xs font-semibold text-amber-400 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
+                  <span>選択中トピック:</span>
+                  <span className="text-white font-bold">{selectedRallyTopic}</span>
+                </div>
+                <h3 className="text-lg sm:text-xl font-extrabold text-white">
+                  準備はいいですか？ AIと瞬間ラリーを開始しましょう！
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-400 max-w-lg">
+                  困ったときは「💡 カンペ候補」や「🌐 AI質問の和訳」が使えます。日本語で返答しても自動で英語化＆武器化されます。
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleStartRally(selectedRallyTopic)}
+                className="w-full sm:w-auto flex items-center justify-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black rounded-2xl text-sm sm:text-base shadow-xl shadow-amber-500/30 active:scale-95 transition-all"
+              >
+                <Zap className="w-5 h-5 fill-current" />
+                <span>⚡ 瞬間ラリーを開始（チャット）</span>
+              </button>
+            </div>
+
+            {/* 3-Step Feature Guide */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4.5 space-y-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 text-sm font-bold">
+                  1
+                </div>
+                <h4 className="text-xs sm:text-sm font-bold text-white">AIが100%リード</h4>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  あなたが話題を考える必要はありません。トピックに沿ってAIが質問を投げ続けます。
+                </p>
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4.5 space-y-2">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 text-sm font-bold">
+                  2
+                </div>
+                <h4 className="text-xs sm:text-sm font-bold text-white">2段階リアルタイム添削</h4>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  🔧 最小限の文法修正（骨格維持）と ✨ 洗練されたネイティブ表現の2つを即座に提示。
+                </p>
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4.5 space-y-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-sm font-bold">
+                  3
+                </div>
+                <h4 className="text-xs sm:text-sm font-bold text-white">⚔️ ワンタップ武器化</h4>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  言えなかった表現は「武器として装備」ボタンで即座にAnkiに保存。会話を止めずに語彙化。
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== TAB 2: 友達フリートーク ==================== */}
+        {activeTab === 'friend' && (
+          <div className="space-y-6 animate-fadeIn">
+
         {/* Header Banner */}
         <div className="bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/50 border border-blue-500/20 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20"></div>
@@ -650,6 +1081,65 @@ export const CallView: React.FC<CallViewProps> = ({
             })}
           </div>
         </div>
+          </div>
+        )}
+
+        {/* Custom Topic Modal */}
+        {isCustomTopicModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 animate-scaleUp">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Plus className="w-4 h-4 text-amber-400" />
+                  <span>カスタムトピックの追加</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsCustomTopicModalOpen(false)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-300">
+                練習したい状況・会話テーマ・使いたい語彙のシチュエーションを入力してください。
+              </p>
+
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={customTopicInput}
+                  onChange={(e) => setCustomTopicInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddCustomTopic();
+                  }}
+                  placeholder="例: Techスタートアップのピッチ、病院での症状説明..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs sm:text-sm text-white focus:outline-none focus:border-amber-500"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCustomTopicModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddCustomTopic}
+                  disabled={!customTopicInput.trim()}
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 rounded-xl text-xs font-bold shadow-lg shadow-amber-500/20"
+                >
+                  保存して選択
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Custom Persona Modal */}
         {isCreateModalOpen && (
@@ -712,6 +1202,444 @@ export const CallView: React.FC<CallViewProps> = ({
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+
+  // =============================================================
+  // VIEW: 瞬間ラリー特訓 チャット画面 (Rally Sparring Chat)
+  // =============================================================
+  if (viewState === 'rally_chat') {
+    return (
+      <div className="max-w-4xl mx-auto space-y-3 animate-fadeIn flex flex-col h-[calc(100vh-130px)] min-h-[500px]">
+        {/* Rally Top Bar */}
+        <div className="bg-slate-900/95 border border-amber-500/30 rounded-2xl p-3.5 sm:p-4 shadow-xl flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center space-x-3">
+            <button
+              type="button"
+              onClick={handleEndRally}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors border border-slate-800"
+              title="ロビーへ戻る"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+
+            <div className="w-9 h-9 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-lg shadow-inner">
+              ⚡
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold text-amber-400">瞬間ラリー特訓</span>
+                <span className="text-[11px] text-slate-400 truncate max-w-[180px] sm:max-w-xs">
+                  • {selectedRallyTopic}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-400">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                <span>経過時間: {formatDuration(callDuration)}</span>
+                <span className="text-amber-300 font-semibold">
+                  • 装備した武器: {equippedFeedbackIds.size}件
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleEndRally}
+              className="flex items-center space-x-1 px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 rounded-xl text-xs font-bold shadow-md shadow-amber-500/20 transition-all"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>終了 ＆ 記録</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Rally Messages Feed Area */}
+        <div className="flex-1 bg-slate-950/70 border border-slate-800/80 rounded-3xl p-4 sm:p-5 overflow-y-auto space-y-4 shadow-inner">
+          {rallyMessages.map((msg) => {
+            const isUser = msg.role === 'user';
+            const showTranslation = translatedMessageIds.has(msg.id);
+            const feedback = msg.feedback;
+            const feedbackId = msg.id + '_fb';
+            const isEquipped = equippedFeedbackIds.has(feedbackId);
+
+            return (
+              <div key={msg.id} className="space-y-2.5 animate-fadeIn">
+                <div className={`flex items-start gap-2.5 ${isUser ? 'justify-end' : 'justify-start'}`}>
+                  {!isUser && (
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-sm flex-shrink-0 mt-0.5">
+                      ⚡
+                    </div>
+                  )}
+
+                  <div
+                    className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-3.5 text-xs sm:text-sm leading-relaxed shadow-md relative ${
+                      isUser
+                        ? 'bg-amber-600 text-slate-950 font-semibold rounded-tr-xs'
+                        : 'bg-slate-900 border border-slate-800 text-slate-100 rounded-tl-xs'
+                    }`}
+                  >
+                    <p className="whitespace-pre-wrap">{msg.text}</p>
+
+                    {/* AI Message Tools (Pronunciation & Translation) */}
+                    {!isUser && (
+                      <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                        <div className="flex items-center space-x-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSpeakingMessageId(msg.id);
+                              speakText(msg.text, 0.95);
+                              setTimeout(() => setIsSpeakingMessageId(null), 3000);
+                            }}
+                            className="inline-flex items-center space-x-1 text-slate-400 hover:text-amber-300 transition-colors"
+                          >
+                            <Volume2
+                              className={`w-3.5 h-3.5 ${
+                                isSpeakingMessageId === msg.id ? 'text-amber-400 animate-pulse' : ''
+                              }`}
+                            />
+                            <span>発音</span>
+                          </button>
+
+                          {msg.nextQuestionJa && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleTranslation(msg.id)}
+                              className={`inline-flex items-center space-x-1 transition-colors ${
+                                showTranslation ? 'text-amber-400 font-bold' : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              <Globe className="w-3.5 h-3.5" />
+                              <span>{showTranslation ? '和訳を隠す' : '質問の和訳'}</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <span className="text-[10px] text-slate-500">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* AI Question Japanese Translation Drawer */}
+                    {!isUser && showTranslation && msg.nextQuestionJa && (
+                      <div className="mt-2 p-2.5 bg-slate-950/80 border border-amber-500/20 rounded-xl text-xs text-amber-200/90 animate-fadeIn">
+                        <span className="text-[10px] uppercase font-bold text-amber-400 block tracking-wider mb-0.5">
+                          🇯🇵 質問の日本語訳:
+                        </span>
+                        {msg.nextQuestionJa}
+                      </div>
+                    )}
+                  </div>
+
+                  {isUser && (
+                    <div className="w-8 h-8 rounded-xl bg-amber-500 border border-amber-400 flex items-center justify-center text-slate-950 text-xs font-bold flex-shrink-0 mt-0.5">
+                      <User className="w-4 h-4" />
+                    </div>
+                  )}
+                </div>
+
+                {/* 2-Tier Immediate Feedback Box (2段階添削 ＆ 武器化) */}
+                {feedback && feedback.hasCorrection && (
+                  <div className="ml-10 max-w-[85%] sm:max-w-[75%] bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/40 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 space-y-3 shadow-xl">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-1.5 text-xs font-bold text-amber-300">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        <span>即時添削 ＆ 武器化ボックス</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">2-Tier Coaching</span>
+                    </div>
+
+                    {/* Tier 1: 🔧 最小限の文法修正 */}
+                    {feedback.grammarFix && feedback.grammarFix !== feedback.userOriginalText && (
+                      <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-2.5 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-cyan-400 flex items-center gap-1">
+                            🔧 最小限の文法修正 (骨格維持)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => speakText(feedback.grammarFix, 0.95)}
+                            className="text-slate-400 hover:text-cyan-300 p-0.5"
+                            title="発音を聞く"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-200 font-mono font-medium">{feedback.grammarFix}</p>
+                      </div>
+                    )}
+
+                    {/* Tier 2: ✨ 洗練された表現 */}
+                    {feedback.naturalExpression && (
+                      <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-2.5 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
+                            ✨ ネイティブ洗練表現 (おすすめ)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => speakText(feedback.naturalExpression, 0.95)}
+                            className="text-amber-400 hover:text-amber-200 p-0.5"
+                            title="発音を聞く"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-white font-mono font-bold">{feedback.naturalExpression}</p>
+                      </div>
+                    )}
+
+                    {/* 解説 */}
+                    {feedback.explanation && (
+                      <p className="text-[11px] text-slate-300 leading-relaxed">{feedback.explanation}</p>
+                    )}
+
+                    {/* ⚔️ 武器として装備ボタン */}
+                    <div className="pt-1 flex items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleEquipWeapon(feedback, feedbackId)}
+                        disabled={isEquipped}
+                        className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 ${
+                          isEquipped
+                            ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 cursor-default'
+                            : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 shadow-amber-500/20'
+                        }`}
+                      >
+                        {isEquipped ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>✅ 装備完了 (Anki登録済み)</span>
+                          </>
+                        ) : (
+                          <>
+                            <Swords className="w-3.5 h-3.5" />
+                            <span>⚔️ 武器として装備 (Anki登録)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {isRallyLoading && (
+            <div className="flex items-start gap-2.5 justify-start animate-fadeIn">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-sm flex-shrink-0">
+                ⚡
+              </div>
+              <div className="bg-slate-900 border border-amber-500/20 rounded-2xl rounded-tl-xs p-3.5 text-xs text-amber-300 flex items-center gap-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                <span>ラリー中... (AIが即座に質問・添削を生成)</span>
+              </div>
+            </div>
+          )}
+
+          <div ref={chatMessagesEndRef} />
+        </div>
+
+        {/* Suggestion Chips Bar (💡 カンペ候補) */}
+        {currentSuggestionChips.length > 0 && (
+          <div className="space-y-1.5 flex-shrink-0">
+            <div className="flex items-center justify-between text-[11px] px-1 text-slate-400">
+              <span className="flex items-center gap-1 font-semibold text-amber-300">
+                <Sparkles className="w-3 h-3 text-amber-400" />
+                💡 カンペ候補（タップで回答）
+              </span>
+              <span className="text-[10px] text-slate-500">日本語で直接入力してもOK</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {currentSuggestionChips.map((chip, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleSendRallyMessage(chip.text)}
+                  disabled={isRallyLoading}
+                  className="bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 rounded-xl p-2.5 text-left transition-all group disabled:opacity-50"
+                >
+                  <span className="text-[10px] font-bold text-amber-400 block truncate group-hover:text-amber-300">
+                    {chip.labelJa}
+                  </span>
+                  <span className="text-xs text-slate-200 block truncate font-mono mt-0.5">
+                    {chip.text}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Rally Chat Input Form */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendRallyMessage();
+          }}
+          className="bg-slate-900 border border-amber-500/30 rounded-2xl p-2.5 shadow-xl flex items-center gap-2 flex-shrink-0"
+        >
+          <input
+            type="text"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="英語で即答、または日本語で言いたいことを入力..."
+            disabled={isRallyLoading}
+            className="flex-1 bg-transparent px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none font-medium"
+          />
+
+          <button
+            type="submit"
+            disabled={!chatInput.trim() || isRallyLoading}
+            className="p-2.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-40 text-slate-950 font-bold rounded-xl transition-all shadow-md shadow-amber-500/20 active:scale-95 flex items-center justify-center"
+            title="送信"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  // =============================================================
+  // VIEW: 瞬間ラリー特訓 サマリー画面 (Rally Summary)
+  // =============================================================
+  if (viewState === 'rally_summary') {
+    const feedbackList = rallyMessages.filter((m) => m.feedback && m.feedback.hasCorrection);
+
+    return (
+      <div className="max-w-3xl mx-auto space-y-6 animate-fadeIn pb-12">
+        {/* Rally Summary Header */}
+        <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-3xl shadow-lg shadow-amber-500/20">
+            ⚡
+          </div>
+
+          <div className="space-y-1">
+            <h3 className="text-xl sm:text-2xl font-extrabold text-white">
+              瞬間ラリー特訓 完了！
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-300">
+              トピック: <strong className="text-amber-300">{selectedRallyTopic}</strong>
+            </p>
+          </div>
+
+          {/* Stats Bar */}
+          <div className="grid grid-cols-3 gap-3 max-w-md mx-auto pt-2">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold">特訓時間</span>
+              <span className="text-sm sm:base font-bold text-white font-mono">
+                {formatDuration(callDuration)}
+              </span>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold">ラリー往復数</span>
+              <span className="text-sm sm:base font-bold text-amber-300 font-mono">
+                {rallyMessages.filter((m) => m.role === 'user').length} 往復
+              </span>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold">⚔️ 装備した武器</span>
+              <span className="text-sm sm:base font-bold text-emerald-400 font-mono">
+                {equippedFeedbackIds.size} 件
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Feedback List Review */}
+        {feedbackList.length > 0 && (
+          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+            <div>
+              <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <Swords className="w-4 h-4 text-amber-400" />
+                <span>今回の添削 ＆ 武器フレーズ一覧</span>
+              </h4>
+              <p className="text-xs text-slate-400 mt-0.5">
+                まだ装備していないフレーズはここからAnkiに追加できます。
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {feedbackList.map((msg, idx) => {
+                const fb = msg.feedback!;
+                const feedbackId = msg.id + '_fb';
+                const isEquipped = equippedFeedbackIds.has(feedbackId);
+
+                return (
+                  <div
+                    key={idx}
+                    className="p-4 bg-slate-950 border border-slate-800 hover:border-amber-500/30 rounded-2xl space-y-2.5 transition-all"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 flex-1">
+                        <div className="text-xs text-slate-400">
+                          あなたの発言: <span className="text-slate-200">{fb.userOriginalText}</span>
+                        </div>
+                        <div className="text-xs sm:text-sm font-bold text-amber-300 font-mono">
+                          ✨ {fb.naturalExpression || fb.grammarFix}
+                        </div>
+                        {fb.explanation && (
+                          <div className="text-[11px] text-slate-400">{fb.explanation}</div>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleEquipWeapon(fb, feedbackId)}
+                        disabled={isEquipped}
+                        className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 ${
+                          isEquipped
+                            ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300'
+                            : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20'
+                        }`}
+                      >
+                        {isEquipped ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-400" />
+                            <span>装備済み</span>
+                          </>
+                        ) : (
+                          <>
+                            <Swords className="w-3 h-3" />
+                            <span>武器として装備</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => handleStartRally(selectedRallyTopic)}
+            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-2xl text-xs sm:text-sm shadow-lg shadow-amber-500/20 transition-all"
+          >
+            <Zap className="w-4 h-4" />
+            <span>同じトピックでもう一度特訓</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewState('lobby')}
+            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-2xl text-xs sm:text-sm transition-all"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>ロビーに戻る</span>
+          </button>
+        </div>
       </div>
     );
   }

@@ -1265,3 +1265,178 @@ ${targetItem.sampleSentences && targetItem.sampleSentences.length > 0 ? `【参�
     correctedSentence: targetItem.sampleSentences?.[0] || '',
   };
 }
+
+// ===================== RALLY & ARSENAL SPARRING PARTNER =====================
+
+export interface RallyPartnerParams {
+  userText: string;
+  topicPrompt?: string;
+  history: { role: 'user' | 'assistant'; text: string }[];
+  apiKey: string;
+  model?: string;
+}
+
+export interface RallyPartnerFeedback {
+  hasCorrection: boolean;
+  userOriginalText: string;
+  grammarFix: string;        // 🔧 最小限の文法修正 (Tier 1)
+  naturalExpression: string; // ✨ 洗練されたネイティブ表現 (Tier 2)
+  explanation: string;       // 日本語の簡潔な解説
+}
+
+export interface RallySuggestionChip {
+  text: string;    // 英語の回答切り口
+  labelJa: string; // 日本語の要約
+}
+
+export interface RallyPartnerResult {
+  reaction: string;         // 英語の共感・相槌 (1〜2文)
+  nextQuestion: string;     // 次の質問 (1文)
+  nextQuestionJa: string;   // 次の質問の日本語訳
+  feedback?: RallyPartnerFeedback;
+  suggestionChips: RallySuggestionChip[];
+  tokenUsage?: { promptTokens: number; candidatesTokens: number };
+}
+
+/**
+ * 瞬間ラリー特訓（スパーリング＆即時武器化）対話AI
+ */
+export async function chatWithRallyPartner(params: RallyPartnerParams): Promise<RallyPartnerResult> {
+  const { userText, topicPrompt = '日常のカジュアルな雑談', history, apiKey, model = 'gemini-3.7-flash' } = params;
+
+  if (!apiKey) {
+    return {
+      reaction: 'API key is not configured.',
+      nextQuestion: 'Please set your Gemini API key in settings.',
+      nextQuestionJa: '設定画面からGemini APIキーを入力してください。',
+      suggestionChips: [],
+    };
+  }
+
+  const systemInstruction = `You are "Rally Bot", an energetic, conversational English sparring partner and immediate fluency coach.
+Your goal is to keep an engaging, fast-paced conversational rally with the learner while helping them immediately "weaponize" any unsaid or awkward English into useful sentences.
+
+【CURRENT CONVERSATION TOPIC / SCENARIO】
+"${topicPrompt}"
+
+【CORE INTERACTION RULES】
+1. USER IS HERE TO PRACTICE RESPONDING:
+   - Always keep your conversational reaction short and punchy (1 to 2 casual sentences).
+   - Always end with ONE engaging, relevant follow-up question that drives the topic forward.
+   - Do NOT give long lectures in your conversational speech.
+
+2. TWO-TIER FEEDBACK (VERY IMPORTANT):
+   Analyze the user's latest input:
+   - If the user wrote in Japanese (because they didn't know how to say it in English), treat "hasCorrection" as true. Provide:
+     • grammarFix: A clear, correct direct English translation.
+     • naturalExpression: A super natural, idiomatic native expression.
+     • explanation: "日本語でおっしゃった内容を英語化しました。"
+   - If the user wrote in English:
+     • If it has fatal grammar errors (tense, missing preposition, wrong auxiliary, subject-verb agreement):
+       - grammarFix: Fix ONLY the fatal grammar mistakes while keeping the user's exact words and structure as intact as possible.
+       - naturalExpression: Provide how a native speaker would naturally/casually say this idea.
+       - explanation: 1-2 friendly Japanese sentences explaining the exact fix.
+     • If their English is already 100% natural and error-free:
+       - hasCorrection: false.
+       - grammarFix & naturalExpression can be the user's sentence or a cool synonym.
+
+3. 3 SUGGESTION CHIPS (カンペ候補):
+   Generate 3 diverse, natural ways the user could reply to your nextQuestion:
+   - 1 positive / enthusiastic angle
+   - 1 nuanced / alternative / negative angle
+   - 1 counter-question or playful angle
+   Each chip MUST have:
+   - "text": Natural English sentence (e.g. "Honestly, I'd probably go for...")
+   - "labelJa": Short Japanese summary (e.g. "正直〜を選ぶと答える")
+
+【STRICT JSON OUTPUT FORMAT】
+Return ONLY a pure JSON object:
+{
+  "reaction": "...",
+  "nextQuestion": "...",
+  "nextQuestionJa": "...",
+  "feedback": {
+    "hasCorrection": true | false,
+    "userOriginalText": "...",
+    "grammarFix": "...",
+    "naturalExpression": "...",
+    "explanation": "..."
+  },
+  "suggestionChips": [
+    { "text": "...", "labelJa": "..." },
+    { "text": "...", "labelJa": "..." },
+    { "text": "...", "labelJa": "..." }
+  ]
+}`;
+
+  const formattedHistory = history.slice(-8).map(h => ({
+    role: h.role === 'user' ? 'user' : 'model',
+    parts: [{ text: h.text }],
+  }));
+
+  const contents = [
+    ...formattedHistory,
+    {
+      role: 'user',
+      parts: [{ text: userText.trim() }],
+    },
+  ];
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents,
+          generationConfig: {
+            temperature: 0.4,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const usage = data.usageMetadata ? {
+        promptTokens: data.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: data.usageMetadata.candidatesTokenCount || 0,
+      } : undefined;
+
+      const cleaned = rawText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+      const parsed = JSON.parse(cleaned);
+
+      return {
+        reaction: parsed.reaction || 'Got it!',
+        nextQuestion: parsed.nextQuestion || 'What do you think?',
+        nextQuestionJa: parsed.nextQuestionJa || 'あなたはどう思いますか？',
+        feedback: parsed.feedback ? {
+          hasCorrection: Boolean(parsed.feedback.hasCorrection),
+          userOriginalText: parsed.feedback.userOriginalText || userText,
+          grammarFix: parsed.feedback.grammarFix || userText,
+          naturalExpression: parsed.feedback.naturalExpression || parsed.feedback.grammarFix || userText,
+          explanation: parsed.feedback.explanation || '',
+        } : undefined,
+        suggestionChips: Array.isArray(parsed.suggestionChips) ? parsed.suggestionChips : [],
+        tokenUsage: usage,
+      };
+    } catch (err) {
+      console.warn(`chatWithRallyPartner failed with ${currentModel}:`, err);
+    }
+  }
+
+  return {
+    reaction: 'Thanks for sharing!',
+    nextQuestion: 'Could you tell me a little more about that?',
+    nextQuestionJa: 'それについてもう少し詳しく教えてもらえますか？',
+    suggestionChips: [],
+  };
+}
