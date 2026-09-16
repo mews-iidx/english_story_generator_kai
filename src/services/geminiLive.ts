@@ -105,7 +105,7 @@ ${personaPrompt}
 }
 
 /**
- * Gemini Live API WebSocket クライアントクラス
+ * Gemini Live API WebSocket クライアントクラス (v1beta BidiGenerateContent)
  */
 export class GeminiLiveSession {
   private ws: WebSocket | null = null;
@@ -113,9 +113,11 @@ export class GeminiLiveSession {
   private mediaStream: MediaStream | null = null;
   private audioInputNode: MediaStreamAudioSourceNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
+  private muteGainNode: GainNode | null = null;
   private isPushToTalkActive: boolean = false;
   private isPushToTalkMode: boolean = false;
   private isMuted: boolean = false;
+  private isSetupComplete: boolean = false;
   private playbackQueue: AudioBufferSourceNode[] = [];
   private nextPlaybackTime: number = 0;
   private options: GeminiLiveSessionOptions;
@@ -149,15 +151,14 @@ export class GeminiLiveSession {
         },
       });
 
-      // 3. WebSocket 接続
+      // 3. WebSocket 接続 (v1beta 正式エンドポイント)
       const apiKey = this.options.apiKey;
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
+        console.log('Gemini Live WebSocket opened, sending setup...');
         this.sendInitialSetup();
-        this.updateState('connected');
-        this.setupMicrophonePipeline();
       };
 
       this.ws.onmessage = async (event: MessageEvent) => {
@@ -204,6 +205,8 @@ export class GeminiLiveSession {
         systemInstruction: {
           parts: [{ text: systemPrompt }],
         },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
       },
     };
 
@@ -217,8 +220,12 @@ export class GeminiLiveSession {
     // 4096 samples at audioContext.sampleRate
     this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
 
+    // スピーカーへのエコーバックを防止するためゲイン0のノードを介して destination に接続
+    this.muteGainNode = this.audioContext.createGain();
+    this.muteGainNode.gain.value = 0;
+
     this.processorNode.onaudioprocess = (e: AudioProcessingEvent) => {
-      if (this.isMuted) return;
+      if (this.isMuted || !this.isSetupComplete) return;
 
       // Push to Talk モードの場合、ボタンを押している間のみ送信
       if (this.isPushToTalkMode && !this.isPushToTalkActive) {
@@ -245,20 +252,20 @@ export class GeminiLiveSession {
     };
 
     this.audioInputNode.connect(this.processorNode);
-    this.processorNode.connect(this.audioContext.destination);
+    this.processorNode.connect(this.muteGainNode);
+    this.muteGainNode.connect(this.audioContext.destination);
   }
 
   private sendRealtimeChunk(base64Audio: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
 
+    // 正式なLive API仕様: realtimeInput.audio (audio/pcm;rate=16000)
     const realtimeMsg = {
       realtimeInput: {
-        mediaChunks: [
-          {
-            mimeType: 'audio/pcm;rate=16000',
-            data: base64Audio,
-          },
-        ],
+        audio: {
+          mimeType: 'audio/pcm;rate=16000',
+          data: base64Audio,
+        },
       },
     };
 
@@ -282,6 +289,15 @@ export class GeminiLiveSession {
       if (!jsonStr) return;
       const data = JSON.parse(jsonStr);
 
+      // 0. セットアップ完了通知
+      if (data.setupComplete) {
+        console.log('Gemini Live Setup Complete! Starting audio pipeline.');
+        this.isSetupComplete = true;
+        this.updateState('connected');
+        this.setupMicrophonePipeline();
+        return;
+      }
+
       const serverContent = data.serverContent;
       if (!serverContent) return;
 
@@ -292,7 +308,12 @@ export class GeminiLiveSession {
         return;
       }
 
-      // 2. モデルの発話データ (音声 & テキスト)
+      // 2. ユーザー音声のリアルタイム文字起こし (Live API Native Transcribe)
+      if (serverContent.inputTranscription?.text) {
+        this.options.callbacks.onUserTranscript(serverContent.inputTranscription.text);
+      }
+
+      // 3. モデルの発話データ (音声 & テキスト)
       const modelTurn = serverContent.modelTurn;
       if (modelTurn && Array.isArray(modelTurn.parts)) {
         for (const part of modelTurn.parts) {
@@ -308,7 +329,11 @@ export class GeminiLiveSession {
         }
       }
 
-      // 3. ターン完了
+      if (serverContent.outputTranscription?.text) {
+        this.options.callbacks.onAssistantTranscript(serverContent.outputTranscription.text);
+      }
+
+      // 4. ターン完了
       if (serverContent.turnComplete) {
         this.options.callbacks.onTurnComplete();
       }
@@ -392,16 +417,7 @@ export class GeminiLiveSession {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const msg = {
       realtimeInput: {
-        mediaChunks: [],
-      },
-      clientContent: {
-        turns: [
-          {
-            role: 'user',
-            parts: [{ text }],
-          },
-        ],
-        turnComplete: true,
+        text: text,
       },
     };
     this.ws.send(JSON.stringify(msg));
@@ -414,6 +430,10 @@ export class GeminiLiveSession {
     if (this.processorNode) {
       this.processorNode.disconnect();
       this.processorNode = null;
+    }
+    if (this.muteGainNode) {
+      this.muteGainNode.disconnect();
+      this.muteGainNode = null;
     }
     if (this.audioInputNode) {
       this.audioInputNode.disconnect();
