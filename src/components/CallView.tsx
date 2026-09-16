@@ -8,6 +8,7 @@ import {
   DetectedCallError,
 } from '../types/persona';
 import { GeminiLiveSession, CallConnectionState } from '../services/geminiLive';
+import { LiveLogger } from '../services/liveLogger';
 import {
   analyzeCallSessionAndExtractMemory,
   generateCustomPersona,
@@ -150,6 +151,7 @@ export const CallView: React.FC<CallViewProps> = ({
   // 会話メッセージ履歴
   const [callMessages, setCallMessages] = useState<CallMessage[]>([]);
   const [currentAssistantText, setCurrentAssistantText] = useState('');
+  const [currentUserText, setCurrentUserText] = useState('');
 
   // テキストチャット用状態
   const [chatInput, setChatInput] = useState('');
@@ -271,29 +273,91 @@ export const CallView: React.FC<CallViewProps> = ({
           setConnectionState(state);
           if (errorMsg) setErrorMessage(errorMsg);
         },
-        onUserTranscript: (text) => {
-          const trimmed = text.trim();
-          if (!trimmed || trimmed.startsWith('[') || trimmed.includes('Call connected')) {
+        onUserSpeechStart: () => {
+          // ユーザーが発話開始した際、直前のAI未確定発話があればコミット
+          setCurrentAssistantText((current) => {
+            const trimmed = current.trim();
+            if (trimmed && !trimmed.startsWith('[') && !trimmed.includes('Initiating')) {
+              setCallMessages((prev) => [
+                ...prev,
+                {
+                  id: 'asst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+                  role: 'assistant',
+                  text: trimmed,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
+            }
+            return '';
+          });
+        },
+        onUserSpeechEnd: () => {
+          // ユーザー発話終了（無音検知）: バッファを1つの発話としてコミット
+          setCurrentUserText((current) => {
+            const trimmed = current.trim();
+            if (trimmed && !trimmed.startsWith('[') && !trimmed.includes('Call connected')) {
+              setCallMessages((prev) => [
+                ...prev,
+                {
+                  id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+                  role: 'user',
+                  text: trimmed,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
+              LiveLogger.log('USER_COMMITTED', `Committed user speech turn: "${trimmed}"`, { text: trimmed });
+            }
+            return '';
+          });
+        },
+        onUserTranscript: (textChunk) => {
+          // ユーザー文字起こしのストリーム断片をバッファに追記 (単語ごとの分割プッシュを防止)
+          if (!textChunk || textChunk.startsWith('[') || textChunk.includes('Call connected')) {
             return;
           }
-          setCallMessages((prev) => [
-            ...prev,
-            {
-              id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
-              role: 'user',
-              text: trimmed,
-              timestamp: new Date().toISOString(),
-            },
-          ]);
+          setCurrentUserText((prev) => prev + textChunk);
         },
         onAssistantTranscript: (textChunk) => {
-          // モデルの思考テキストやシステムプレフィックスを万一受信した場合も遮断
+          // モデルの思考テキストやシステムプレフィックスを遮断
           if (textChunk.includes('Initiating') || textChunk.startsWith('[')) {
             return;
           }
+          // AIが話し始める前にユーザーの未コミット発話があれば確定
+          setCurrentUserText((current) => {
+            const trimmed = current.trim();
+            if (trimmed && !trimmed.startsWith('[') && !trimmed.includes('Call connected')) {
+              setCallMessages((prev) => [
+                ...prev,
+                {
+                  id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+                  role: 'user',
+                  text: trimmed,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
+              LiveLogger.log('USER_COMMITTED', `Committed user speech turn before AI response: "${trimmed}"`, { text: trimmed });
+            }
+            return '';
+          });
           setCurrentAssistantText((prev) => prev + textChunk);
         },
         onTurnComplete: () => {
+          // ターン完了時: 残っているユーザー発話とAI発話を確定
+          setCurrentUserText((current) => {
+            const trimmed = current.trim();
+            if (trimmed && !trimmed.startsWith('[') && !trimmed.includes('Call connected')) {
+              setCallMessages((prev) => [
+                ...prev,
+                {
+                  id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+                  role: 'user',
+                  text: trimmed,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
+            }
+            return '';
+          });
           setCurrentAssistantText((current) => {
             const trimmed = current.trim();
             if (trimmed && !trimmed.startsWith('[') && !trimmed.includes('Initiating')) {
@@ -420,7 +484,15 @@ export const CallView: React.FC<CallViewProps> = ({
     let finalMessages = callMessages.filter(
       (m) => !m.text.trim().startsWith('[') && !m.text.includes('Call connected')
     );
-    if (currentAssistantText.trim()) {
+    if (currentUserText.trim() && !currentUserText.trim().startsWith('[') && !currentUserText.trim().includes('Call connected')) {
+      finalMessages.push({
+        id: 'user_' + Date.now(),
+        role: 'user',
+        text: currentUserText.trim(),
+        timestamp: new Date().toISOString(),
+      });
+    }
+    if (currentAssistantText.trim() && !currentAssistantText.trim().startsWith('[') && !currentAssistantText.trim().includes('Initiating')) {
       finalMessages.push({
         id: 'asst_' + Date.now(),
         role: 'assistant',
@@ -428,6 +500,8 @@ export const CallView: React.FC<CallViewProps> = ({
         timestamp: new Date().toISOString(),
       });
     }
+    setCurrentUserText('');
+    setCurrentAssistantText('');
 
     const duration = callDuration;
     const persona = activePersona;
@@ -2142,8 +2216,16 @@ export const CallView: React.FC<CallViewProps> = ({
           {/* Real-time Subtitles */}
           {showSubtitles && (
             <div className="w-full bg-slate-950/80 rounded-2xl p-4 border border-slate-800/80 min-h-[90px] flex items-center justify-center text-xs sm:text-sm text-slate-200">
-              {currentAssistantText ? (
-                <p className="text-cyan-300 animate-fadeIn">{currentAssistantText}</p>
+              {currentUserText ? (
+                <p className="text-amber-300 animate-fadeIn">
+                  <span className="text-amber-500 font-semibold mr-1.5">You:</span>
+                  {currentUserText}
+                </p>
+              ) : currentAssistantText ? (
+                <p className="text-cyan-300 animate-fadeIn">
+                  <span className="text-cyan-500 font-semibold mr-1.5">{persona?.name || 'AI'}:</span>
+                  {currentAssistantText}
+                </p>
               ) : callMessages.length > 0 ? (
                 <p className="text-slate-300">
                   <span className="text-slate-500 mr-2">

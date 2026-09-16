@@ -1,4 +1,5 @@
 import { Persona } from '../types/persona';
+import { LiveLogger } from './liveLogger';
 
 export type CallConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'disconnected';
 
@@ -9,6 +10,8 @@ export interface GeminiLiveCallbacks {
   onVolumeChange: (userVolume: number, assistantVolume: number) => void; // 0.0〜1.0 (波形アニメーション用)
   onTurnComplete: () => void;
   onInterrupted: () => void;
+  onUserSpeechStart?: () => void;
+  onUserSpeechEnd?: () => void;
 }
 
 export interface GeminiLiveSessionOptions {
@@ -27,6 +30,9 @@ const LIVE_MODELS = [
   'models/gemini-2.5-flash-native-audio-preview-12-2025',
   'models/gemini-3.1-flash-live-preview',
 ];
+
+const SPEECH_THRESHOLD = 0.035; // RMS閾値
+const SILENCE_TIMEOUT_MS = 500;  // 発話終了とみなす無音時間 (ms)
 
 /**
  * ペルソナとバイリンガルサポート用のシステムプロンプト生成
@@ -132,12 +138,27 @@ export class GeminiLiveSession {
   private currentAssistantVolume: number = 0;
   private currentModelIndex: number = 0;
 
+  // VAD (Voice Activity Detection) 状態管理
+  private isUserSpeaking: boolean = false;
+  private speechStartTime: number = 0;
+  private lastSpeechTime: number = 0;
+  private lastUserSpeechEndedAt: number = 0;
+  private isAwaitingFirstAudio: boolean = false;
+
   constructor(options: GeminiLiveSessionOptions) {
     this.options = options;
     this.isPushToTalkMode = options.isPushToTalk;
   }
 
   public async start(): Promise<void> {
+    LiveLogger.resetSessionTime();
+    LiveLogger.log('INIT', 'Initializing Gemini Live session...', {
+      modelOptions: LIVE_MODELS,
+      voice: this.options.persona?.voiceName || this.options.voiceName || 'Aoede',
+      isRallyMode: !!this.options.isRallyMode,
+      isPushToTalk: this.isPushToTalkMode,
+    });
+
     this.currentModelIndex = 0;
     await this.connectWithCurrentModel();
   }
@@ -178,12 +199,12 @@ export class GeminiLiveSession {
       }
 
       const modelName = LIVE_MODELS[this.currentModelIndex] || 'models/gemini-2.0-flash-exp';
-      console.log(`[Gemini Live] Connecting via ${wsUrl.split('?')[0]} with model: ${modelName}`);
+      LiveLogger.log('WS_CONNECTING', `Connecting to WebSocket with model: ${modelName}`);
 
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
-        console.log(`[Gemini Live] WebSocket opened with model ${modelName}, sending setup...`);
+        LiveLogger.log('WS_CONNECTED', `WebSocket connection established with model: ${modelName}`);
         this.sendInitialSetup(modelName);
       };
 
@@ -193,6 +214,7 @@ export class GeminiLiveSession {
 
       this.ws.onerror = (err) => {
         console.error('[Gemini Live] WebSocket Error:', err);
+        LiveLogger.log('ERROR', 'WebSocket encountered an error', { error: String(err) });
       };
 
       this.ws.onclose = (event) => {
@@ -201,7 +223,7 @@ export class GeminiLiveSession {
         // もしセットアップ完了前に異常切断され、まだモデル候補があるなら次のモデルを自動試行
         if (!this.isSetupComplete && this.currentModelIndex < LIVE_MODELS.length - 1) {
           this.currentModelIndex++;
-          console.log(`[Gemini Live] Retrying with fallback model: ${LIVE_MODELS[this.currentModelIndex]}`);
+          LiveLogger.log('WS_CONNECTING', `Retrying with fallback model: ${LIVE_MODELS[this.currentModelIndex]}`);
           this.connectWithCurrentModel();
           return;
         }
@@ -215,12 +237,14 @@ export class GeminiLiveSession {
           } else if (event.reason) {
             errorMsg = `切断: ${event.reason}`;
           }
+          LiveLogger.log('ERROR', `WebSocket closed with error: ${errorMsg}`, { code: event.code, reason: event.reason });
           this.updateState('error', errorMsg);
         }
       };
 
     } catch (err: any) {
       console.error('Failed to start Gemini Live session:', err);
+      LiveLogger.log('ERROR', 'Failed to start Gemini Live session', { error: err.message });
       this.updateState('error', err.message || 'マイクまたは通話の初期化に失敗しました');
     }
   }
@@ -253,9 +277,9 @@ export class GeminiLiveSession {
     };
 
     this.ws.send(JSON.stringify(setupMsg));
+    LiveLogger.log('SETUP_SENT', `Setup sent for model ${modelName} with voice ${voiceName}`);
   }
 
-  
   /**
    * クライアントから Gemini Live へテキストメッセージ/プロンプトを送信
    */
@@ -279,6 +303,37 @@ export class GeminiLiveSession {
     }
   }
 
+  /**
+   * ユーザーの発話終了（無音検出）を即座にサーバーに通知し、レイテンシゼロで応答生成を開始させる
+   */
+  public sendAudioStreamEnd(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
+    try {
+      const endMsg = {
+        realtimeInput: {
+          audioStreamEnd: true,
+        },
+      };
+      this.ws.send(JSON.stringify(endMsg));
+    } catch (e) {
+      console.warn('[Gemini Live] Failed to send audioStreamEnd:', e);
+    }
+  }
+
+  public sendRealtimeActivityStart(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
+    try {
+      this.ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+    } catch (e) {}
+  }
+
+  public sendRealtimeActivityEnd(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
+    try {
+      this.ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+    } catch (e) {}
+  }
+
   private setupMicrophonePipeline(): void {
     if (!this.audioContext || !this.mediaStream) return;
 
@@ -290,7 +345,7 @@ export class GeminiLiveSession {
     }
 
     this.audioInputNode = this.audioContext.createMediaStreamSource(this.mediaStream);
-    // 4096 samples at audioContext.sampleRate
+    // 4096 samples at audioContext.sampleRate (~85ms @ 48kHz, ~256ms @ 16kHz)
     this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
 
     // スピーカーへのエコーバックを防止するためゲイン0のノードを介して destination に接続
@@ -313,8 +368,41 @@ export class GeminiLiveSession {
       for (let i = 0; i < inputBuffer.length; i++) {
         sum += inputBuffer[i] * inputBuffer[i];
       }
-      const rms = Math.min(1, Math.sqrt(sum / inputBuffer.length) * 5);
-      this.options.callbacks.onVolumeChange(rms, this.currentAssistantVolume);
+      const rawRms = Math.sqrt(sum / inputBuffer.length);
+      const displayVolume = Math.min(1, rawRms * 5);
+      this.options.callbacks.onVolumeChange(displayVolume, this.currentAssistantVolume);
+
+      // ================= Hybrid VAD (Voice Activity Detection) =================
+      const now = Date.now();
+      if (rawRms >= SPEECH_THRESHOLD) {
+        if (!this.isUserSpeaking) {
+          this.isUserSpeaking = true;
+          this.speechStartTime = now;
+          this.lastSpeechTime = now;
+          this.isAwaitingFirstAudio = true;
+          LiveLogger.log('USER_SPEECH_START', 'Local VAD detected user speech start', {
+            rms: Number(rawRms.toFixed(4)),
+            threshold: SPEECH_THRESHOLD,
+          });
+          this.options.callbacks.onUserSpeechStart?.();
+        } else {
+          this.lastSpeechTime = now;
+        }
+      } else if (this.isUserSpeaking) {
+        // 発話中状態のまま無音が続いているかチェック
+        const silenceElapsed = now - this.lastSpeechTime;
+        if (silenceElapsed >= SILENCE_TIMEOUT_MS) {
+          this.isUserSpeaking = false;
+          const speechDuration = this.lastSpeechTime - this.speechStartTime;
+          this.lastUserSpeechEndedAt = now;
+          LiveLogger.log('USER_SPEECH_END', `Local VAD detected user silence (${silenceElapsed}ms). Sent audioStreamEnd!`, {
+            speechDurationMs: speechDuration,
+            silenceDurationMs: silenceElapsed,
+          });
+          this.options.callbacks.onUserSpeechEnd?.();
+          this.sendAudioStreamEnd();
+        }
+      }
 
       // 16kHz PCM にダウンサンプリングして WebSocket に送信
       const downsampled16k = this.downsampleTo16k(inputBuffer, this.audioContext!.sampleRate);
@@ -364,7 +452,7 @@ export class GeminiLiveSession {
 
       // 0. セットアップ完了通知
       if (data.setupComplete) {
-        console.log('[Gemini Live] Setup Complete! Starting audio pipeline.');
+        LiveLogger.log('SETUP_COMPLETE', 'Setup Complete received from Gemini Live server. Starting audio pipeline.');
         this.isSetupComplete = true;
         this.updateState('connected');
         this.setupMicrophonePipeline();
@@ -375,6 +463,7 @@ export class GeminiLiveSession {
           ? `[Call connected. Please greet the user naturally in 1 short casual English sentence and ask your opening question on "${topic}" to start our sparring.]`
           : `[Call connected. Please greet the user warmly and naturally in 1 short English sentence as ${this.options.persona?.name || 'their friend'} and ask a natural opening question.]`;
         
+        LiveLogger.log('KICKOFF_SENT', 'Sent initial kickoff prompt to trigger first AI greeting');
         this.sendTextMessage(kickoffText);
         return;
       }
@@ -384,6 +473,7 @@ export class GeminiLiveSession {
 
       // 1. 割り込み検知 (Barge-in: ユーザーが喋り始めたため再生停止)
       if (serverContent.interrupted) {
+        LiveLogger.log('INTERRUPTED', 'Barge-in interrupted: Stopping assistant audio playback');
         this.stopAssistantAudioPlayback();
         this.options.callbacks.onInterrupted();
         return;
@@ -391,9 +481,10 @@ export class GeminiLiveSession {
 
       // 2. ユーザー音声のリアルタイム文字起こし
       if (serverContent.inputTranscription?.text) {
-        const text = serverContent.inputTranscription.text.trim();
+        const text = serverContent.inputTranscription.text;
         // Kickoff指示やシステム制御プロンプトはユーザー発話として扱わない
         if (text && !text.startsWith('[') && !text.includes('Call connected')) {
+          LiveLogger.log('USER_CHUNK', `User transcription stream chunk: "${text}"`, { chunk: text });
           this.options.callbacks.onUserTranscript(text);
         }
       }
@@ -403,6 +494,13 @@ export class GeminiLiveSession {
       if (modelTurn && Array.isArray(modelTurn.parts)) {
         for (const part of modelTurn.parts) {
           if (part.inlineData && part.inlineData.data) {
+            if (this.isAwaitingFirstAudio) {
+              this.isAwaitingFirstAudio = false;
+              const latencyMs = this.lastUserSpeechEndedAt > 0 ? Date.now() - this.lastUserSpeechEndedAt : 0;
+              LiveLogger.log('ASST_FIRST_AUDIO', `Assistant first audio received! Latency: ${latencyMs}ms`, {
+                latencyMs,
+              });
+            }
             const base64Pcm = part.inlineData.data;
             this.playAssistantPcm24k(base64Pcm);
           }
@@ -414,16 +512,19 @@ export class GeminiLiveSession {
       if (serverContent.outputTranscription?.text) {
         const text = serverContent.outputTranscription.text;
         if (text && !text.startsWith('[') && !text.includes('Initiat')) {
+          LiveLogger.log('ASST_TRANSCRIPT', `Assistant transcript chunk: "${text}"`, { chunk: text });
           this.options.callbacks.onAssistantTranscript(text);
         }
       }
 
-      // 4. ターン完了
+      // 5. ターン完了
       if (serverContent.turnComplete) {
+        LiveLogger.log('TURN_COMPLETE', 'Server signaled turn complete.');
         this.options.callbacks.onTurnComplete();
       }
     } catch (e) {
       console.warn('[Gemini Live] Error handling incoming message:', e);
+      LiveLogger.log('ERROR', 'Error handling incoming message', { error: String(e) });
     }
   }
 
@@ -492,6 +593,16 @@ export class GeminiLiveSession {
 
   public setPushToTalkActive(active: boolean): void {
     this.isPushToTalkActive = active;
+    if (active) {
+      this.sendRealtimeActivityStart();
+      LiveLogger.log('USER_SPEECH_START', 'PTT Pressed (Manual VAD Start)');
+      this.options.callbacks.onUserSpeechStart?.();
+    } else {
+      this.sendRealtimeActivityEnd();
+      this.sendAudioStreamEnd();
+      LiveLogger.log('USER_SPEECH_END', 'PTT Released (Manual VAD End). Sent audioStreamEnd.');
+      this.options.callbacks.onUserSpeechEnd?.();
+    }
   }
 
   public setMuted(muted: boolean): void {
@@ -509,6 +620,7 @@ export class GeminiLiveSession {
   }
 
   public disconnect(): void {
+    LiveLogger.log('DISCONNECTED', 'Session disconnected.');
     this.updateState('disconnected');
     this.stopAssistantAudioPlayback();
 

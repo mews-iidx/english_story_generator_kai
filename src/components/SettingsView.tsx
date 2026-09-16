@@ -1,6 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AppSettings, CefrLevel } from '../types/settings';
-import { Key, Cloud, Download, Upload, Check, ExternalLink, RefreshCw, ShieldCheck, HelpCircle, Activity, AlertTriangle, Smartphone } from 'lucide-react';
+import { Key, Cloud, Download, Upload, Check, ExternalLink, RefreshCw, ShieldCheck, HelpCircle, Activity, AlertTriangle, Smartphone, Copy, Trash2, Terminal } from 'lucide-react';
+import { LiveLogger, LiveLogEntry } from '../services/liveLogger';
 import { exportAllData, importAllData } from '../services/storage';
 
 interface SettingsViewProps {
@@ -35,6 +36,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [showOauthGuide, setShowOauthGuide] = useState(false);
   const [showPwaGuide, setShowPwaGuide] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [liveLogs, setLiveLogs] = useState<LiveLogEntry[]>(() => LiveLogger.getLogs());
+  const [copiedLog, setCopiedLog] = useState(false);
+  const [showLiveLogViewer, setShowLiveLogViewer] = useState(false);
+
+  useEffect(() => {
+    const unsub = LiveLogger.subscribe(() => {
+      setLiveLogs(LiveLogger.getLogs());
+    });
+    return unsub;
+  }, []);
 
   const presetModels = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview'];
   const isPresetModel = presetModels.includes(model);
@@ -430,6 +441,108 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
           </div>
+        </div>
+        {/* 6. Realtime Call & Gemini Live Debug / Telemetry Logs */}
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2.5 text-white font-bold text-lg">
+              <Activity className="w-5 h-5 text-emerald-400" />
+              <span>通話・リアルタイム通信の計測ログ</span>
+            </div>
+            <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+              {liveLogs.length} 件記録中
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-300 leading-relaxed">
+            リアルタイム英会話（Gemini Live）通話時の<strong>レイテンシ（発話終了〜AI第1声の遅延時間）</strong>、VAD音声検出イベント、WebSocket通信ログを記録しています。遅延の調査やログの共有・検証にご利用ください。
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => LiveLogger.downloadLogsFile('txt')}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>テキスト形式でダウンロード (.txt)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => LiveLogger.downloadLogsFile('json')}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
+            >
+              <Download className="w-3.5 h-3.5 text-blue-400" />
+              <span>JSON形式でダウンロード (.json)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const text = LiveLogger.exportLogsAsText();
+                navigator.clipboard.writeText(text);
+                setCopiedLog(true);
+                setTimeout(() => setCopiedLog(false), 2000);
+              }}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
+            >
+              {copiedLog ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-amber-400" />}
+              <span>{copiedLog ? 'コピー完了！' : 'ログをクリップボードにコピー'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowLiveLogViewer(!showLiveLogViewer)}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
+            >
+              <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{showLiveLogViewer ? 'ログビューアを閉じる' : 'ログを画面で確認'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm('記録されたリアルタイム通信ログを消去しますか？')) {
+                  LiveLogger.clearLogs();
+                  setLiveLogs([]);
+                }
+              }}
+              className="flex items-center space-x-1.5 px-3 py-2 bg-slate-850 hover:bg-red-950/60 text-slate-400 hover:text-red-300 border border-slate-800 hover:border-red-500/30 rounded-xl text-xs font-semibold transition-all ml-auto"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>ログ消去</span>
+            </button>
+          </div>
+
+          {/* Embedded Live Log Viewer */}
+          {showLiveLogViewer && (
+            <div className="mt-3 bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-300 max-h-72 overflow-y-auto space-y-1.5">
+              {liveLogs.length === 0 ? (
+                <p className="text-slate-500 italic p-2 text-center">ログはまだ記録されていません（通話を行うと自動で蓄積されます）</p>
+              ) : (
+                liveLogs.map((l) => {
+                  let badgeColor = 'bg-slate-800 text-slate-300';
+                  if (l.type.startsWith('USER')) badgeColor = 'bg-amber-950/80 text-amber-300 border border-amber-500/30';
+                  else if (l.type.startsWith('ASST')) badgeColor = 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/30';
+                  else if (l.type === 'ERROR') badgeColor = 'bg-red-950/80 text-red-300 border border-red-500/30';
+                  else if (l.type === 'WS_CONNECTED' || l.type === 'SETUP_COMPLETE') badgeColor = 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30';
+
+                  return (
+                    <div key={l.id} className="leading-tight flex items-start gap-2 border-b border-slate-900 pb-1">
+                      <span className="text-slate-500 shrink-0 font-sans">
+                        {new Date(l.isoTime).toLocaleTimeString('ja-JP', { hour12: false })} (+{(l.relativeTimeMs / 1000).toFixed(2)}s)
+                      </span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 font-sans font-bold ${badgeColor}`}>
+                        {l.type}
+                      </span>
+                      <span className="text-slate-200 break-all">{l.message}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
       </form>
     </div>
