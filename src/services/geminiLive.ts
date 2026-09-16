@@ -244,6 +244,8 @@ export class GeminiLiveSession {
             },
           },
         },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
         systemInstruction: {
           parts: [{ text: systemPrompt }],
         },
@@ -396,29 +398,24 @@ export class GeminiLiveSession {
         }
       }
 
-      // 3. モデルの発話データ (音声再生)
+      // 3. モデルの発話データ (24kHz PCM音声ストリーム再生のみ)
       const modelTurn = serverContent.modelTurn;
       if (modelTurn && Array.isArray(modelTurn.parts)) {
         for (const part of modelTurn.parts) {
-          // 音声ストリーム (24kHz PCM)
           if (part.inlineData && part.inlineData.data) {
             const base64Pcm = part.inlineData.data;
             this.playAssistantPcm24k(base64Pcm);
           }
-          // もし outputTranscription が無く、かつ thought でない純粋なテキストパーツがある場合のフォールバック
-          if (part.text && !part.thought && !serverContent.outputTranscription?.text) {
-            const trimmed = part.text.trim();
-            if (trimmed && !trimmed.startsWith('Initiating') && !trimmed.startsWith('[')) {
-              this.options.callbacks.onAssistantTranscript(trimmed);
-            }
-          }
+          // 注意: modelTurn.parts[].text には音声モダリティ時にモデルの内部思考（thought/plan）が含まれるため、文字起こしには絶対に流さない
         }
       }
 
-      // 4. モデルが実際に発話した音声の正確な文字起こし (outputTranscription)
+      // 4. モデルが実際に声に出して発話した英語音声の正確な文字起こし (outputTranscription のみを採用)
       if (serverContent.outputTranscription?.text) {
         const text = serverContent.outputTranscription.text;
-        this.options.callbacks.onAssistantTranscript(text);
+        if (text && !text.startsWith('[') && !text.includes('Initiat')) {
+          this.options.callbacks.onAssistantTranscript(text);
+        }
       }
 
       // 4. ターン完了
