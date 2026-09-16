@@ -31,6 +31,7 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
+  AlertCircle,
   RefreshCw,
   X,
   Languages,
@@ -2002,10 +2003,37 @@ export const CallView: React.FC<CallViewProps> = ({
             </div>
           )}
 
-          {/* Error display */}
-          {errorMessage && (
-            <div className="w-full p-3 bg-red-950/80 border border-red-500/40 rounded-xl text-red-300 text-xs text-center">
-              ⚠️ {errorMessage}
+          {/* Error / Disconnected display with action buttons */}
+          {(errorMessage || connectionState === 'error' || connectionState === 'disconnected') && (
+            <div className="w-full p-4 bg-red-950/90 border border-red-500/50 rounded-2xl text-red-200 text-xs text-center space-y-3 shadow-lg animate-fadeIn">
+              <div className="font-bold flex items-center justify-center space-x-1.5 text-red-300">
+                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                <span>{errorMessage || 'Live API 通話が切断されました'}</span>
+              </div>
+              <p className="text-[11px] text-red-300/80">
+                Live WebSocketが制限されている場合でも、「高速チャット」で快適に対話練習が可能です。
+              </p>
+              <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => handleStartCall(persona, activeTab === 'rally')}
+                  className="px-3.5 py-1.5 bg-red-800/60 hover:bg-red-700/80 text-white rounded-xl font-bold transition-colors flex items-center space-x-1"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>再接続</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (liveSessionRef.current) liveSessionRef.current.disconnect();
+                    handleStartChat(persona);
+                  }}
+                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-colors flex items-center space-x-1 shadow-md"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>チャットへ切り替え</span>
+                </button>
+              </div>
             </div>
           )}
 

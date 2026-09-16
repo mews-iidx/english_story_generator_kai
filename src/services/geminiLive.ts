@@ -21,6 +21,13 @@ export interface GeminiLiveSessionOptions {
   callbacks: GeminiLiveCallbacks;
 }
 
+const LIVE_MODELS = [
+  'models/gemini-2.0-flash-exp',
+  'models/gemini-2.0-flash-realtime-exp',
+  'models/gemini-2.5-flash-native-audio-preview-12-2025',
+  'models/gemini-3.1-flash-live-preview',
+];
+
 /**
  * ペルソナとバイリンガルサポート用のシステムプロンプト生成
  */
@@ -123,6 +130,7 @@ export class GeminiLiveSession {
   private options: GeminiLiveSessionOptions;
   private connectionState: CallConnectionState = 'idle';
   private currentAssistantVolume: number = 0;
+  private currentModelIndex: number = 0;
 
   constructor(options: GeminiLiveSessionOptions) {
     this.options = options;
@@ -130,35 +138,53 @@ export class GeminiLiveSession {
   }
 
   public async start(): Promise<void> {
+    this.currentModelIndex = 0;
+    await this.connectWithCurrentModel();
+  }
+
+  private async connectWithCurrentModel(): Promise<void> {
     this.updateState('connecting');
+    this.isSetupComplete = false;
 
     try {
       // 1. Web Audio Context 初期化
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioContext = new AudioCtx();
+      if (!this.audioContext || this.audioContext.state === 'closed') {
+        this.audioContext = new AudioCtx();
+      }
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
 
-      // 2. マイク音声の取得
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      // 2. マイク音声の取得 (既存があれば再利用)
+      if (!this.mediaStream || !this.mediaStream.active) {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      }
 
-      // 3. WebSocket 接続 (v1beta 正式エンドポイント)
+      // 3. WebSocket 接続
       const apiKey = this.options.apiKey;
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      
+      if (this.ws) {
+        try { this.ws.close(); } catch (e) {}
+      }
+
+      const modelName = LIVE_MODELS[this.currentModelIndex] || 'models/gemini-2.0-flash-exp';
+      console.log(`[Gemini Live] Connecting via ${wsUrl.split('?')[0]} with model: ${modelName}`);
+
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
-        console.log('Gemini Live WebSocket opened, sending setup...');
-        this.sendInitialSetup();
+        console.log(`[Gemini Live] WebSocket opened with model ${modelName}, sending setup...`);
+        this.sendInitialSetup(modelName);
       };
 
       this.ws.onmessage = async (event: MessageEvent) => {
@@ -166,14 +192,30 @@ export class GeminiLiveSession {
       };
 
       this.ws.onerror = (err) => {
-        console.error('Gemini Live WebSocket Error:', err);
-        this.updateState('error', 'WebSocket接続エラーが発生しました');
+        console.error('[Gemini Live] WebSocket Error:', err);
       };
 
       this.ws.onclose = (event) => {
-        console.log('Gemini Live WebSocket Closed:', event.code, event.reason);
+        console.warn(`[Gemini Live] Closed: code=${event.code}, reason=${event.reason}`);
+        
+        // もしセットアップ完了前に異常切断され、まだモデル候補があるなら次のモデルを自動試行
+        if (!this.isSetupComplete && this.currentModelIndex < LIVE_MODELS.length - 1) {
+          this.currentModelIndex++;
+          console.log(`[Gemini Live] Retrying with fallback model: ${LIVE_MODELS[this.currentModelIndex]}`);
+          this.connectWithCurrentModel();
+          return;
+        }
+
         if (this.connectionState !== 'disconnected') {
-          this.updateState('disconnected');
+          let errorMsg = '通話が切断されました';
+          if (event.code === 1008) {
+            errorMsg = `認証・モデル制限エラー (Code 1008: APIキーにLive API権限があるか確認してください)`;
+          } else if (event.code === 1006) {
+            errorMsg = `通信切断 (Code 1006: ネットワークまたはサーバー切断)`;
+          } else if (event.reason) {
+            errorMsg = `切断: ${event.reason}`;
+          }
+          this.updateState('error', errorMsg);
         }
       };
 
@@ -183,7 +225,7 @@ export class GeminiLiveSession {
     }
   }
 
-  private sendInitialSetup(): void {
+  private sendInitialSetup(modelName: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     const voiceName = this.options.persona?.voiceName || this.options.voiceName || 'Aoede';
@@ -191,7 +233,7 @@ export class GeminiLiveSession {
 
     const setupMsg = {
       setup: {
-        model: 'models/gemini-2.0-flash-exp',
+        model: modelName,
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {
@@ -205,8 +247,6 @@ export class GeminiLiveSession {
         systemInstruction: {
           parts: [{ text: systemPrompt }],
         },
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
       },
     };
 
@@ -215,6 +255,13 @@ export class GeminiLiveSession {
 
   private setupMicrophonePipeline(): void {
     if (!this.audioContext || !this.mediaStream) return;
+
+    if (this.processorNode) {
+      this.processorNode.disconnect();
+    }
+    if (this.audioInputNode) {
+      this.audioInputNode.disconnect();
+    }
 
     this.audioInputNode = this.audioContext.createMediaStreamSource(this.mediaStream);
     // 4096 samples at audioContext.sampleRate
@@ -291,7 +338,7 @@ export class GeminiLiveSession {
 
       // 0. セットアップ完了通知
       if (data.setupComplete) {
-        console.log('Gemini Live Setup Complete! Starting audio pipeline.');
+        console.log('[Gemini Live] Setup Complete! Starting audio pipeline.');
         this.isSetupComplete = true;
         this.updateState('connected');
         this.setupMicrophonePipeline();
@@ -308,7 +355,7 @@ export class GeminiLiveSession {
         return;
       }
 
-      // 2. ユーザー音声のリアルタイム文字起こし (Live API Native Transcribe)
+      // 2. ユーザー音声のリアルタイム文字起こし
       if (serverContent.inputTranscription?.text) {
         this.options.callbacks.onUserTranscript(serverContent.inputTranscription.text);
       }
@@ -338,7 +385,7 @@ export class GeminiLiveSession {
         this.options.callbacks.onTurnComplete();
       }
     } catch (e) {
-      console.warn('Error handling Gemini Live incoming message:', e);
+      console.warn('[Gemini Live] Error handling incoming message:', e);
     }
   }
 
@@ -380,7 +427,7 @@ export class GeminiLiveSession {
         if (idx >= 0) this.playbackQueue.splice(idx, 1);
       };
     } catch (e) {
-      console.warn('Failed to play assistant PCM chunk:', e);
+      console.warn('[Gemini Live] Failed to play assistant PCM chunk:', e);
     }
   }
 
