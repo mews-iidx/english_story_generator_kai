@@ -24,15 +24,18 @@ export interface GeminiLiveSessionOptions {
   callbacks: GeminiLiveCallbacks;
 }
 
+// 最適なLive APIモデル順序（最新のgemini-3.1-flash-live-previewを最優先に）
 const LIVE_MODELS = [
-  'models/gemini-2.0-flash-exp',
-  'models/gemini-2.0-flash-realtime-exp',
-  'models/gemini-2.5-flash-native-audio-preview-12-2025',
   'models/gemini-3.1-flash-live-preview',
+  'models/gemini-2.5-flash-native-audio-preview-12-2025',
+  'models/gemini-2.0-flash-live-001',
+  'models/gemini-2.0-flash-exp',
 ];
 
-const SPEECH_THRESHOLD = 0.035; // RMS閾値
-const SILENCE_TIMEOUT_MS = 500;  // 発話終了とみなす無音時間 (ms)
+const SPEECH_THRESHOLD = 0.035;       // 発話検知RMS閾値（通常時）
+const INTERRUPT_THRESHOLD = 0.090;    // AI発話中の割り込み発話検知RMS閾値（スピーカー音の回り込み誤検知を防止）
+const SILENCE_TIMEOUT_MS = 500;       // 発話終了とみなす無音時間 (ms)
+const MAX_PREROLL_CHUNKS = 4;         // 発話開始直前のプレロール保持数（約340ms）
 
 /**
  * ペルソナとバイリンガルサポート用のシステムプロンプト生成
@@ -138,16 +141,22 @@ export class GeminiLiveSession {
   private currentAssistantVolume: number = 0;
   private currentModelIndex: number = 0;
 
-  // VAD (Voice Activity Detection) 状態管理
+  // VAD (Voice Activity Detection) 状態管理 & プレロール
   private isUserSpeaking: boolean = false;
   private speechStartTime: number = 0;
   private lastSpeechTime: number = 0;
   private lastUserSpeechEndedAt: number = 0;
   private isAwaitingFirstAudio: boolean = false;
+  private preRollBuffer: string[] = [];
 
   constructor(options: GeminiLiveSessionOptions) {
     this.options = options;
     this.isPushToTalkMode = options.isPushToTalk;
+  }
+
+  public get isAiSpeaking(): boolean {
+    if (!this.audioContext) return false;
+    return this.playbackQueue.length > 0 && this.audioContext.currentTime < this.nextPlaybackTime;
   }
 
   public async start(): Promise<void> {
@@ -198,7 +207,7 @@ export class GeminiLiveSession {
         try { this.ws.close(); } catch (e) {}
       }
 
-      const modelName = LIVE_MODELS[this.currentModelIndex] || 'models/gemini-2.0-flash-exp';
+      const modelName = LIVE_MODELS[this.currentModelIndex] || 'models/gemini-3.1-flash-live-preview';
       LiveLogger.log('WS_CONNECTING', `Connecting to WebSocket with model: ${modelName}`);
 
       this.ws = new WebSocket(wsUrl);
@@ -355,15 +364,9 @@ export class GeminiLiveSession {
     this.processorNode.onaudioprocess = (e: AudioProcessingEvent) => {
       if (this.isMuted || !this.isSetupComplete) return;
 
-      // Push to Talk モードの場合、ボタンを押している間のみ送信
-      if (this.isPushToTalkMode && !this.isPushToTalkActive) {
-        this.options.callbacks.onVolumeChange(0, this.currentAssistantVolume);
-        return;
-      }
-
       const inputBuffer = e.inputBuffer.getChannelData(0);
       
-      // 計算して音量をUIに通知
+      // 音量RMSの計算
       let sum = 0;
       for (let i = 0; i < inputBuffer.length; i++) {
         sum += inputBuffer[i] * inputBuffer[i];
@@ -372,44 +375,83 @@ export class GeminiLiveSession {
       const displayVolume = Math.min(1, rawRms * 5);
       this.options.callbacks.onVolumeChange(displayVolume, this.currentAssistantVolume);
 
-      // ================= Hybrid VAD (Voice Activity Detection) =================
+      // 16kHz PCM にダウンサンプリング
+      const downsampled16k = this.downsampleTo16k(inputBuffer, this.audioContext!.sampleRate);
+      const pcm16 = this.floatTo16BitPCM(downsampled16k);
+      const base64Data = this.arrayBufferToBase64(pcm16.buffer);
+
+      // Push to Talk モードの場合: 押している間のみ全音声送信
+      if (this.isPushToTalkMode) {
+        if (this.isPushToTalkActive) {
+          this.sendRealtimeChunk(base64Data);
+        }
+        return;
+      }
+
+      // ================= Gated Audio Streaming & Hybrid VAD =================
+      const isAiSpeaking = this.isAiSpeaking;
+      // AI発話中はスピーカー音の回り込み（エコー）誤検知を防ぐため高めの閾値 (0.09) を適用
+      const currentThreshold = isAiSpeaking ? INTERRUPT_THRESHOLD : SPEECH_THRESHOLD;
       const now = Date.now();
-      if (rawRms >= SPEECH_THRESHOLD) {
+
+      if (rawRms >= currentThreshold) {
         if (!this.isUserSpeaking) {
           this.isUserSpeaking = true;
           this.speechStartTime = now;
           this.lastSpeechTime = now;
           this.isAwaitingFirstAudio = true;
-          LiveLogger.log('USER_SPEECH_START', 'Local VAD detected user speech start', {
+
+          // AI再生中にユーザーが割り込んだ場合は再生停止
+          if (isAiSpeaking) {
+            this.stopAssistantAudioPlayback();
+            this.options.callbacks.onInterrupted();
+          }
+
+          LiveLogger.log('USER_SPEECH_START', 'Local VAD detected user speech start (gating opened)', {
             rms: Number(rawRms.toFixed(4)),
-            threshold: SPEECH_THRESHOLD,
+            threshold: currentThreshold,
+            isAiSpeaking,
           });
           this.options.callbacks.onUserSpeechStart?.();
+
+          // プレロールバッファ（発話開始直前約300ms）をフラッシュ送信して頭文字欠落を完全防止
+          for (const chunk of this.preRollBuffer) {
+            this.sendRealtimeChunk(chunk);
+          }
+          this.preRollBuffer = [];
         } else {
           this.lastSpeechTime = now;
         }
+
+        // 発話中音声をリアルタイム送信
+        this.sendRealtimeChunk(base64Data);
+
       } else if (this.isUserSpeaking) {
-        // 発話中状態のまま無音が続いているかチェック
+        // 発話中状態のまま無音が継続しているかチェック
         const silenceElapsed = now - this.lastSpeechTime;
         if (silenceElapsed >= SILENCE_TIMEOUT_MS) {
           this.isUserSpeaking = false;
           const speechDuration = this.lastSpeechTime - this.speechStartTime;
           this.lastUserSpeechEndedAt = now;
-          LiveLogger.log('USER_SPEECH_END', `Local VAD detected user silence (${silenceElapsed}ms). Sent audioStreamEnd!`, {
+
+          LiveLogger.log('USER_SPEECH_END', `Local VAD detected silence (${silenceElapsed}ms). Sent audioStreamEnd & closed audio gate.`, {
             speechDurationMs: speechDuration,
             silenceDurationMs: silenceElapsed,
           });
           this.options.callbacks.onUserSpeechEnd?.();
           this.sendAudioStreamEnd();
+          this.preRollBuffer = [];
+        } else {
+          // 500ms未満の短い息継ぎ中は音声を継続送信
+          this.sendRealtimeChunk(base64Data);
+        }
+      } else {
+        // 発話していない無音時: WebSocketへの送信は停止（ゲートクローズ）し、直近プレロールのみ保持
+        this.preRollBuffer.push(base64Data);
+        if (this.preRollBuffer.length > MAX_PREROLL_CHUNKS) {
+          this.preRollBuffer.shift();
         }
       }
-
-      // 16kHz PCM にダウンサンプリングして WebSocket に送信
-      const downsampled16k = this.downsampleTo16k(inputBuffer, this.audioContext!.sampleRate);
-      const pcm16 = this.floatTo16BitPCM(downsampled16k);
-      const base64Data = this.arrayBufferToBase64(pcm16.buffer);
-
-      this.sendRealtimeChunk(base64Data);
     };
 
     this.audioInputNode.connect(this.processorNode);
