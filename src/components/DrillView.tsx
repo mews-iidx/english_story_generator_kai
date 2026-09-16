@@ -9,15 +9,16 @@ import {
   Plus,
   BookOpen,
   PenTool,
-  Sparkles,
   Flame,
   ChevronRight,
-  RotateCcw
+  ChevronDown,
+  ChevronUp,
+  Settings2,
+  HelpCircle
 } from 'lucide-react';
 import { PatternMasterItem } from '../types/mastery';
 import { CefrLevel } from '../types/settings';
 import { getPatternsByLevel } from '../data/cefrPatternsMaster';
-// import { getVocabMasterByLevel } from '../data/cefrVocabMaster';
 import {
   loadMasteryState,
   recordDrillResult,
@@ -38,12 +39,15 @@ type DrillFilterMode = 'all' | 'unseen' | 'lapsed';
 export const DrillView: React.FC<DrillViewProps> = ({
   apiKey,
   selectedModel = 'gemini-3.7-flash',
-  userLevel = 'A2',
+  userLevel,
   onNavigateToAnki,
 }) => {
-  const [selectedCefr, setSelectedCefr] = useState<CefrLevel>(userLevel);
+  // デフォルトでA1から未知を潰す
+  const [selectedCefr, setSelectedCefr] = useState<CefrLevel>(userLevel || 'A1');
+
   const [drillType, setDrillType] = useState<'assembly' | 'comprehension'>('assembly');
-  const [filterMode, setFilterMode] = useState<DrillFilterMode>('all');
+  const [filterMode, setFilterMode] = useState<DrillFilterMode>('unseen');
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   
   const [currentPattern, setCurrentPattern] = useState<PatternMasterItem | null>(null);
   const [variationIndex, setVariationIndex] = useState<number>(0);
@@ -56,6 +60,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
   const [sessionCorrectCount, setSessionCorrectCount] = useState<number>(0);
   const [sessionTotalCount, setSessionTotalCount] = useState<number>(0);
   const [currentStreak, setCurrentStreak] = useState<number>(0);
+  const [levelCompletionNotice, setLevelCompletionNotice] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -69,7 +74,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
     window.speechSynthesis.speak(utterance);
   };
 
-  // 出題候補リストの取得＆優先度ソート
+  // 出題候補リストの取得＆優先度ソート (A1から順次未知を潰す)
   const pickNextQuestion = useCallback((cefr: CefrLevel, mode: DrillFilterMode) => {
     const state = loadMasteryState();
     const patterns = getPatternsByLevel(cefr);
@@ -90,9 +95,6 @@ export const DrillView: React.FC<DrillViewProps> = ({
       if (mode === 'lapsed' && targetStatus !== 'lapsed' && mistakeCount === 0) return;
 
       // 優先度スコア計算
-      // 1: 未着手 (0%) -> 最優先で仕分ける
-      // 2: 苦手・ミスあり -> 次点
-      // 3: 既知・マスター済み -> 最低優先
       let priority = 10;
       if (targetStatus === 'unseen') priority = 100;
       else if (targetStatus === 'lapsed') priority = 80 + mistakeCount * 2;
@@ -103,6 +105,23 @@ export const DrillView: React.FC<DrillViewProps> = ({
     });
 
     if (candidatePool.length === 0) {
+      if (mode === 'unseen') {
+        // 現在のレベルの未着手が全滅した時、自動で次のレベルを提案/移行
+        const nextLevels: Record<CefrLevel, CefrLevel | null> = {
+          A1: 'A2',
+          A2: 'B1',
+          B1: 'B2',
+          B2: 'C1',
+          C1: null,
+        };
+        const next = nextLevels[cefr];
+        if (next) {
+          setLevelCompletionNotice(`🎉 ${cefr}レベルの未着手構文をすべてクリアしました！次の【${next}】に進みます。`);
+          setSelectedCefr(next);
+          return;
+        }
+      }
+
       // 該当なしの場合は全件からランダム
       const randomP = patterns[Math.floor(Math.random() * patterns.length)];
       setCurrentPattern(randomP);
@@ -113,9 +132,11 @@ export const DrillView: React.FC<DrillViewProps> = ({
       return;
     }
 
-    // 優先度上位からランダムピック
+    setLevelCompletionNotice(null);
+
+    // 優先度上位からピック
     candidatePool.sort((a, b) => b.priority - a.priority);
-    const topCandidates = candidatePool.slice(0, Math.min(8, candidatePool.length));
+    const topCandidates = candidatePool.slice(0, Math.min(6, candidatePool.length));
     const chosen = topCandidates[Math.floor(Math.random() * topCandidates.length)].pattern;
 
     setCurrentPattern(chosen);
@@ -130,7 +151,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
     pickNextQuestion(selectedCefr, filterMode);
   }, [selectedCefr, filterMode, drillType, pickNextQuestion]);
 
-  // 評価完了時または次へ進んだ時に入力フォーカス
+  // フォーカス
   useEffect(() => {
     if (!isEvaluating && !evalResult) {
       inputRef.current?.focus();
@@ -201,15 +222,46 @@ export const DrillView: React.FC<DrillViewProps> = ({
           correctedSentence: result.correctedSentence,
           errorReason: result.errorReason,
         });
-      } else if (result.result === 'alternative_hint') {
-        // 別解誘導（リトライ）
-        // 連続正解はリセットせず、ヒントを表示して入力欄にフォーカス
       }
     } catch (err) {
       console.error('Drill evaluation failed', err);
     } finally {
       setIsEvaluating(false);
     }
+  };
+
+  // わからない（ギブアップ）ボタン
+  const handleGiveUp = () => {
+    if (!currentPattern || !currentVariation || isEvaluating) return;
+
+    setIsEvaluating(true);
+    const modelSentence = currentVariation.sentence;
+    const result: EvaluateDrillResult = {
+      result: 'wrong',
+      feedback: `正解の構文は【${currentPattern.name}】です。公式: ${currentPattern.focus}。模範解答を確認してAnkiに登録しましょう！`,
+      correctedSentence: modelSentence,
+      errorReason: '未習得・ギブアップ',
+    };
+
+    setEvalResult(result);
+    setSessionTotalCount(prev => prev + 1);
+    setCurrentStreak(0);
+    playWrongSound();
+    speakText(modelSentence);
+
+    recordDrillResult({
+      itemId: currentPattern.id,
+      itemType: 'pattern',
+      drillType,
+      cefr: selectedCefr,
+      result: 'wrong',
+      userResponse: '（ギブアップ）',
+      feedback: result.feedback,
+      correctedSentence: modelSentence,
+      errorReason: '未習得・ギブアップ',
+    });
+
+    setIsEvaluating(false);
   };
 
   // ワンタップ Anki 登録
@@ -241,11 +293,10 @@ export const DrillView: React.FC<DrillViewProps> = ({
     pickNextQuestion(selectedCefr, filterMode);
   };
 
-  // キーボードショートカット (Ctrl+Enter / Cmd+Enter で送信)
+  // キーボードショートカット (Enter で送信 / 次へ)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       if (evalResult && evalResult.result !== 'alternative_hint') {
-        // 正解または不正解の時はEnterで次へ
         handleNext();
       } else {
         handleSubmitAnswer();
@@ -254,142 +305,163 @@ export const DrillView: React.FC<DrillViewProps> = ({
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6 animate-fadeIn">
-      {/* 1. Header & Controls */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-slate-800">
-          <div className="flex items-center space-x-2">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-500/20">
-              <Zap className="w-5 h-5 text-white" />
+    <div className="max-w-3xl mx-auto px-4 py-6 space-y-5 animate-fadeIn">
+      {/* Level Completion Toast */}
+      {levelCompletionNotice && (
+        <div className="p-4 bg-emerald-950/80 border border-emerald-500/40 rounded-2xl text-emerald-300 text-xs font-bold shadow-lg animate-slideDown flex items-center justify-between">
+          <span>{levelCompletionNotice}</span>
+          <button
+            onClick={() => setLevelCompletionNotice(null)}
+            className="text-emerald-400 hover:text-white px-2 py-0.5 rounded-lg"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* 1. Compact Collapsible Header */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl transition-all">
+        <div className="flex items-center justify-between flex-wrap gap-2.5">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center shadow-md shadow-orange-500/20">
+              <Zap className="w-4 h-4 text-white" />
             </div>
-            <div>
-              <h1 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+            <div className="flex items-center space-x-2">
+              <span className="text-sm sm:text-base font-extrabold text-white">
                 瞬間ドリル
-                <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 border border-orange-500/30 font-bold">
-                  高速仕分け機
-                </span>
-              </h1>
-              <p className="text-xs text-slate-400">
-                知っている構文は一撃卒業、弱点は炙り出してAnkiへ
-              </p>
+              </span>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-600/20 text-blue-300 border border-blue-500/30 font-bold">
+                {selectedCefr}
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+                {drillType === 'assembly' ? '✍️ 組立' : '📖 理解'}
+              </span>
+              <span className="text-[11px] text-slate-400 hidden sm:inline">
+                ({filterMode === 'unseen' ? '未知優先' : filterMode === 'lapsed' ? '苦手優先' : 'おまかせ'})
+              </span>
             </div>
           </div>
 
-          {/* セッションスコア & ストリーク */}
-          <div className="flex items-center space-x-3 text-xs">
+          <div className="flex items-center space-x-2">
+            {/* Streak & Score */}
             {currentStreak > 1 && (
-              <div className="flex items-center space-x-1 px-3 py-1 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-300 font-bold animate-bounce">
-                <Flame className="w-4 h-4 text-orange-400" />
-                <span>{currentStreak} 連続正解!</span>
+              <div className="flex items-center space-x-1 px-2.5 py-1 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-300 font-bold text-xs animate-bounce">
+                <Flame className="w-3.5 h-3.5 text-orange-400" />
+                <span>{currentStreak}連正解!</span>
               </div>
             )}
-            <div className="px-3 py-1 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-300 font-semibold">
+            <div className="px-2.5 py-1 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-300 font-semibold text-xs">
               正答: <strong className="text-emerald-400">{sessionCorrectCount}</strong> / {sessionTotalCount}
             </div>
+
+            {/* Accordion Toggle */}
+            <button
+              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+              className="flex items-center space-x-1 p-2 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 rounded-xl text-xs transition-colors"
+              title="設定・レベル変更"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              {isSettingsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
           </div>
         </div>
 
-        {/* CEFR Level & Mode Selector */}
-        <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
-          {/* CEFR Tabs */}
-          <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-2xl border border-slate-800">
-            {(['A1', 'A2', 'B1', 'B2'] as CefrLevel[]).map(lvl => (
-              <button
-                key={lvl}
-                onClick={() => setSelectedCefr(lvl)}
-                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                  selectedCefr === lvl
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {lvl}
-              </button>
-            ))}
-          </div>
+        {/* Collapsed Setting Controls */}
+        {isSettingsOpen && (
+          <div className="pt-4 mt-3 border-t border-slate-800 space-y-3 animate-fadeIn">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              {/* CEFR Level Selector */}
+              <div className="flex items-center space-x-1.5">
+                <span className="text-xs font-bold text-slate-400 mr-1">レベル:</span>
+                {(['A1', 'A2', 'B1', 'B2'] as CefrLevel[]).map(lvl => (
+                  <button
+                    key={lvl}
+                    onClick={() => setSelectedCefr(lvl)}
+                    className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                      selectedCefr === lvl
+                        ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    {lvl}
+                  </button>
+                ))}
+              </div>
 
-          {/* Drill Type: Assembly vs Comprehension */}
-          <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-2xl border border-slate-800">
-            <button
-              onClick={() => setDrillType('assembly')}
-              className={`flex items-center space-x-1.5 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                drillType === 'assembly'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <PenTool className="w-3.5 h-3.5" />
-              <span>✍️ 組立 (英作文)</span>
-            </button>
-            <button
-              onClick={() => setDrillType('comprehension')}
-              className={`flex items-center space-x-1.5 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                drillType === 'comprehension'
-                  ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>📖 理解 (意味)</span>
-            </button>
-          </div>
+              {/* Mode Toggle */}
+              <div className="flex items-center space-x-1.5">
+                <span className="text-xs font-bold text-slate-400 mr-1">モード:</span>
+                <button
+                  onClick={() => setDrillType('assembly')}
+                  className={`flex items-center space-x-1 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                    drillType === 'assembly'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <PenTool className="w-3 h-3" />
+                  <span>✍️ 組立</span>
+                </button>
+                <button
+                  onClick={() => setDrillType('comprehension')}
+                  className={`flex items-center space-x-1 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                    drillType === 'comprehension'
+                      ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <BookOpen className="w-3 h-3" />
+                  <span>📖 理解</span>
+                </button>
+              </div>
 
-          {/* Filter Mode */}
-          <select
-            value={filterMode}
-            onChange={(e) => setFilterMode(e.target.value as DrillFilterMode)}
-            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-1.5 font-semibold focus:outline-none focus:border-blue-500"
-          >
-            <option value="all">🎲 おまかせ出題</option>
-            <option value="unseen">🚀 未着手を高速仕分け</option>
-            <option value="lapsed">🔥 苦手・ミスを再挑戦</option>
-          </select>
-        </div>
+              {/* Filter */}
+              <div className="flex items-center space-x-1.5">
+                <span className="text-xs font-bold text-slate-400 mr-1">出題:</span>
+                <select
+                  value={filterMode}
+                  onChange={(e) => setFilterMode(e.target.value as DrillFilterMode)}
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-1 font-semibold focus:outline-none focus:border-blue-500"
+                >
+                  <option value="unseen">🚀 未着手を高速仕分け（推奨）</option>
+                  <option value="lapsed">🔥 苦手・ミスを再挑戦</option>
+                  <option value="all">🎲 おまかせ出題</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 2. Main Question Card */}
+      {/* 2. Main Question Card (ネタバレ・狙い非表示) */}
       {currentPattern && currentVariation ? (
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-          {/* Target Pattern Header Badge */}
-          <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-slate-800">
+          {/* Card Category Header (構文名や狙いは隠す) */}
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
             <div className="flex items-center space-x-2">
-              <span className="px-2.5 py-0.5 rounded-lg bg-blue-500/20 text-blue-300 text-xs font-bold border border-blue-500/30">
-                {currentPattern.categoryLabel || currentPattern.category}
+              <span className="px-2.5 py-0.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold border border-slate-700">
+                {currentPattern.categoryLabel || '文法・構文'}
               </span>
-              <span className="text-xs font-bold text-slate-300">
-                {currentPattern.name}
+              <span className="text-xs text-slate-500 font-medium">
+                {selectedCefr} レベル
               </span>
             </div>
-
-            <button
-              onClick={() => pickNextQuestion(selectedCefr, filterMode)}
-              className="flex items-center space-x-1 text-xs text-slate-400 hover:text-white transition-colors"
-              title="この問題をスキップして次へ"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>スキップ</span>
-            </button>
           </div>
 
-          {/* Question Prompt */}
-          <div className="space-y-3 text-center py-4">
+          {/* Question Prompt (お題の日本語のみを堂々と表示) */}
+          <div className="space-y-3 text-center py-5">
             <span className="text-xs font-bold text-slate-400 tracking-wider block">
               {drillType === 'assembly'
-                ? '【この日本語を、指定構文を使って英語で表現】'
+                ? '【この日本語を英語で表現してください】'
                 : '【この英文の意味を理解できますか？】'}
             </span>
             <div className="text-2xl sm:text-3xl font-extrabold text-white leading-snug tracking-tight">
               「{currentVariation.translation}」
             </div>
-
-            <div className="inline-flex items-center space-x-2 px-3 py-1 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-400">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>狙い: <strong className="text-amber-300">{currentPattern.focus}</strong> ({currentPattern.meaning})</span>
-            </div>
           </div>
 
-          {/* User Input & Submit Form */}
-          <form onSubmit={handleSubmitAnswer} className="space-y-4">
+          {/* User Input & Form */}
+          <form onSubmit={handleSubmitAnswer} className="space-y-3">
             <div className="relative">
               <input
                 ref={inputRef}
@@ -417,23 +489,48 @@ export const DrillView: React.FC<DrillViewProps> = ({
                 )}
               </button>
             </div>
+
+            {/* わからない（ギブアップ）ボタン (判定前のみ表示) */}
+            {!evalResult && (
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={handleGiveUp}
+                  disabled={isEvaluating}
+                  className="flex items-center space-x-1 text-xs text-slate-500 hover:text-slate-300 transition-colors py-1 px-2 rounded-lg hover:bg-slate-800/60"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  <span>わからない (模範解答を見る)</span>
+                </button>
+              </div>
+            )}
           </form>
 
-          {/* AI Feedback & Results Card */}
+          {/* AI Feedback & Results (回答後に初めてターゲット構文を明かす) */}
           {evalResult && (
-            <div className="space-y-4 animate-fadeIn">
+            <div className="space-y-4 animate-fadeIn pt-2">
               {evalResult.result === 'correct' && (
                 <div className="p-5 bg-emerald-950/50 border border-emerald-500/40 rounded-2xl space-y-3">
-                  <div className="flex items-center space-x-2 text-emerald-400 font-extrabold text-base">
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span>完全正解！一撃マスター達成 🎉</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-emerald-400 font-extrabold text-base">
+                      <CheckCircle2 className="w-5 h-5" />
+                      <span>完全正解！一撃マスター達成 🎉</span>
+                    </div>
+                    <span className="text-xs font-bold text-emerald-300 bg-emerald-900/60 px-2.5 py-0.5 rounded-lg border border-emerald-500/30">
+                      🎯 {currentPattern.name}
+                    </span>
                   </div>
+
                   <p className="text-sm text-emerald-200/90 leading-relaxed">
                     {evalResult.feedback}
                   </p>
+
                   <div className="flex items-center justify-between p-3 bg-slate-950/80 border border-emerald-500/20 rounded-xl">
-                    <div className="text-sm font-bold text-white font-serif">
-                      {evalResult.correctedSentence || currentVariation.sentence}
+                    <div>
+                      <span className="text-[10px] font-bold text-emerald-400 block">構文公式: {currentPattern.focus}</span>
+                      <div className="text-sm font-bold text-white font-serif pt-0.5">
+                        {evalResult.correctedSentence || currentVariation.sentence}
+                      </div>
                     </div>
                     <button
                       onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
@@ -443,6 +540,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                       <Volume2 className="w-4 h-4" />
                     </button>
                   </div>
+
                   <button
                     onClick={handleNext}
                     className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center justify-center space-x-2 transition-all"
@@ -463,24 +561,32 @@ export const DrillView: React.FC<DrillViewProps> = ({
                     {evalResult.feedback}
                   </p>
                   <div className="text-xs text-amber-300/80 bg-slate-950/60 p-2.5 rounded-xl border border-amber-500/20">
-                    🎯 ターゲット構文: <strong>{currentPattern.focus}</strong>
+                    🎯 今回使ってほしい構文: <strong>{currentPattern.focus}</strong>
                   </div>
                 </div>
               )}
 
               {evalResult.result === 'wrong' && (
                 <div className="p-5 bg-rose-950/50 border border-rose-500/40 rounded-2xl space-y-4">
-                  <div className="flex items-center space-x-2 text-rose-400 font-extrabold text-base">
-                    <AlertCircle className="w-5 h-5" />
-                    <span>不正解・要復習 ❌</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-rose-400 font-extrabold text-base">
+                      <AlertCircle className="w-5 h-5" />
+                      <span>不正解・要復習 ❌</span>
+                    </div>
+                    <span className="text-xs font-bold text-rose-300 bg-rose-900/60 px-2.5 py-0.5 rounded-lg border border-rose-500/30">
+                      🎯 {currentPattern.name}
+                    </span>
                   </div>
+
                   <p className="text-sm text-rose-200/90 leading-relaxed">
                     {evalResult.feedback}
                   </p>
 
                   <div className="flex items-center justify-between p-3 bg-slate-950/80 border border-rose-500/20 rounded-xl">
                     <div>
-                      <span className="text-[11px] font-bold text-rose-400 block mb-0.5">模範解答:</span>
+                      <span className="text-[10px] font-bold text-rose-400 block mb-0.5">
+                        構文公式: {currentPattern.focus}
+                      </span>
                       <div className="text-base font-bold text-white font-serif">
                         {evalResult.correctedSentence || currentVariation.sentence}
                       </div>
@@ -516,6 +622,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                         Ankiを開く ➔
                       </button>
                     )}
+
                     <button
                       onClick={handleNext}
                       className="w-full sm:w-1/2 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1 transition-all border border-slate-700"
@@ -530,8 +637,17 @@ export const DrillView: React.FC<DrillViewProps> = ({
           )}
         </div>
       ) : (
-        <div className="p-8 text-center text-slate-400 bg-slate-900/50 rounded-3xl border border-slate-800">
-          該当する問題が見つかりませんでした。フィルターを変更してください。
+        <div className="p-8 text-center text-slate-400 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-3">
+          <p className="text-sm">該当する問題が見つかりませんでした。</p>
+          <button
+            onClick={() => {
+              setSelectedCefr('A1');
+              setFilterMode('all');
+            }}
+            className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl"
+          >
+            A1の全問から再開する
+          </button>
         </div>
       )}
     </div>
