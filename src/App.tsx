@@ -7,6 +7,9 @@ import { StoryCreateView } from './components/StoryCreateView';
 import { MasteryDashboardView } from './components/MasteryDashboardView';
 import { ReaderView } from './components/ReaderView';
 import { QuizView } from './components/QuizView';
+import { DrillView } from './components/DrillView';
+import { StoryQueueModal } from './components/StoryQueueModal';
+import { StoryQueueTask } from './types/storyQueue';
 import { AiMentorChatView } from './components/AiMentorChatView';
 import { SettingsView } from './components/SettingsView';
 import { CallView } from './components/CallView';
@@ -58,6 +61,11 @@ import {
   incrementExpressionReinforced,
   addTokenUsage,
   resetAllData,
+  loadStoryQueue,
+  enqueueStoryTask,
+  cancelStoryTask,
+  removeStoryTask,
+  updateStoryTask,
   getUnmasteredTargetPatterns,
   getUnmasteredTargetVocabs,
 } from './services/storage';
@@ -97,6 +105,11 @@ export const App: React.FC = () => {
   const [notificationToast, setNotificationToast] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  // 物語バックグラウンド順次生成キュー
+  const [queueTasks, setQueueTasks] = useState<StoryQueueTask[]>(() => loadStoryQueue());
+  const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
+  const isProcessingQueueRef = React.useRef(false);
 
   // 単語・複数単語タップ選択＆ボトムシート翻訳状態
   const [isSheetOpen, setIsSheetOpen] = useState(false);
@@ -274,6 +287,162 @@ export const App: React.FC = () => {
   };
 
   // バックグラウンド非同期ストーリー/スクリプト生成ハンドラー
+
+  // ===================== STORY QUEUE WORKER =====================
+  const processNextQueueTask = useCallback(async () => {
+    if (isProcessingQueueRef.current) return;
+    const currentQueue = loadStoryQueue();
+    const nextTask = currentQueue.find(t => t.status === 'pending');
+    if (!nextTask) return;
+
+    if (!settings.geminiApiKey) {
+      updateStoryTask(nextTask.id, t => ({ ...t, status: 'failed', error: 'APIキーが設定されていません' }));
+      setQueueTasks(loadStoryQueue());
+      return;
+    }
+
+    isProcessingQueueRef.current = true;
+    setIsGenerating(true);
+    setGeneratingTheme(nextTask.title || '物語');
+
+    updateStoryTask(nextTask.id, t => ({ ...t, status: 'generating', startedAt: new Date().toISOString() }));
+    setQueueTasks(loadStoryQueue());
+
+    try {
+      const currentStoryList = loadStories();
+      const recentSummaries = extractRecentSummaries(currentStoryList, 5);
+      const currentVocabs = loadVocabs();
+      const errorList = loadExpressionErrors();
+
+      const selectedDueVocabs = pickTargetVocabsForStory(currentVocabs, 4, currentStoryList);
+      const targetErrorPatterns = pickTargetErrorPatternsForStory(errorList, 2);
+      const levelKey = (settings.cefrLevel === 'C1' ? 'B2' : settings.cefrLevel) as 'A1' | 'A2' | 'B1' | 'B2';
+      const targetPatterns = getUnmasteredTargetPatterns(levelKey, 3);
+      const targetVocabMaster = getUnmasteredTargetVocabs(levelKey, 4);
+
+      const res = await generateStorySeriesWithGemini(
+        {
+          apiKey: settings.geminiApiKey,
+          model: settings.geminiModel,
+          cefrLevel: nextTask.params?.cefrLevel || settings.cefrLevel,
+          contentType: nextTask.params?.contentType || 'story',
+          storyCount: nextTask.totalEpisodes || nextTask.storyCount || 1,
+          isContinuous: nextTask.seriesType === 'continuous',
+          userPrompt: nextTask.params?.userPrompt || nextTask.title,
+          targetVocabs: selectedDueVocabs,
+          targetPatterns,
+          targetVocabMaster,
+          targetErrorPatterns,
+          recentSummaries,
+          targetWordCount: nextTask.params?.targetWordCount || 700,
+        },
+        (current, total, message) => {
+          updateStoryTask(nextTask.id, t => ({
+            ...t,
+            currentEpisodeIndex: current,
+            totalEpisodes: total,
+            progressMessage: message,
+          }));
+          setQueueTasks(loadStoryQueue());
+          setGeneratingProgress({ current, total, message });
+        }
+      );
+
+      // ストーリー保存
+      res.stories.forEach(story => {
+        saveStory(story);
+      });
+
+      if (res.totalPromptTokens || res.totalCandidatesTokens) {
+        handleRecordTokenUsage(res.totalPromptTokens, res.totalCandidatesTokens);
+      }
+
+      updateStoryTask(nextTask.id, t => ({
+        ...t,
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        generatedStories: res.stories,
+      }));
+
+      const updatedStories = loadStories();
+      setStories(updatedStories);
+      setQueueTasks(loadStoryQueue());
+      setNotificationToast(`🎉 『${nextTask.title}』の生成が完了しました！`);
+      triggerAutoSync(vocabs, updatedStories);
+    } catch (err: any) {
+      console.error('Queue task execution failed', err);
+      updateStoryTask(nextTask.id, t => ({
+        ...t,
+        status: 'failed',
+        error: err?.message || '生成エラーが発生しました',
+      }));
+      setQueueTasks(loadStoryQueue());
+    } finally {
+      isProcessingQueueRef.current = false;
+      const remainingQueue = loadStoryQueue();
+      const hasMore = remainingQueue.some(t => t.status === 'pending');
+      setIsGenerating(hasMore);
+      if (!hasMore) {
+        setGeneratingTheme('');
+        setGeneratingProgress(undefined);
+      } else {
+        // 次のタスクへ連続実行
+        setTimeout(processNextQueueTask, 500);
+      }
+    }
+  }, [settings, vocabs, handleRecordTokenUsage, triggerAutoSync]);
+
+  // キュー変更監視
+  useEffect(() => {
+    const hasPending = queueTasks.some(t => t.status === 'pending');
+    if (hasPending && !isProcessingQueueRef.current) {
+      processNextQueueTask();
+    }
+  }, [queueTasks, processNextQueueTask]);
+
+  // 次話（続き）のキュー追加
+  const handleQueueNextEpisode = (story: Story) => {
+    const title = story.titleJa || story.title;
+    const nextEpIndex = (story.episodeIndex || 1) + 1;
+    const taskTitle = `『${title}』の続き (第${nextEpIndex}話)`;
+    const promptText = `前話「${title}」のあらすじ: ${story.summary || '主人公たちの冒険'}。この物語の自然な続きとなる第${nextEpIndex}話を執筆してください。`;
+
+    enqueueStoryTask({
+      title: taskTitle,
+      topic: story.summary,
+      seriesType: 'continuous',
+      storyCount: 1,
+      params: {
+        apiKey: settings.geminiApiKey,
+        model: settings.geminiModel,
+        cefrLevel: story.cefrLevel || settings.cefrLevel,
+        contentType: story.contentType || 'story',
+        userPrompt: promptText,
+        targetVocabs: [],
+        recentSummaries: [],
+        targetWordCount: story.actualWordCount || 700,
+      },
+    });
+
+    setQueueTasks(loadStoryQueue());
+    setNotificationToast(`⏳ ${taskTitle} を生成キューに追加しました！`);
+  };
+
+  const handleCancelQueueTask = (taskId: string) => {
+    const updated = cancelStoryTask(taskId);
+    setQueueTasks(updated);
+  };
+
+  const handleRemoveQueueTask = (taskId: string) => {
+    const updated = removeStoryTask(taskId);
+    setQueueTasks(updated);
+  };
+
+  const handleRetryQueueTask = (task: StoryQueueTask) => {
+    updateStoryTask(task.id, t => ({ ...t, status: 'pending', error: undefined }));
+    setQueueTasks(loadStoryQueue());
+  };
+
   const handleGenerateStoryInBackground = async (
     userPrompt?: string,
     wordCount = 700,
@@ -784,6 +953,7 @@ export const App: React.FC = () => {
             onSaveDifficultSentence={handleSaveDifficultSentence}
             onUpdateSentenceReason={handleUpdateSentenceReason}
             onRecordStoryRead={handleRecordStoryRead}
+            onQueueNextEpisode={handleQueueNextEpisode}
             onSelectStory={(story) => {
               window.history.pushState({ view: 'reading', storyId: story.id }, '', '');
               setReadingStory(story);
@@ -818,6 +988,19 @@ export const App: React.FC = () => {
                 onNavigateToCreate={() => setActiveTab('create')}
                 isGenerating={isGenerating}
                 generatingTheme={generatingTheme}
+                queueTasks={queueTasks}
+                onOpenQueueModal={() => setIsQueueModalOpen(true)}
+                onQueueNextEpisode={handleQueueNextEpisode}
+              />
+            )}
+
+            {/* 1.5 Drill Tab (瞬間ドリル・仕分け機) */}
+            {activeTab === 'drill' && (
+              <DrillView
+                apiKey={settings.geminiApiKey}
+                selectedModel={settings.geminiModel}
+                userLevel={settings.cefrLevel}
+                onNavigateToAnki={() => setActiveTab('quiz')}
               />
             )}
 
@@ -918,6 +1101,17 @@ export const App: React.FC = () => {
           </>
         )}
       </main>
+
+            {/* 物語バックグラウンド順次生成キュー モーダル */}
+      <StoryQueueModal
+        isOpen={isQueueModalOpen}
+        onClose={() => setIsQueueModalOpen(false)}
+        tasks={queueTasks}
+        onCancelTask={handleCancelQueueTask}
+        onRemoveTask={handleRemoveQueueTask}
+        onRetryTask={handleRetryQueueTask}
+        isProcessing={isGenerating}
+      />
 
       {/* リーダー画面上のオーバーレイAIチャットドロワー */}
       {readingStory && isReaderChatOverlayOpen && (

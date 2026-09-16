@@ -23,7 +23,7 @@ export type PatternCategory =
 export interface PatternVariation {
   sentence: string;
   translation: string;
-  targetTokens: string[]; // 穴埋め・強調箇所のトークン (例: ["too", "to"])
+  targetTokens: string[];
 }
 
 export interface PatternMasterItem {
@@ -34,7 +34,7 @@ export interface PatternMasterItem {
   name: string;
   meaning: string;
   focus: string;
-  variations: [PatternVariation, PatternVariation, PatternVariation]; // 厳選された3文
+  variations: [PatternVariation, PatternVariation, PatternVariation];
 }
 
 export interface VocabMasterItem {
@@ -48,12 +48,29 @@ export interface VocabMasterItem {
 export type MasteryStatus = 'unseen' | 'exposed' | 'lapsed' | 'mastered';
 
 export interface ItemProgress {
-  status: MasteryStatus;
+  status?: MasteryStatus;
+  comprehensionStatus?: MasteryStatus;
+  comprehensionMasteredAt?: string;
+  assemblyStatus?: MasteryStatus;
+  assemblyMasteredAt?: string;
+
+  encounterCount?: number;
+  mistakeCount?: number;
+  comprehensionMistakeCount?: number;
+  assemblyMistakeCount?: number;
+  consecutiveCorrectCount?: number;
+
+  drillComprehensionAttempts?: number;
+  drillComprehensionSuccesses?: number;
+  drillAssemblyAttempts?: number;
+  drillAssemblySuccesses?: number;
+
   firstSeenAt?: string;
   lastSeenAt?: string;
-  encounterCount: number;
   masteredAt?: string;
-  currentVariationIndex?: number; // Anki出題時の3文ローテーション用 (0, 1, 2)
+  lastMistakeAt?: string;
+  lastErrorReason?: string;
+  currentVariationIndex?: number;
 }
 
 export interface UserMasteryState {
@@ -65,23 +82,28 @@ export interface UserMasteryState {
 export interface LevelProgressSummary {
   vocabTotal: number;
   vocabMastered: number;
+  vocabAssemblyMastered?: number;
   vocabLapsed: number;
   vocabExposed: number;
   vocabUnseen: number;
   vocabPct: number;
+  vocabAssemblyPct?: number;
 
   patternTotal: number;
   patternMastered: number;
+  patternAssemblyMastered?: number;
   patternLapsed: number;
   patternExposed: number;
   patternUnseen: number;
   patternPct: number;
+  patternAssemblyPct?: number;
 
   overallPct: number;
+  overallAssemblyPct?: number;
 }
 
 export interface DailySnapshot {
-  date: string; // YYYY-MM-DD
+  date: string;
   a1Progress: LevelProgressSummary;
   a2Progress: LevelProgressSummary;
   b1Progress: LevelProgressSummary;
@@ -104,8 +126,40 @@ export interface ReadingSessionLog {
   id: string;
   storyId?: string;
   storyTitle: string;
-  completedAt: string; // ISO string
-  dateString: string;  // YYYY-MM-DD
+  completedAt: string;
+  dateString: string;
   wordsCount: number;
   wpm: number;
+}
+
+export interface DrillAttemptLog {
+  id: string;
+  timestamp: string;
+  dateString: string;
+  itemId: string;
+  itemType: 'pattern' | 'vocab';
+  drillType: 'comprehension' | 'assembly';
+  cefr: CefrLevel;
+  result: 'correct' | 'alternative_hint' | 'wrong';
+  userResponse: string;
+  feedback?: string;
+  correctedSentence?: string;
+  errorReason?: string;
+}
+
+export interface CategoryWeaknessSummary {
+  category: PatternCategory;
+  categoryLabel: string;
+  totalCount: number;
+  comprehensionMasteredCount: number;
+  assemblyMasteredCount: number;
+  mistakeCount: number;
+  accuracyRate: number;
+}
+
+export interface WeakPatternItem {
+  pattern: PatternMasterItem;
+  progress: ItemProgress;
+  mistakeCount: number;
+  lastErrorReason?: string;
 }

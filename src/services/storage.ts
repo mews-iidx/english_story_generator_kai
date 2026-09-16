@@ -1,4 +1,5 @@
-import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress, ReadingSessionLog } from '../types/mastery';
+import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress, ReadingSessionLog, DrillAttemptLog, CategoryWeaknessSummary, WeakPatternItem, PatternCategory } from '../types/mastery';
+import { StoryQueueTask, StoryQueueStatus } from '../types/storyQueue';
 import { getPatternsByLevel } from '../data/cefrPatternsMaster';
 import { CEFR_VOCAB_MASTER, getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
 import { getTodayDateString } from '../utils/srs';
@@ -24,6 +25,8 @@ const STORAGE_KEYS = {
   DAILY_SNAPSHOTS: 'storykai_daily_snapshots_v1',
   MY_GOAL: 'storykai_my_goal_v1',
   READING_LOGS: 'storykai_reading_logs_v1',
+  DRILL_LOGS: 'storykai_drill_logs_v1',
+  STORY_QUEUE: 'storykai_story_queue_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -1115,55 +1118,75 @@ export function computeLevelProgress(level: 'A1' | 'A2' | 'B1' | 'B2', state?: U
   const vocabsInLevel = getVocabMasterByLevel(level);
 
   let patternMastered = 0;
+  let patternAssemblyMastered = 0;
   let patternLapsed = 0;
   let patternExposed = 0;
 
   patternsInLevel.forEach(p => {
     const prog = currentState.patterns[p.id];
     if (prog) {
-      if (prog.status === 'mastered') patternMastered++;
-      else if (prog.status === 'lapsed') patternLapsed++;
-      else if (prog.status === 'exposed') patternExposed++;
+      const comp = prog.comprehensionStatus || prog.status;
+      const assem = prog.assemblyStatus;
+
+      if (comp === 'mastered') patternMastered++;
+      else if (comp === 'lapsed') patternLapsed++;
+      else if (comp === 'exposed') patternExposed++;
+
+      if (assem === 'mastered') patternAssemblyMastered++;
     }
   });
 
   const patternTotal = patternsInLevel.length || 1;
   const patternUnseen = Math.max(0, patternTotal - (patternMastered + patternLapsed + patternExposed));
   const patternPct = Math.round((patternMastered / patternTotal) * 100);
+  const patternAssemblyPct = Math.round((patternAssemblyMastered / patternTotal) * 100);
 
   let vocabMastered = 0;
+  let vocabAssemblyMastered = 0;
   let vocabLapsed = 0;
   let vocabExposed = 0;
 
   vocabsInLevel.forEach(v => {
     const prog = currentState.vocabs[v.id] || currentState.vocabs[v.phrase.toLowerCase()];
     if (prog) {
-      if (prog.status === 'mastered') vocabMastered++;
-      else if (prog.status === 'lapsed') vocabLapsed++;
-      else if (prog.status === 'exposed') vocabExposed++;
+      const comp = prog.comprehensionStatus || prog.status;
+      const assem = prog.assemblyStatus;
+
+      if (comp === 'mastered') vocabMastered++;
+      else if (comp === 'lapsed') vocabLapsed++;
+      else if (comp === 'exposed') vocabExposed++;
+
+      if (assem === 'mastered') vocabAssemblyMastered++;
     }
   });
 
   const vocabTotal = vocabsInLevel.length || 1;
   const vocabUnseen = Math.max(0, vocabTotal - (vocabMastered + vocabLapsed + vocabExposed));
   const vocabPct = Math.round((vocabMastered / vocabTotal) * 100);
+  const vocabAssemblyPct = Math.round((vocabAssemblyMastered / vocabTotal) * 100);
 
   const overallPct = Math.round((patternPct * 0.5) + (vocabPct * 0.5));
+  const overallAssemblyPct = Math.round((patternAssemblyPct * 0.5) + (vocabAssemblyPct * 0.5));
 
   return {
     vocabTotal,
     vocabMastered,
+    vocabAssemblyMastered,
     vocabLapsed,
     vocabExposed,
     vocabUnseen,
     vocabPct,
+    vocabAssemblyPct,
     patternTotal,
     patternMastered,
+    patternAssemblyMastered,
     patternLapsed,
     patternExposed,
     patternUnseen,
     patternPct,
+    patternAssemblyPct,
     overallPct,
+    overallAssemblyPct,
   };
 }
 
@@ -1193,7 +1216,7 @@ export function recordPatternStatus(patternId: string, status: MasteryStatus): v
       ...prev,
       status,
       lastSeenAt: now,
-      encounterCount: Math.max(1, prev.encounterCount + 1),
+      encounterCount: Math.max(1, (prev.encounterCount || 0) + 1),
       masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
     };
     state.patterns[patternId] = updated;
@@ -1221,7 +1244,7 @@ export function recordVocabMasteryBatch(updates: { phrase: string; status: Maste
         ...prev,
         status,
         lastSeenAt: now,
-        encounterCount: Math.max(1, prev.encounterCount + 1),
+        encounterCount: Math.max(1, (prev.encounterCount || 0) + 1),
         masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
       };
     }
@@ -1249,7 +1272,7 @@ export function recordPatternMasteryBatch(updates: { patternId: string; status: 
         ...prev,
         status,
         lastSeenAt: now,
-        encounterCount: Math.max(1, prev.encounterCount + 1),
+        encounterCount: Math.max(1, (prev.encounterCount || 0) + 1),
         masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
       };
     }
@@ -1275,7 +1298,7 @@ export function recordVocabMasteryStatus(phraseOrId: string, status: MasteryStat
       ...prev,
       status,
       lastSeenAt: now,
-      encounterCount: Math.max(1, prev.encounterCount + 1),
+      encounterCount: Math.max(1, (prev.encounterCount || 0) + 1),
       masteredAt: status === 'mastered' ? (prev.masteredAt || now) : undefined,
     };
     state.vocabs[key] = updated;
@@ -1661,4 +1684,282 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
 
   saveVocabsBatch(vocabs);
   return { card1, card2 };
+}
+
+// ===================== DRILL LOGS & PROGRESS RECORDING =====================
+
+export function loadDrillAttemptLogs(): DrillAttemptLog[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DRILL_LOGS);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load drill attempt logs', e);
+    return [];
+  }
+}
+
+export function saveDrillAttemptLogs(logs: DrillAttemptLog[]): void {
+  try {
+    const trimmed = logs.slice(-1000); // 直近1,000件保持
+    localStorage.setItem(STORAGE_KEYS.DRILL_LOGS, JSON.stringify(trimmed));
+  } catch (e) {
+    console.error('Failed to save drill attempt logs', e);
+  }
+}
+
+export function recordDrillResult(params: {
+  itemId: string;
+  itemType: 'pattern' | 'vocab';
+  drillType: 'comprehension' | 'assembly';
+  cefr: import('../types/settings').CefrLevel;
+  result: 'correct' | 'alternative_hint' | 'wrong';
+  userResponse: string;
+  feedback?: string;
+  correctedSentence?: string;
+  errorReason?: string;
+}): void {
+  const now = new Date().toISOString();
+  const today = getTodayDateString();
+  const state = loadMasteryState();
+
+  const isPattern = params.itemType === 'pattern';
+  const targetDict = isPattern ? state.patterns : state.vocabs;
+  const key = isPattern ? params.itemId : params.itemId.trim().toLowerCase();
+
+  const prev = targetDict[key] || {
+    status: 'unseen',
+    comprehensionStatus: 'unseen',
+    assemblyStatus: 'unseen',
+    encounterCount: 0,
+    mistakeCount: 0,
+    comprehensionMistakeCount: 0,
+    assemblyMistakeCount: 0,
+    consecutiveCorrectCount: 0,
+    drillComprehensionAttempts: 0,
+    drillComprehensionSuccesses: 0,
+    drillAssemblyAttempts: 0,
+    drillAssemblySuccesses: 0,
+    firstSeenAt: now,
+  };
+
+  const updated: ItemProgress = {
+    ...prev,
+    encounterCount: Math.max(1, (prev.encounterCount || 0) + 1),
+    lastSeenAt: now,
+  };
+
+  if (params.drillType === 'comprehension') {
+    updated.drillComprehensionAttempts = (prev.drillComprehensionAttempts || 0) + 1;
+    if (params.result === 'correct') {
+      updated.comprehensionStatus = 'mastered';
+      updated.comprehensionMasteredAt = prev.comprehensionMasteredAt || now;
+      updated.status = 'mastered';
+      updated.drillComprehensionSuccesses = (prev.drillComprehensionSuccesses || 0) + 1;
+      updated.consecutiveCorrectCount = (prev.consecutiveCorrectCount || 0) + 1;
+    } else if (params.result === 'wrong') {
+      updated.comprehensionStatus = 'lapsed';
+      updated.status = 'lapsed';
+      updated.mistakeCount = (prev.mistakeCount || 0) + 1;
+      updated.comprehensionMistakeCount = (prev.comprehensionMistakeCount || 0) + 1;
+      updated.consecutiveCorrectCount = 0;
+      updated.lastMistakeAt = now;
+      if (params.errorReason) updated.lastErrorReason = params.errorReason;
+    }
+  } else {
+    // assembly (組立)
+    updated.drillAssemblyAttempts = (prev.drillAssemblyAttempts || 0) + 1;
+    if (params.result === 'correct') {
+      updated.assemblyStatus = 'mastered';
+      updated.assemblyMasteredAt = prev.assemblyMasteredAt || now;
+      updated.drillAssemblySuccesses = (prev.drillAssemblySuccesses || 0) + 1;
+      updated.consecutiveCorrectCount = (prev.consecutiveCorrectCount || 0) + 1;
+    } else if (params.result === 'wrong') {
+      updated.assemblyStatus = 'lapsed';
+      updated.mistakeCount = (prev.mistakeCount || 0) + 1;
+      updated.assemblyMistakeCount = (prev.assemblyMistakeCount || 0) + 1;
+      updated.consecutiveCorrectCount = 0;
+      updated.lastMistakeAt = now;
+      if (params.errorReason) updated.lastErrorReason = params.errorReason;
+    }
+  }
+
+  targetDict[key] = updated;
+  saveMasteryState(state);
+
+  // ログ記録
+  const logs = loadDrillAttemptLogs();
+  const newLog: DrillAttemptLog = {
+    id: 'drill_log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    timestamp: now,
+    dateString: today,
+    itemId: params.itemId,
+    itemType: params.itemType,
+    drillType: params.drillType,
+    cefr: params.cefr,
+    result: params.result,
+    userResponse: params.userResponse,
+    feedback: params.feedback,
+    correctedSentence: params.correctedSentence,
+    errorReason: params.errorReason,
+  };
+  logs.push(newLog);
+  saveDrillAttemptLogs(logs);
+}
+
+// 弱点構文トップNの抽出 (AIコーチ & ダッシュボード用)
+export function getWeakestPatterns(limit: number = 5): WeakPatternItem[] {
+  const state = loadMasteryState();
+  const allPatterns = [
+    ...getPatternsByLevel('A1'),
+    ...getPatternsByLevel('A2'),
+    ...getPatternsByLevel('B1'),
+    ...getPatternsByLevel('B2'),
+  ];
+
+  const results: WeakPatternItem[] = [];
+
+  for (const p of allPatterns) {
+    const prog = state.patterns[p.id];
+    if (prog && ((prog.mistakeCount || 0) > 0 || prog.assemblyStatus === 'lapsed' || prog.comprehensionStatus === 'lapsed')) {
+      results.push({
+        pattern: p,
+        progress: prog,
+        mistakeCount: prog.mistakeCount || 0,
+        lastErrorReason: prog.lastErrorReason,
+      });
+    }
+  }
+
+  // ミス回数降順 ➔ 遭遇回数降順 でソート
+  results.sort((a, b) => {
+    if (b.mistakeCount !== a.mistakeCount) return b.mistakeCount - a.mistakeCount;
+    return (b.progress.encounterCount || 0) - (a.progress.encounterCount || 0);
+  });
+
+  return results.slice(0, limit);
+}
+
+// 文法カテゴリー別の弱点集計
+export function getWeakestCategories(): CategoryWeaknessSummary[] {
+  const state = loadMasteryState();
+  const allPatterns = [
+    ...getPatternsByLevel('A1'),
+    ...getPatternsByLevel('A2'),
+    ...getPatternsByLevel('B1'),
+    ...getPatternsByLevel('B2'),
+  ];
+
+  const categoryMap: Record<string, {
+    category: PatternCategory;
+    categoryLabel: string;
+    total: number;
+    compMastered: number;
+    assemMastered: number;
+    mistakes: number;
+    attempts: number;
+    successes: number;
+  }> = {};
+
+  for (const p of allPatterns) {
+    if (!categoryMap[p.category]) {
+      categoryMap[p.category] = {
+        category: p.category,
+        categoryLabel: p.categoryLabel || p.category,
+        total: 0,
+        compMastered: 0,
+        assemMastered: 0,
+        mistakes: 0,
+        attempts: 0,
+        successes: 0,
+      };
+    }
+    const cat = categoryMap[p.category];
+    cat.total++;
+
+    const prog = state.patterns[p.id];
+    if (prog) {
+      if (prog.comprehensionStatus === 'mastered') cat.compMastered++;
+      if (prog.assemblyStatus === 'mastered') cat.assemMastered++;
+      cat.mistakes += prog.mistakeCount || 0;
+      cat.attempts += (prog.drillComprehensionAttempts || 0) + (prog.drillAssemblyAttempts || 0);
+      cat.successes += (prog.drillComprehensionSuccesses || 0) + (prog.drillAssemblySuccesses || 0);
+    }
+  }
+
+  return Object.values(categoryMap).map(c => ({
+    category: c.category,
+    categoryLabel: c.categoryLabel,
+    totalCount: c.total,
+    comprehensionMasteredCount: c.compMastered,
+    assemblyMasteredCount: c.assemMastered,
+    mistakeCount: c.mistakes,
+    accuracyRate: c.attempts > 0 ? Math.round((c.successes / c.attempts) * 100) : 100,
+  })).sort((a, b) => b.mistakeCount - a.mistakeCount);
+}
+
+// ===================== STORY GENERATION QUEUE =====================
+
+export function loadStoryQueue(): StoryQueueTask[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.STORY_QUEUE);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load story queue', e);
+    return [];
+  }
+}
+
+export function saveStoryQueue(tasks: StoryQueueTask[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.STORY_QUEUE, JSON.stringify(tasks));
+  } catch (e) {
+    console.error('Failed to save story queue', e);
+  }
+}
+
+export function enqueueStoryTask(task: Omit<StoryQueueTask, 'id' | 'createdAt' | 'status' | 'currentEpisodeIndex' | 'totalEpisodes' | 'generatedStories'> & { totalEpisodes?: number }): StoryQueueTask {
+  const queue = loadStoryQueue();
+  const newTask: StoryQueueTask = {
+    ...task,
+    id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+    currentEpisodeIndex: 0,
+    totalEpisodes: task.totalEpisodes || task.storyCount || 1,
+    generatedStories: [],
+  };
+  queue.push(newTask);
+  saveStoryQueue(queue);
+  return newTask;
+}
+
+export function cancelStoryTask(taskId: string): StoryQueueTask[] {
+  const queue = loadStoryQueue();
+  const updated = queue.map(t => {
+    if (t.id === taskId && (t.status === 'pending' || t.status === 'generating')) {
+      return { ...t, status: 'cancelled' as StoryQueueStatus };
+    }
+    return t;
+  });
+  saveStoryQueue(updated);
+  return updated;
+}
+
+export function removeStoryTask(taskId: string): StoryQueueTask[] {
+  const queue = loadStoryQueue();
+  const updated = queue.filter(t => t.id !== taskId);
+  saveStoryQueue(updated);
+  return updated;
+}
+
+export function updateStoryTask(taskId: string, updater: (task: StoryQueueTask) => StoryQueueTask): StoryQueueTask | null {
+  const queue = loadStoryQueue();
+  const idx = queue.findIndex(t => t.id === taskId);
+  if (idx < 0) return null;
+  const updated = updater(queue[idx]);
+  queue[idx] = updated;
+  saveStoryQueue(queue);
+  return updated;
 }

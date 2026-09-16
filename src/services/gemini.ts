@@ -509,6 +509,13 @@ export interface ChatMentorParams {
       dailyReadingWords: number;
       estimatedDaysToTarget?: number;
     };
+    weakestPatterns?: Array<{
+      patternName: string;
+      formula?: string;
+      focus?: string;
+      mistakeCount: number;
+      lastErrorReason?: string;
+    }>;
   };
   apiKey: string;
   model?: string;
@@ -548,6 +555,12 @@ export async function chatWithAiMentor(params: ChatMentorParams): Promise<ChatMe
 ${s.estimatedDaysToTarget ? `- 現在ペースでの目標達成予測: 約 ${s.estimatedDaysToTarget} 日` : ''}
 
 ※学習ペースや達成時期について相談された場合、このデータを元に現実的で励みになる具体的なアドバイス（例: 「1日1話（約700語）の読書を続けると、あと約○日でB1レベルの構文をコンプリートできますよ！」など）を提供してください。`;
+  }
+
+  if (contextInfo?.weakestPatterns && contextInfo.weakestPatterns.length > 0) {
+    systemInstruction += `\n\n【★学習者の弱点構文（ドリル・Ankiでミス多発）】
+${contextInfo.weakestPatterns.map(w => `- 構文: ${w.patternName} (${w.formula || w.focus || ''}) / ミス回数: ${w.mistakeCount}回 / 直近の誤り傾向: ${w.lastErrorReason || 'なし'}`).join('\n')}
+※ユーザーから「苦手な構文は？」「弱点を教えて」「苦手な文法を特訓して」と聞かれた場合、この弱点構文を具体的に提示し、なぜ間違えやすいのかの解説や、この構文を使った例文作成トレーニングを出題してあげてください。`;
   }
 
   systemInstruction += `\n\n【★最重要ルール：重要フレーズの抽出】
@@ -1128,4 +1141,127 @@ ${translation ? `【日本語訳】: "${translation}"` : ''}
   }
 
   return { patterns: [] };
+}
+
+// ===================== DRILL EVALUATION WITH GEMINI =====================
+
+export interface EvaluateDrillParams {
+  promptJa: string;
+  targetItem: {
+    id: string;
+    name: string;
+    meaning: string;
+    focus: string;
+    sampleSentences?: string[];
+  };
+  drillType: 'comprehension' | 'assembly';
+  userAnswer: string;
+  apiKey: string;
+  model?: string;
+}
+
+export interface EvaluateDrillResult {
+  result: 'correct' | 'alternative_hint' | 'wrong'; // 🟢 完全正解 / 🟡 別解誘導 / 🔴 不正解
+  feedback: string;
+  correctedSentence: string;
+  errorReason?: string;
+  tokenUsage?: { promptTokens: number; candidatesTokens: number };
+}
+
+/**
+ * ドリルの解答を3段階でAI自動添削
+ * 🟢 correct: ターゲット構文を使って正しく組み立てられた
+ * 🟡 alternative_hint: 意味は通じるがターゲット構文を使っていない（ヒントを出してリトライ誘導）
+ * 🔴 wrong: 英語として文法破綻、意味が通じない、または構文の誤用
+ */
+export async function evaluateDrillAnswerWithGemini(params: EvaluateDrillParams): Promise<EvaluateDrillResult> {
+  const { promptJa, targetItem, drillType, userAnswer, apiKey, model = 'gemini-3.7-flash' } = params;
+
+  if (!apiKey) {
+    return {
+      result: 'wrong',
+      feedback: 'APIキーが設定されていません。',
+      correctedSentence: targetItem.sampleSentences?.[0] || '',
+    };
+  }
+
+  const systemInstruction = `あなたは日本人英語学習者のためのプロフェッショナルな英語添削AIです。
+英語ドリル（1問1答）のユーザー回答を精緻かつ温かく判定してください。
+
+【添削の絶対ルール】
+1. 判定結果は以下の3値のいずれか1つ:
+   - "correct" (完全正解): ユーザーの回答が自然な英語であり、かつ【ターゲット構文/表現】が正しく使われている。
+   - "alternative_hint" (別解誘導・惜しい): 英語として意味は通じるが、【指定されたターゲット構文】を使っていない別の表現になっている（例: "it sounds..." を狙っているのに "it looks like..." と答えた、"used to" を狙っているのに "I lived here before" と答えた等）。❌ にせず、「意味は通じますが、今回は【${targetItem.name}】を使って組み立ててみましょう！」と前向きに再入力を促すフィードバックを作成してください。
+   - "wrong" (不正解): 明らかな文法エラー、意味の破綻、語順の誤り、またはターゲット構文の致命的な誤用。
+2. feedback: 2〜3文で、親切かつ要点を突いた日本語解説。
+3. correctedSentence: ターゲット構文を用いた、最も自然で簡潔な模範英文。
+4. errorReason: 不正解または別解の場合の短い理由タグ（例: "過去形の不一致", "ターゲット構文未使用", "前置詞ミス"）。
+
+【必ず守る出力フォーマット】
+以下の純粋なJSONオブジェクトのみを出力してください（Markdownコードブロックは不要、前後に余計な説明文を含めないこと）:
+{
+  "result": "correct" | "alternative_hint" | "wrong",
+  "feedback": "...",
+  "correctedSentence": "...",
+  "errorReason": "..."
+}`;
+
+  const promptText = `【ドリル種別】: ${drillType === 'assembly' ? '✍️ 組立（日本語 ➔ 瞬間英作文）' : '📖 理解（読解・意味取り）'}
+【お題（日本語）】: ${promptJa}
+【ターゲット構文/表現】: ${targetItem.name}
+【構文の狙い・公式】: ${targetItem.focus} (${targetItem.meaning})
+${targetItem.sampleSentences && targetItem.sampleSentences.length > 0 ? `【参考模範例】: ${targetItem.sampleSentences.join(' / ')}` : ''}
+【ユーザーの回答】: ${userAnswer.trim()}
+
+上記を厳密に判定し、指定のJSON形式で返してください。`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: [{ role: 'user', parts: [{ text: promptText }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const usage = data.usageMetadata ? {
+        promptTokens: data.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: data.usageMetadata.candidatesTokenCount || 0,
+      } : undefined;
+
+      const cleaned = rawText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+      const parsed = JSON.parse(cleaned);
+
+      return {
+        result: parsed.result === 'correct' || parsed.result === 'alternative_hint' ? parsed.result : 'wrong',
+        feedback: parsed.feedback || '添削完了',
+        correctedSentence: parsed.correctedSentence || targetItem.sampleSentences?.[0] || '',
+        errorReason: parsed.errorReason,
+        tokenUsage: usage,
+      };
+    } catch (err) {
+      console.warn(`evaluateDrillAnswerWithGemini failed with ${currentModel}:`, err);
+    }
+  }
+
+  return {
+    result: 'wrong',
+    feedback: '添削処理中にエラーが発生しました。もう一度お試しください。',
+    correctedSentence: targetItem.sampleSentences?.[0] || '',
+  };
 }

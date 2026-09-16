@@ -4,6 +4,8 @@ import {
   computeAllLevelProgress,
   loadReadingSessionLogs,
   deleteReadingSessionLog,
+  getWeakestPatterns,
+  getWeakestCategories,
 } from '../services/storage';
 import { ReadingSessionLog } from '../types/mastery';
 import { DailySnapshot } from '../types/mastery';
@@ -216,6 +218,8 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     setDailySnapshots(snapshots);
   };
   const allCefrProgress = useMemo(() => computeAllLevelProgress(), []);
+  const weakestPatterns = useMemo(() => getWeakestPatterns(5), []);
+  const weakestCategories = useMemo(() => getWeakestCategories(), []);
 
   // 全レベルの平均制覇率
   const overallAvgCefrPct = useMemo(() => {
@@ -861,6 +865,78 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
           </div>
         )}
       </div>
+
+            {/* 4.5 🔥 あなたの弱点構文トップ5 (ミス多発・集中特訓) */}
+      {weakestPatterns.length > 0 && (
+        <div className="bg-gradient-to-br from-rose-950/40 via-slate-900/90 to-slate-900/90 border border-rose-500/30 rounded-3xl p-6 sm:p-8 shadow-xl space-y-5 animate-fadeIn">
+          <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-rose-500/20">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-rose-600/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Flame className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h2 className="text-lg font-black text-white flex items-center gap-2">
+                  弱点構文トップ {weakestPatterns.length}
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
+                    要集中特訓
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400">
+                  ドリルやAnkiでミスが多かった構文です。AIコーチがこのデータを元に特訓してくれます
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* 文法分野別の弱点サマリー */}
+          {weakestCategories.filter(c => c.mistakeCount > 0).length > 0 && (
+            <div className="flex items-center space-x-2 flex-wrap gap-y-1.5 pb-2">
+              <span className="text-xs font-bold text-slate-400">重点分野:</span>
+              {weakestCategories.filter(c => c.mistakeCount > 0).slice(0, 4).map(c => (
+                <span key={c.category} className="text-[11px] px-2.5 py-0.5 rounded-lg bg-rose-950/80 border border-rose-500/30 text-rose-300 font-semibold">
+                  {c.categoryLabel} ({c.mistakeCount}ミス / 正答率 {c.accuracyRate}%)
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {weakestPatterns.map(({ pattern, mistakeCount, lastErrorReason }) => (
+              <div
+                key={pattern.id}
+                className="p-4 bg-slate-950/80 border border-rose-500/20 rounded-2xl space-y-2 relative overflow-hidden"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 font-bold">
+                      {pattern.cefr}
+                    </span>
+                    <span className="text-xs font-bold text-white truncate max-w-[200px]">
+                      {pattern.name}
+                    </span>
+                  </div>
+                  <span className="text-xs font-extrabold text-rose-400 bg-rose-950 px-2.5 py-0.5 rounded-lg border border-rose-500/30">
+                    ミス: {mistakeCount}回
+                  </span>
+                </div>
+
+                <div className="text-xs text-slate-300 font-mono bg-slate-900/90 p-2 rounded-xl border border-slate-800">
+                  🎯 {pattern.focus}
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                  <span>{pattern.meaning}</span>
+                  {lastErrorReason && (
+                    <span className="text-rose-300/90 text-[10px]">
+                      傾向: {lastErrorReason}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 5. 🏆 マイ武器庫 (MY ARSENAL: 1-SENTENCE CARDS, DIFFICULT SENTENCES, ERRORS) */}
       <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5">

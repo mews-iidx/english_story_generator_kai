@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
-import { BookOpen, Calendar, Trash2, Search, Sparkles, Filter, RefreshCw, PlusCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { BookOpen, Calendar, Trash2, Search, Sparkles, Filter, RefreshCw, PlusCircle, ChevronDown, ChevronUp, Layers, Plus } from 'lucide-react';
+import { StoryQueueTask } from '../types/storyQueue';
 
 interface HistoryViewProps {
   stories: Story[];
@@ -9,6 +10,9 @@ interface HistoryViewProps {
   onNavigateToCreate?: () => void;
   isGenerating?: boolean;
   generatingTheme?: string;
+  queueTasks?: StoryQueueTask[];
+  onOpenQueueModal?: () => void;
+  onQueueNextEpisode?: (story: Story) => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -18,6 +22,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   onNavigateToCreate,
   isGenerating,
   generatingTheme,
+  queueTasks = [],
+  onOpenQueueModal,
+  onQueueNextEpisode,
 }) => {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -77,6 +84,38 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      {/* Active Queue Banner */}
+      {queueTasks.some(t => t.status === 'generating' || t.status === 'pending') && (
+        <div className="bg-gradient-to-r from-blue-950/80 to-indigo-950/80 border border-blue-500/40 rounded-3xl p-4 sm:p-5 shadow-xl flex items-center justify-between flex-wrap gap-3 animate-fadeIn">
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-500/40 flex items-center justify-center text-blue-300">
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-blue-300">
+                バックグラウンド順次生成中...
+              </div>
+              <div className="text-sm font-extrabold text-white">
+                {queueTasks.find(t => t.status === 'generating')?.title || '待機中タスクを処理中'}
+                <span className="text-xs font-normal text-slate-300 ml-2">
+                  (残り待機: {queueTasks.filter(t => t.status === 'pending').length}件)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {onOpenQueueModal && (
+            <button
+              onClick={onOpenQueueModal}
+              className="flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/25 transition-all"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>キューを確認</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. Compact Header Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-2xl space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -117,6 +156,18 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               {isFilterOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
 
+            {/* Queue Button */}
+            {queueTasks.length > 0 && onOpenQueueModal && (
+              <button
+                onClick={onOpenQueueModal}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-slate-950 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition-colors"
+                title="生成キュー一覧"
+              >
+                <Layers className="w-3.5 h-3.5 text-blue-400" />
+                <span>キュー ({queueTasks.filter(t => t.status === 'pending' || t.status === 'generating').length})</span>
+              </button>
+            )}
+
             {/* Create Story Button */}
             {onNavigateToCreate && (
               <button
@@ -124,7 +175,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/25 transition-all"
               >
                 <PlusCircle className="w-4 h-4" />
-                <span>新しい本を作成</span>
+                <span>物語を生成</span>
               </button>
             )}
           </div>
@@ -323,10 +374,26 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       {new Date(story.createdAt).toLocaleDateString('ja-JP')}
                     </span>
 
-                    <span className="flex items-center gap-1 text-sky-300 font-semibold group-hover:underline">
-                      <BookOpen className="w-3.5 h-3.5" />
-                      開く ➔
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      {onQueueNextEpisode && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onQueueNextEpisode(story);
+                          }}
+                          className="px-2 py-0.5 bg-black/40 hover:bg-black/70 text-amber-300 rounded-lg border border-amber-400/30 text-[10px] font-bold transition-colors flex items-center gap-1"
+                          title="この話の設定・あらすじを引き継いで次話をキューに追加"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>続きを生成</span>
+                        </button>
+                      )}
+
+                      <span className="flex items-center gap-1 text-sky-300 font-semibold group-hover:underline">
+                        <BookOpen className="w-3.5 h-3.5" />
+                        開く ➔
+                      </span>
+                    </div>
                   </div>
                 </div>
               );

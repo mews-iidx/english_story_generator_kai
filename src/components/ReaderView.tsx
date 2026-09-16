@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Story, TargetEmbedding } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, EyeOff, ChevronLeft, ChevronRight, BookmarkPlus, Film } from 'lucide-react';
+import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, EyeOff, ChevronLeft, ChevronRight, BookmarkPlus, Film, Sparkles, Plus } from 'lucide-react';
 
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
@@ -22,6 +22,7 @@ interface ReaderViewProps {
   onUpdateSentenceReason?: (sentenceId: string, category: DifficultyReasonCategory, note: string) => void;
   onRecordStoryRead?: (storyId: string, wpm?: number) => void;
   onSelectStory?: (story: Story) => void;
+  onQueueNextEpisode?: (story: Story) => void;
   onBackToBookshelf: () => void;
 }
 
@@ -46,6 +47,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onUpdateSentenceReason,
   onRecordStoryRead,
   onSelectStory,
+  onQueueNextEpisode,
   onBackToBookshelf,
 }) => {
   const [viewMode, setViewMode] = useState<'read' | 'listen'>('read');
@@ -926,6 +928,28 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               >
                 <span>第 {nextEpisode.episodeIndex} 話を読む</span>
                 <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Next Episode Queue Generator Button */}
+          {isFinished && !nextEpisode && onQueueNextEpisode && (
+            <div className="p-4 bg-gradient-to-r from-purple-950/60 to-indigo-950/60 border border-purple-500/30 rounded-2xl flex items-center justify-between gap-3 animate-fadeIn">
+              <div>
+                <div className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>続きのエピソードを生成</span>
+                </div>
+                <div className="text-xs text-slate-300 pt-0.5">
+                  この話の登場人物やあらすじを引き継いだ次話をキューに追加
+                </div>
+              </div>
+              <button
+                onClick={() => onQueueNextEpisode(currentStory)}
+                className="flex items-center space-x-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-purple-600/30 transition-all flex-shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>次話をキューに追加</span>
               </button>
             </div>
           )}
