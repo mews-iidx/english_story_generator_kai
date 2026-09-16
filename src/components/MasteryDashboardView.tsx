@@ -2,7 +2,10 @@ import React, { useState, useMemo } from 'react';
 import {
   loadDailySnapshots,
   computeAllLevelProgress,
+  loadReadingSessionLogs,
+  deleteReadingSessionLog,
 } from '../services/storage';
+import { ReadingSessionLog } from '../types/mastery';
 import { DailySnapshot } from '../types/mastery';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem } from '../types/sentence';
@@ -200,10 +203,18 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
   // リアルCEFR進捗マップの展開状態 & タイムスケール（日/週/月）
   const [isCefrMapExpanded, setIsCefrMapExpanded] = useState(false);
+  const [isReadingLogsExpanded, setIsReadingLogsExpanded] = useState(false);
   const [timeScale, setTimeScale] = useState<TimeScale>('weekly');
 
-  // 日次スナップショット & CEFR進捗の取得
-  const dailySnapshots = useMemo(() => loadDailySnapshots(), []);
+  // 日次スナップショット & 読了ログの取得
+  const [dailySnapshots, setDailySnapshots] = useState<DailySnapshot[]>(() => loadDailySnapshots());
+  const [readingLogs, setReadingLogs] = useState<ReadingSessionLog[]>(() => loadReadingSessionLogs());
+
+  const handleDeleteReadingLog = (logId: string) => {
+    const { logs, snapshots } = deleteReadingSessionLog(logId);
+    setReadingLogs(logs);
+    setDailySnapshots(snapshots);
+  };
   const allCefrProgress = useMemo(() => computeAllLevelProgress(), []);
 
   // 全レベルの平均制覇率
@@ -596,6 +607,93 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+            {/* 4. 📖 読了セッション履歴 & ログ管理 (折りたたみ) */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4 transition-all">
+        <button
+          onClick={() => setIsReadingLogsExpanded(!isReadingLogsExpanded)}
+          className="w-full flex items-center justify-between text-left group"
+        >
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 rounded-xl bg-cyan-950 border border-cyan-500/30 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform">
+              <BookOpen className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-sm sm:text-base font-black text-white group-hover:text-cyan-300 transition-colors">
+                  📖 読了セッション履歴 & ログ管理
+                </h3>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold">
+                  {readingLogs.length}件の記録
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                読了したストーリーの日時・語数・WPMログ（誤タップ等のノイズはここから個別削除できます）
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-1.5 text-slate-400 group-hover:text-white transition-colors pl-2">
+            <span className="text-xs font-semibold hidden sm:inline">
+              {isReadingLogsExpanded ? '閉じる' : '履歴を見る'}
+            </span>
+            {isReadingLogsExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </div>
+        </button>
+
+        {isReadingLogsExpanded && (
+          <div className="pt-4 border-t border-slate-800 space-y-3 animate-fadeIn">
+            {readingLogs.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-500">
+                まだ読了セッションの記録はありません。
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                {readingLogs.map((log) => {
+                  const d = new Date(log.completedAt);
+                  const formattedDate = !isNaN(d.getTime())
+                    ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                    : log.dateString;
+
+                  return (
+                    <div
+                      key={log.id}
+                      className="flex items-center justify-between p-3 sm:p-3.5 bg-slate-950/80 border border-slate-800/90 rounded-2xl text-xs hover:border-slate-700 transition-all gap-2"
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0 flex-1">
+                        <span className="text-[11px] text-slate-400 font-mono shrink-0">
+                          {formattedDate}
+                        </span>
+                        <span className="font-bold text-slate-200 truncate" title={log.storyTitle}>
+                          『{log.storyTitle}』
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-3 shrink-0">
+                        <span className="text-slate-300 font-semibold">
+                          {log.wordsCount} <span className="text-[10px] text-slate-400">語</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 font-extrabold text-[11px]">
+                          {log.wpm} <span className="text-[9px] font-normal">WPM</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteReadingLog(log.id)}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl transition-colors"
+                          title="この読了記録を削除（WPM平均・語数のノイズを除去）"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
 
       {/* 4. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) - 気になったら見に行く折りたたみセクション */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4 transition-all">

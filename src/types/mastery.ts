@@ -99,3 +99,13 @@ export interface MyGoal {
   targetDate: string;
   isActive: boolean;
 }
+
+export interface ReadingSessionLog {
+  id: string;
+  storyId?: string;
+  storyTitle: string;
+  completedAt: string; // ISO string
+  dateString: string;  // YYYY-MM-DD
+  wordsCount: number;
+  wpm: number;
+}

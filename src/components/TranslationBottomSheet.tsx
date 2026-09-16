@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TargetEmbedding } from '../types/story';
 import { ExtractedCorePattern } from '../types/vocab';
 import { SaveSentenceCardParams, extractSingleSentence } from '../services/storage';
-import { Volume2, Plus, Check, Sparkles, Lightbulb, CheckCircle, AlertCircle, Bot, Layers } from 'lucide-react';
+import { Volume2, Plus, Check, Sparkles, Lightbulb, Bot, Layers } from 'lucide-react';
 import { speakText } from '../utils/speech';
 
 interface TranslationBottomSheetProps {
@@ -19,7 +19,6 @@ interface TranslationBottomSheetProps {
   onFetchContextualMeaning?: () => Promise<{ meaning: string; partOfSpeech?: string }>;
   onExtractCorePatterns?: () => Promise<ExtractedCorePattern[]>;
   onOpenChatMentor?: (text: string) => void;
-  onRecordPatternFeedback?: (patternId: string, status: 'lapsed' | 'mastered') => void;
 }
 
 export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
@@ -36,12 +35,10 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   onFetchContextualMeaning,
   onExtractCorePatterns,
   onOpenChatMentor,
-  onRecordPatternFeedback,
 }) => {
   const [contextualMeaning, setContextualMeaning] = useState<string | null>(null);
   const [isFetchingContext, setIsFetchingContext] = useState(false);
   const [activeTab, setActiveTab] = useState<'word' | 'syntax'>('word');
-  const [feedbackStatus, setFeedbackStatus] = useState<'lapsed' | 'mastered' | null>(null);
 
   // 抽出された2〜3個の構造化構文パターン
   const [extractedPatterns, setExtractedPatterns] = useState<ExtractedCorePattern[]>([]);
@@ -51,7 +48,6 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   useEffect(() => {
     setContextualMeaning(null);
     setIsFetchingContext(false);
-    setFeedbackStatus(null);
     setExtractedPatterns([]);
     setIsExtractingPatterns(false);
     setIsSavedLocally(false);
@@ -100,6 +96,8 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
   const handleSaveCard = () => {
     if (onSaveSentenceCard) {
       const cleanSentence = extractSingleSentence(fullSentenceText, originalText);
+      const cleanMeaning = extractSingleSentence(currentDisplayMeaning, originalText);
+
       if (isSingleWord) {
         onSaveSentenceCard({
           sentence: cleanSentence,
@@ -111,12 +109,12 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
       } else {
         onSaveSentenceCard({
           sentence: cleanSentence,
-          translation: currentDisplayMeaning,
+          translation: cleanMeaning || currentDisplayMeaning,
           focusType: targetEmbedding ? 'pattern' : 'sentence',
           corePatterns: extractedPatterns.length > 0 ? extractedPatterns : (targetEmbedding ? [{
             patternName: targetEmbedding.targetName || 'ターゲット構文',
             formula: targetEmbedding.focusPoint || '',
-            meaningTemplate: targetEmbedding.translation || currentDisplayMeaning,
+            meaningTemplate: extractSingleSentence(targetEmbedding.translation || currentDisplayMeaning),
             highlightTokens: [],
             briefNote: targetEmbedding.focusPoint || '',
           }] : []),
@@ -127,12 +125,6 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
       onAddToVocab(originalText, currentDisplayMeaning, contextSentence);
       setIsSavedLocally(true);
     }
-  };
-
-  const handlePatternFeedback = (status: 'lapsed' | 'mastered') => {
-    if (!targetEmbedding?.targetId || !onRecordPatternFeedback) return;
-    onRecordPatternFeedback(targetEmbedding.targetId, status);
-    setFeedbackStatus(status);
   };
 
   const isSaved = isSavedAsVocab || isSavedLocally;
@@ -199,50 +191,23 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = ({
         {/* Content Body */}
         {activeTab === 'syntax' && targetEmbedding ? (
           <div className="space-y-3">
-            <div className="p-3 bg-purple-950/40 border border-purple-500/30 rounded-2xl space-y-1.5 text-xs">
+            <div className="p-3.5 bg-purple-950/40 border border-purple-500/30 rounded-2xl space-y-2 text-xs">
               <div className="flex items-center justify-between text-purple-300 font-bold">
                 <span>🎯 出題ターゲット構文</span>
-                <span className="text-[10px] bg-purple-950 px-2 py-0.5 rounded border border-purple-500/40">
+                <span className="text-[10px] bg-purple-950 px-2 py-0.5 rounded border border-purple-500/40 font-mono">
                   {targetEmbedding.targetName}
                 </span>
               </div>
               {targetEmbedding.focusPoint && (
-                <div className="text-slate-300 font-medium">
-                  {targetEmbedding.focusPoint}
+                <div className="text-slate-200 font-medium">
+                  💡 {targetEmbedding.focusPoint}
                 </div>
               )}
               {targetEmbedding.translation && (
-                <div className="text-purple-200/90 text-[11px] pt-0.5 border-t border-purple-500/20">
-                  訳: {targetEmbedding.translation}
+                <div className="text-purple-200/90 text-xs pt-1 border-t border-purple-500/20">
+                  訳: {extractSingleSentence(targetEmbedding.translation)}
                 </div>
               )}
-            </div>
-
-            {/* Quick Feedback Buttons */}
-            <div className="flex items-center space-x-2 pt-1">
-              <button
-                onClick={() => handlePatternFeedback('lapsed')}
-                className={`flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  feedbackStatus === 'lapsed'
-                    ? 'bg-rose-600 text-white shadow-md'
-                    : 'bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30'
-                }`}
-              >
-                <AlertCircle className="w-3.5 h-3.5" />
-                <span>{feedbackStatus === 'lapsed' ? '🔴 要復習に記録済み' : '🔴 構文が分からなかった'}</span>
-              </button>
-
-              <button
-                onClick={() => handlePatternFeedback('mastered')}
-                className={`flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  feedbackStatus === 'mastered'
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/30'
-                }`}
-              >
-                <CheckCircle className="w-3.5 h-3.5" />
-                <span>{feedbackStatus === 'mastered' ? '🟢 習得済みに記録！' : '🟢 この構文は理解できた'}</span>
-              </button>
             </div>
           </div>
         ) : (

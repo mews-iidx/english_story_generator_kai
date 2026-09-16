@@ -1,4 +1,4 @@
-import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress } from '../types/mastery';
+import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress, ReadingSessionLog } from '../types/mastery';
 import { getPatternsByLevel } from '../data/cefrPatternsMaster';
 import { CEFR_VOCAB_MASTER, getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
 import { getTodayDateString } from '../utils/srs';
@@ -23,6 +23,7 @@ const STORAGE_KEYS = {
   MASTERY_STATE: 'storykai_mastery_state_v1',
   DAILY_SNAPSHOTS: 'storykai_daily_snapshots_v1',
   MY_GOAL: 'storykai_my_goal_v1',
+  READING_LOGS: 'storykai_reading_logs_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -203,7 +204,7 @@ export function recordStoryRead(storyId: string, wpm?: number): Story | null {
 
       // 単語数とWPMを日次スナップショットに記録
       const words = updatedStory.actualWordCount || updatedStory.targetWordCount || 700;
-      recordDailyReadingActivity(words, wpm);
+      recordDailyReadingActivity(words, wpm, updatedStory.title, updatedStory.id);
     } catch (err) {
       console.error('Failed to update passive mastery on story read', err);
     }
@@ -1333,19 +1334,89 @@ export function ensureTodaySnapshot(): DailySnapshot {
   return snapshot;
 }
 
-export function recordDailyReadingActivity(wordsCount: number, wpm?: number): void {
+// --------------------- READING LOGS (読了セッション履歴) ---------------------
+
+export function loadReadingSessionLogs(): ReadingSessionLog[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.READING_LOGS);
+    if (!raw) return [];
+    const logs: ReadingSessionLog[] = JSON.parse(raw);
+    return logs.sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+  } catch (e) {
+    console.error('Failed to load reading session logs', e);
+    return [];
+  }
+}
+
+export function saveReadingSessionLogs(logs: ReadingSessionLog[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.READING_LOGS, JSON.stringify(logs));
+  } catch (e) {
+    console.error('Failed to save reading session logs', e);
+  }
+}
+
+export function deleteReadingSessionLog(logId: string): { logs: ReadingSessionLog[]; snapshots: DailySnapshot[] } {
+  const logs = loadReadingSessionLogs();
+  const target = logs.find(l => l.id === logId);
+  const updatedLogs = logs.filter(l => l.id !== logId);
+  saveReadingSessionLogs(updatedLogs);
+
+  // 日次スナップショットの自動再計算（削除したログのノイズを除去）
+  const snapshots = loadDailySnapshots();
+  if (target) {
+    const dateLogs = updatedLogs.filter(l => l.dateString === target.dateString);
+    const snapIdx = snapshots.findIndex(s => s.date === target.dateString);
+    if (snapIdx >= 0) {
+      if (dateLogs.length === 0) {
+        snapshots[snapIdx].wordsRead = 0;
+        snapshots[snapIdx].averageWpm = 0;
+      } else {
+        const totalWords = dateLogs.reduce((acc, l) => acc + (l.wordsCount || 0), 0);
+        const validWpms = dateLogs.map(l => l.wpm).filter(w => w > 0);
+        const avgWpm = validWpms.length > 0 ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length) : 0;
+        snapshots[snapIdx].wordsRead = totalWords;
+        snapshots[snapIdx].averageWpm = avgWpm;
+      }
+      saveDailySnapshotsBatch(snapshots);
+    }
+  }
+
+  return { logs: updatedLogs, snapshots };
+}
+
+export function recordDailyReadingActivity(wordsCount: number, wpm?: number, storyTitle?: string, storyId?: string): void {
   const today = getTodayDateString();
+  const now = new Date().toISOString();
+
+  // 1. 読了セッション個別ログに追加
+  const logs = loadReadingSessionLogs();
+  const newLog: ReadingSessionLog = {
+    id: 'read_log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    storyId,
+    storyTitle: storyTitle || '英語ストーリー',
+    completedAt: now,
+    dateString: today,
+    wordsCount,
+    wpm: wpm || 0,
+  };
+  logs.unshift(newLog);
+  saveReadingSessionLogs(logs.slice(0, 100)); // 直近100件まで保持
+
+  // 2. 日次スナップショットをログに基づいて正確に集約
   const snapshots = loadDailySnapshots();
   let existing = snapshots.find(s => s.date === today);
-
   if (!existing) {
     existing = ensureTodaySnapshot();
   }
 
-  existing.wordsRead = (existing.wordsRead || 0) + wordsCount;
-  if (wpm && wpm > 0) {
-    existing.averageWpm = existing.averageWpm ? Math.round((existing.averageWpm + wpm) / 2) : Math.round(wpm);
-  }
+  const todayLogs = logs.filter(l => l.dateString === today);
+  const totalWords = todayLogs.reduce((acc, l) => acc + (l.wordsCount || 0), 0);
+  const validWpms = todayLogs.map(l => l.wpm).filter(w => w > 0);
+  const avgWpm = validWpms.length > 0 ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length) : (wpm || 0);
+
+  existing.wordsRead = totalWords;
+  existing.averageWpm = avgWpm;
 
   const allLevels = computeAllLevelProgress();
   existing.a1Progress = allLevels.A1;
@@ -1465,9 +1536,10 @@ export function extractSingleSentence(text: string, focusToken?: string): string
   if (!text) return '';
   const trimmed = text.trim();
   
-  // 文末（. ! ? または改行）で分割
+  // 文末（. ! ? または 。 ！ ？ 改行）で1文単位に正確に分割
   const sentences = trimmed
     .replace(/([.!?]["']?)(?:\s+|\n+|$)/g, '$1\n')
+    .replace(/([。！？])(?:\s+|\n+|$)/g, '$1\n')
     .split('\n')
     .map(s => s.trim())
     .filter(Boolean);

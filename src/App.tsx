@@ -60,7 +60,6 @@ import {
   resetAllData,
   getUnmasteredTargetPatterns,
   getUnmasteredTargetVocabs,
-  recordPatternStatus,
 } from './services/storage';
 
 import { generateStorySeriesWithGemini, fetchContextualWordMeaning,
@@ -975,9 +974,6 @@ export const App: React.FC = () => {
         onFetchContextualMeaning={handleFetchContextualMeaning}
         onExtractCorePatterns={handleExtractCorePatterns}
         onOpenChatMentor={(text) => handleOpenChatWithSelection(text)}
-        onRecordPatternFeedback={(patternId, status) => {
-          recordPatternStatus(patternId, status);
-        }}
       />
     </div>
   );
