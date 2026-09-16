@@ -745,43 +745,91 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                   B2: '中上級 (B2)',
                 }[lvl];
 
+                const patternLearning = (prog.patternExposed || 0) + (prog.patternLapsed || 0);
+                const vocabLearning = (prog.vocabExposed || 0) + (prog.vocabLapsed || 0);
+
+                const patternMasteredPct = Math.round(((prog.patternMastered || 0) / (prog.patternTotal || 1)) * 100);
+                const patternLearningPct = Math.round((patternLearning / (prog.patternTotal || 1)) * 100);
+
+                const vocabMasteredPct = Math.round(((prog.vocabMastered || 0) / (prog.vocabTotal || 1)) * 100);
+                const vocabLearningPct = Math.round((vocabLearning / (prog.vocabTotal || 1)) * 100);
+
                 return (
                   <div
                     key={lvl}
-                    className="p-4 rounded-2xl border bg-slate-950/80 border-slate-800 text-left space-y-2.5 shadow-md"
+                    className="p-4 rounded-2xl border bg-slate-950/80 border-slate-800 text-left space-y-3 shadow-md"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-300">{levelTitle}</span>
-                      <span className="text-base font-black text-sky-400">
-                        {Math.round(prog.overallPct)}%
-                      </span>
+                    <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                      <span className="text-xs font-bold text-slate-200">{levelTitle}</span>
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-xs font-black text-sky-400">
+                          理解 {Math.round(prog.overallPct)}%
+                        </span>
+                        {typeof prog.overallAssemblyPct === 'number' && (
+                          <span className="text-[10px] font-bold text-purple-400 bg-purple-950/60 border border-purple-500/30 px-1 rounded">
+                            組立 {Math.round(prog.overallAssemblyPct)}%
+                          </span>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="space-y-1.5 text-[10px] text-slate-400">
-                      <div>
-                        <div className="flex justify-between font-semibold mb-0.5">
+                    <div className="space-y-2.5 text-[10px] text-slate-400">
+                      {/* 構文 3-state */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between font-semibold">
                           <span>💡 構文 ({prog.patternMastered}/{prog.patternTotal})</span>
-                          <span>{Math.round(prog.patternPct)}%</span>
+                          <span className="text-slate-300">
+                            🟢 {prog.patternMastered} 🟡 {patternLearning} ⚪ {prog.patternUnseen}
+                          </span>
                         </div>
-                        <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                        {/* 3-Tier Multi-Segment Bar */}
+                        <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex border border-slate-800">
                           <div
-                            className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full"
-                            style={{ width: `${prog.patternPct}%` }}
+                            className="h-full bg-emerald-500"
+                            style={{ width: `${patternMasteredPct}%` }}
+                            title={`既知: ${prog.patternMastered}`}
+                          />
+                          <div
+                            className="h-full bg-amber-400"
+                            style={{ width: `${patternLearningPct}%` }}
+                            title={`学習中・Anki中: ${patternLearning}`}
                           />
                         </div>
+                        {typeof prog.patternAssemblyPct === 'number' && (
+                          <div className="flex justify-between text-[9px] text-purple-300/80">
+                            <span>⚙️ 組立マスター:</span>
+                            <span className="font-mono font-bold">{prog.patternAssemblyMastered || 0} ({prog.patternAssemblyPct}%)</span>
+                          </div>
+                        )}
                       </div>
 
-                      <div>
-                        <div className="flex justify-between font-semibold mb-0.5">
+                      {/* 語彙 3-state */}
+                      <div className="space-y-1 pt-1 border-t border-slate-900">
+                        <div className="flex justify-between font-semibold">
                           <span>🔤 語彙 ({prog.vocabMastered}/{prog.vocabTotal})</span>
-                          <span>{Math.round(prog.vocabPct)}%</span>
+                          <span className="text-slate-300">
+                            🟢 {prog.vocabMastered} 🟡 {vocabLearning} ⚪ {prog.vocabUnseen}
+                          </span>
                         </div>
-                        <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                        {/* 3-Tier Multi-Segment Bar */}
+                        <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex border border-slate-800">
                           <div
-                            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full"
-                            style={{ width: `${prog.vocabPct}%` }}
+                            className="h-full bg-teal-400"
+                            style={{ width: `${vocabMasteredPct}%` }}
+                            title={`既知: ${prog.vocabMastered}`}
+                          />
+                          <div
+                            className="h-full bg-yellow-400"
+                            style={{ width: `${vocabLearningPct}%` }}
+                            title={`学習中・Anki中: ${vocabLearning}`}
                           />
                         </div>
+                        {typeof prog.vocabAssemblyPct === 'number' && (
+                          <div className="flex justify-between text-[9px] text-purple-300/80">
+                            <span>⚙️ 組立マスター:</span>
+                            <span className="font-mono font-bold">{prog.vocabAssemblyMastered || 0} ({prog.vocabAssemblyPct}%)</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -533,6 +533,18 @@ export function recordAnkiRating(
   }
 
   saveVocabsBatch(vocabs);
+
+  // ★ 復習間隔が21日以上（Mature）に達したら、CEFRマスターDB側を自動で既知（Mastered）へ昇格！
+  const settings = loadSettings();
+  const gradDays = settings.ankiGraduationIntervalDays ?? 21;
+  const phraseKey = updated.focusWord || updated.phrase;
+
+  if (updated.intervalDays >= gradDays) {
+    recordVocabMasteryStatus(phraseKey, 'mastered');
+  } else if (rating === 'again') {
+    recordVocabMasteryStatus(phraseKey, 'lapsed');
+  }
+
   return updated;
 }
 
@@ -2011,4 +2023,88 @@ export function deleteRallyTopic(topic: string): string[] {
   const finalTopics = updated.length > 0 ? updated : DEFAULT_RALLY_TOPICS;
   saveRallyTopics(finalTopics);
   return finalTopics;
+}
+
+
+/**
+ * 1日の新規上限 (New Cards/Day) と最大復習上限 (Max Reviews/Day) を適用したAnki出題デッキを取得
+ */
+export function loadDueAnkiDeckWithLimits(): {
+  studyDeck: VocabItem[];
+  totalDueCount: number;
+  newCardsCount: number;
+  reviewCardsCount: number;
+  backlogNewCount: number;
+} {
+  const allVocabs = loadVocabs();
+  const settings = loadSettings();
+  const today = getTodayDateString();
+
+  const newLimit = settings.ankiNewCardsPerDay ?? 20;
+  const reviewLimit = settings.ankiMaxReviewsPerDay ?? 200;
+
+  const dueReviews: VocabItem[] = [];
+  const newCards: VocabItem[] = [];
+
+  for (const item of allVocabs) {
+    const isNew = !item.repetitionCount || item.repetitionCount === 0 || item.cardState === 'new';
+    const isDue = (item.nextReviewDate && item.nextReviewDate <= today) || item.cardState === 'learning' || item.cardState === 'relearning';
+
+    if (isNew) {
+      newCards.push(item);
+    } else if (isDue) {
+      dueReviews.push(item);
+    }
+  }
+
+  // ソート
+  dueReviews.sort((a, b) => (a.nextReviewDate || '').localeCompare(b.nextReviewDate || ''));
+  newCards.sort((a, b) => (b.importance || 3) - (a.importance || 3));
+
+  const selectedReviews = dueReviews.slice(0, reviewLimit);
+  const selectedNew = newCards.slice(0, newLimit);
+  const backlogNewCount = Math.max(0, newCards.length - selectedNew.length);
+
+  return {
+    studyDeck: [...selectedReviews, ...selectedNew],
+    totalDueCount: dueReviews.length + newCards.length,
+    newCardsCount: selectedNew.length,
+    reviewCardsCount: selectedReviews.length,
+    backlogNewCount,
+  };
+}
+
+/**
+ * Anki復習結果を記録し、復習間隔が21日を超えた場合はマスターDBへ自動で「既知（Mastered）」として同期
+ */
+export function recordAnkiCardReviewWithMasterySync(
+  vocabId: string,
+  rating: 'again' | 'hard' | 'good' | 'easy'
+): VocabItem | null {
+  const vocabs = loadVocabs();
+  const idx = vocabs.findIndex(v => v.id === vocabId);
+  if (idx < 0) return null;
+
+  const item = vocabs[idx];
+  const srs = calculateAnkiSRS(item, rating);
+  const settings = loadSettings();
+  const gradDays = settings.ankiGraduationIntervalDays ?? 21;
+
+  const updated: VocabItem = {
+    ...item,
+    ...srs,
+  };
+  vocabs[idx] = updated;
+  saveVocabsBatch(vocabs);
+
+  // ★ 復習間隔が21日以上（Mature）に達したら、CEFRマスターDB側を自動で既知（Mastered）へ昇格！
+  if (updated.intervalDays >= gradDays) {
+    const phraseKey = updated.focusWord || updated.phrase;
+    recordVocabMasteryStatus(phraseKey, 'mastered');
+  } else if (rating === 'again') {
+    const phraseKey = updated.focusWord || updated.phrase;
+    recordVocabMasteryStatus(phraseKey, 'lapsed');
+  }
+
+  return updated;
 }

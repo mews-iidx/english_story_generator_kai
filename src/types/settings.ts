@@ -15,6 +15,9 @@ export interface AppSettings {
   googleSpreadsheetId: string | null;
   googleAccessToken: string | null;
   lastSyncedAt: string | null;
+  ankiNewCardsPerDay?: number;
+  ankiMaxReviewsPerDay?: number;
+  ankiGraduationIntervalDays?: number;
   tokenStats: TokenStats;
 }
 
@@ -26,6 +29,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   googleSpreadsheetId: null,
   googleAccessToken: null,
   lastSyncedAt: null,
+  ankiNewCardsPerDay: 20,
+  ankiMaxReviewsPerDay: 200,
+  ankiGraduationIntervalDays: 21,
   tokenStats: {
     totalPromptTokens: 0,
     totalCandidatesTokens: 0,

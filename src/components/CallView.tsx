@@ -21,6 +21,7 @@ import {
   saveSentenceCardWithSiblings,
 } from '../services/storage';
 import { playCorrectSound } from '../utils/audio';
+import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import {
   Phone,
   PhoneOff,
@@ -381,6 +382,21 @@ export const CallView: React.FC<CallViewProps> = ({
       return;
     }
 
+    // 会話セッションのログをスキャンキューへ投入 (理解＆組立同期)
+    try {
+      const allText = finalMessages.map(m => m.text).join(' ');
+      const userUtterances = finalMessages.filter(m => m.role === 'user').map(m => m.text);
+
+      enqueueMasteryScanTask({
+        sourceType: 'call',
+        title: `英会話: ${persona?.name || 'フリー会話'}`,
+        text: allText,
+        userUtterances,
+      });
+    } catch (e) {
+      console.error('Failed to enqueue call session scan task', e);
+    }
+
     // 分析サマリー画面へ移行
     setViewState('summary');
     setIsAnalyzing(true);
@@ -714,6 +730,26 @@ export const CallView: React.FC<CallViewProps> = ({
   };
 
   const handleEndRally = () => {
+    // 瞬間ラリーの会話ログをスキャンキューへ投入 (理解＆組立同期)
+    try {
+      const allText = rallyMessages.map(m => m.text).join(' ');
+      const userUtterances = rallyMessages.filter(m => m.role === 'user').map(m => m.text);
+      const equippedPhrases = Array.from(equippedFeedbackIds).map(id => {
+        const matched = rallyMessages.find(m => (m.id + '_fb') === id);
+        return matched?.feedback?.naturalExpression || '';
+      }).filter(Boolean);
+
+      enqueueMasteryScanTask({
+        sourceType: 'call',
+        title: `瞬間ラリー特訓: ${selectedRallyTopic}`,
+        text: allText,
+        userUtterances,
+        lookedUpTokens: equippedPhrases,
+      });
+    } catch (e) {
+      console.error('Failed to enqueue rally scan task', e);
+    }
+
     setViewState('rally_summary');
   };
 

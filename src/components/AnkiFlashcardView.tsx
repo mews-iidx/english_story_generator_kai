@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool } from 'lucide-react';
+import { Volume2, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool, Sliders, X, Check } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS } from '../utils/srs';
-import { cleanTranslationText } from '../services/storage';
+import { cleanTranslationText, loadSettings, saveSettings } from '../services/storage';
 
 export type AnkiCardFilter = 'all' | 'word' | 'pattern' | 'en_to_ja' | 'ja_to_en';
 
@@ -143,6 +143,13 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     return FILTER_OPTIONS.find(f => f.id === cardFilter) || FILTER_OPTIONS[0];
   }, [cardFilter]);
 
+  // 出題制限設定モーダル
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [appSettings, setAppSettings] = useState(() => loadSettings());
+  const [newCardsLimit, setNewCardsLimit] = useState(appSettings.ankiNewCardsPerDay ?? 20);
+  const [maxReviewsLimit, setMaxReviewsLimit] = useState(appSettings.ankiMaxReviewsPerDay ?? 200);
+  const [graduationDays, setGraduationDays] = useState(appSettings.ankiGraduationIntervalDays ?? 21);
+
   // 各フィルター別の件数統計（全体件数 & 今日の復習対象件数）
   const filterStats = useMemo(() => {
     const stats: Record<AnkiCardFilter, { total: number; due: number }> = {
@@ -185,31 +192,63 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   const [isFlipped, setIsFlipped] = useState(false);
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
   const [graduatedIds, setGraduatedIds] = useState<Set<string>>(new Set());
+  const [backlogCount, setBacklogCount] = useState(0);
 
   // 操作取り消し（Undo）履歴スタック
   const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
 
-  // セッション初期化ヘルパー (全出題カードをランダムシャッフル)
+  // セッション初期化ヘルパー (上限設定を適用)
   const initSession = useCallback((targetVocabs: VocabItem[], allowExtraStudy: boolean = false) => {
     const activeCards = targetVocabs.filter(v => !v.buriedUntilDate || v.buriedUntilDate <= today);
     const learningCards = activeCards.filter(v => v.cardState === 'learning' || v.cardState === 'relearning');
-    const dueReviewCards = activeCards.filter(v => (!v.cardState || v.cardState === 'new' || v.cardState === 'review') && v.nextReviewDate <= today);
+    
+    // 復習対象（既存カードで今日が期日のもの）
+    const dueReviewCards = activeCards.filter(v => 
+      (v.cardState === 'review' || (v.repetitionCount && v.repetitionCount > 0)) && 
+      v.cardState !== 'learning' && 
+      v.cardState !== 'relearning' && 
+      v.nextReviewDate <= today
+    );
+
+    // 新規カード（未学習）
+    const newCards = activeCards.filter(v => 
+      (!v.cardState || v.cardState === 'new' || !v.repetitionCount || v.repetitionCount === 0) &&
+      v.cardState !== 'learning' && 
+      v.cardState !== 'relearning' &&
+      v.nextReviewDate <= today
+    );
 
     let initialReviews: VocabItem[] = [];
     let initialLearning: VocabItem[] = [];
+    let remainingBacklog = 0;
 
-    if (dueReviewCards.length > 0 || learningCards.length > 0) {
-      // 本日の復習期日・学習中カードを完全にシャッフルして英和・和英を混在出題
-      initialReviews = shuffleArray(dueReviewCards);
-      initialLearning = learningCards;
-    } else if (allowExtraStudy) {
-      // 追加練習
+    if (allowExtraStudy) {
+      // 上限枠なしの全件出題
       const unmastered = targetVocabs.filter(v => (v.repetitionCount ?? 0) < 4);
       initialReviews = unmastered.length > 0 ? shuffleArray(unmastered) : shuffleArray(targetVocabs);
       initialLearning = [];
+      remainingBacklog = 0;
+    } else if (dueReviewCards.length > 0 || newCards.length > 0 || learningCards.length > 0) {
+      // 1日の上限を適用
+      const maxReviews = appSettings.ankiMaxReviewsPerDay ?? 200;
+      const maxNew = appSettings.ankiNewCardsPerDay ?? 20;
+
+      // 優先度・期日順にソート
+      const sortedReviews = [...dueReviewCards].sort((a, b) => (a.nextReviewDate || '').localeCompare(b.nextReviewDate || ''));
+      const sortedNew = [...newCards].sort((a, b) => (b.importance || 3) - (a.importance || 3));
+
+      const selectedReviews = sortedReviews.slice(0, maxReviews);
+      const selectedNew = sortedNew.slice(0, maxNew);
+
+      remainingBacklog = (dueReviewCards.length - selectedReviews.length) + (newCards.length - selectedNew.length);
+
+      // 本日の復習期日・新規カードをシャッフルして出題
+      initialReviews = shuffleArray([...selectedReviews, ...selectedNew]);
+      initialLearning = learningCards;
     } else {
       initialReviews = [];
       initialLearning = [];
+      remainingBacklog = 0;
     }
 
     const firstCard = pickNextCard(initialLearning, initialReviews);
@@ -221,17 +260,30 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setSessionReviewedCount(0);
     setGraduatedIds(new Set());
     setHistoryStack([]);
-  }, [today]);
+    setBacklogCount(remainingBacklog);
+  }, [today, appSettings]);
 
-  // 初回マウント時、またはフィルター変更時にセッション初期化
+  // 初回マウント時、またはフィルター/設定変更時にセッション初期化
   useEffect(() => {
     initSession(filteredVocabs, false);
-  }, [cardFilter]);
+  }, [cardFilter, appSettings]);
 
   const handleFilterChange = (newFilter: AnkiCardFilter) => {
     if (newFilter === cardFilter) return;
     setCardFilter(newFilter);
     localStorage.setItem('anki_card_filter', newFilter);
+  };
+
+  const handleSaveSettings = () => {
+    const updated = {
+      ...appSettings,
+      ankiNewCardsPerDay: newCardsLimit,
+      ankiMaxReviewsPerDay: maxReviewsLimit,
+      ankiGraduationIntervalDays: graduationDays,
+    };
+    saveSettings(updated);
+    setAppSettings(updated);
+    setIsSettingsOpen(false);
   };
 
   // 次回復習間隔（Again / Hard / Good / Easy）の動的プレビュー計算
@@ -307,10 +359,10 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     setGraduatedIds(lastSnapshot.previousGraduatedIds);
     setSessionReviewedCount(lastSnapshot.previousReviewedCount);
     setActiveCard(lastSnapshot.activeCardBefore);
-    setIsFlipped(true);
+    setIsFlipped(false);
   };
 
-  // Anki 4ボタン評価ハンドラー
+  // Anki 4段階評価ハンドラー
   const handleRate = (rating: 'again' | 'hard' | 'good' | 'easy') => {
     if (!activeCard) return;
 
@@ -410,8 +462,13 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               今日の復習が完了しました！ 🎉
             </h2>
             <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-              選択中のカテゴリー【{activeFilterDef.label}】における本日の復習期日カードはすべて完了しました。素晴らしい継続力です！
+              選択中のカテゴリー【{activeFilterDef.label}】における本日の学習目標はすべて達成しました。素晴らしい継続力です！
             </p>
+            {backlogCount > 0 && (
+              <p className="text-xs text-amber-300 bg-amber-950/40 border border-amber-500/30 px-3 py-1.5 rounded-xl max-w-sm mx-auto">
+                📦 1日の出題制限により、残り <strong>{backlogCount} 枚</strong> が明日に温存されています。
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 max-w-sm mx-auto text-left">
@@ -431,10 +488,94 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
               className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-sm font-bold shadow-lg shadow-blue-600/25 transition-all"
             >
               <Zap className="w-4 h-4 text-amber-300" />
-              <span>追加で練習する（未定着カード）</span>
+              <span>{backlogCount > 0 ? `待機中カードを追加学習 (${backlogCount}枚)` : '追加で練習する（未定着カード）'}</span>
+            </button>
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl text-sm font-bold transition-all"
+            >
+              <Sliders className="w-4 h-4 text-slate-400" />
+              <span>出題上限を変更</span>
             </button>
           </div>
         </div>
+
+        {/* Settings Modal */}
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-scaleUp">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center space-x-2">
+                  <Sliders className="w-5 h-5 text-blue-400" />
+                  <h3 className="text-base font-bold text-white">Anki出題制限・卒業設定</h3>
+                </div>
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs text-slate-300">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-white block">1日の新規カード出題数 (New Cards/Day)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={newCardsLimit}
+                    onChange={(e) => setNewCardsLimit(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-bold"
+                  />
+                  <p className="text-slate-500 text-[11px]">初めて学習するカードの1日あたりの上限です（推奨: 15〜30枚）</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-white block">1日の最大復習カード数 (Max Reviews/Day)</label>
+                  <input
+                    type="number"
+                    min="10"
+                    max="500"
+                    value={maxReviewsLimit}
+                    onChange={(e) => setMaxReviewsLimit(Math.max(10, parseInt(e.target.value, 10) || 10))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-bold"
+                  />
+                  <p className="text-slate-500 text-[11px]">復習期日が到来したカードの1日あたりの上限です（推奨: 100〜250枚）</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-white block">自動卒業・マスター同期の間隔日数 (Mature Days)</label>
+                  <input
+                    type="number"
+                    min="7"
+                    max="90"
+                    value={graduationDays}
+                    onChange={(e) => setGraduationDays(Math.max(7, parseInt(e.target.value, 10) || 7))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-bold"
+                  />
+                  <p className="text-slate-500 text-[11px]">復習間隔がこの日数を超えたら、CEFRマスターDBで自動的に「既知（Mastered）」として同期されます（本家Anki基準: 21日）</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleSaveSettings}
+                  className="flex items-center space-x-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>設定を保存</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -478,17 +619,29 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           })}
         </div>
 
-        {/* Undo Button */}
-        {historyStack.length > 0 && (
+        <div className="flex items-center space-x-2">
+          {/* Settings Button */}
           <button
-            onClick={handleUndo}
-            className="flex items-center space-x-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-800 transition-colors"
-            title="直前の評価を取り消す"
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center space-x-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl text-xs font-semibold border border-slate-800 transition-colors"
+            title="出題上限設定"
           >
-            <Undo2 className="w-3.5 h-3.5 text-amber-400" />
-            <span>取り消し</span>
+            <Sliders className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden sm:inline">設定</span>
           </button>
-        )}
+
+          {/* Undo Button */}
+          {historyStack.length > 0 && (
+            <button
+              onClick={handleUndo}
+              className="flex items-center space-x-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-800 transition-colors"
+              title="直前の評価を取り消す"
+            >
+              <Undo2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>取り消し</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 2. Anki Three-Counter Display: [🔴 学習中] [🔵 新規] [🟢 復習] */}
@@ -500,59 +653,60 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
             <span className="text-slate-400 text-[11px]">学習中</span>
           </div>
 
-          <div className="flex items-center space-x-1.5" title="未学習・新規カード">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-500" />
-            <span className="font-extrabold text-sky-400">
-              {reviewQueue.filter(c => !c.cardState || c.cardState === 'new' || (c.repetitionCount ?? 0) === 0).length}
-            </span>
-            <span className="text-slate-400 text-[11px]">新規</span>
+          <div className="flex items-center space-x-1.5" title="本日出題キューにあるカード">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+            <span className="font-extrabold text-blue-400">{reviewQueue.length}</span>
+            <span className="text-slate-400 text-[11px]">出題待ち</span>
           </div>
 
-          <div className="flex items-center space-x-1.5" title="期日到来の復習カード">
+          <div className="flex items-center space-x-1.5" title="本日正解・卒業したカード">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-            <span className="font-extrabold text-emerald-400">
-              {reviewQueue.filter(c => c.cardState === 'review' || (c.repetitionCount ?? 0) > 0).length}
-            </span>
-            <span className="text-slate-400 text-[11px]">復習</span>
+            <span className="font-extrabold text-emerald-400">{graduatedIds.size}</span>
+            <span className="text-slate-400 text-[11px]">定着</span>
           </div>
         </div>
 
-        <div className="text-[11px] text-slate-400">
-          本日回答: <strong className="text-white">{sessionReviewedCount}</strong> 件
+        <div className="flex items-center space-x-2 text-[11px] text-slate-400">
+          <span>今日: <strong className="text-white">{sessionReviewedCount}</strong> 回</span>
+          {backlogCount > 0 && (
+            <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px]">
+              待機 {backlogCount}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* 3. Main Flashcard (全文・全問統一UI: 穴埋めなし) */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 min-h-[340px] flex flex-col justify-between transition-all">
-        {/* Card Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+      {/* 3. Main Flashcard Area */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 relative overflow-hidden">
+        {/* Top Badges */}
+        <div className="flex items-center justify-between text-xs">
           <div className="flex items-center space-x-2">
-            <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30">
-              {isWordCard ? '単語・イディオム' : (activeCard.focusType === 'pattern' ? '構文・文法' : '1文カード')}
+            <span className="px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold">
+              {activeCard.cardDirection === 'ja_to_en' ? '✍️ 和英 (作文)' : '📖 英和 (読解)'}
             </span>
-            {isWordCard && displayWord && (
-              <span className="text-[11px] font-semibold text-sky-300/80 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-                🎯 {displayWord}
+            {isWordCard ? (
+              <span className="px-2.5 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
+                🔤 単語
+              </span>
+            ) : (
+              <span className="px-2.5 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-bold">
+                💡 構文・文法
+              </span>
+            )}
+            {activeCard.intervalDays && activeCard.intervalDays >= (appSettings.ankiGraduationIntervalDays ?? 21) && (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                🟢 既知 (Mature)
               </span>
             )}
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
-              activeCard.cardDirection === 'ja_to_en'
-                ? 'bg-indigo-950/70 text-indigo-300 border-indigo-500/40'
-                : 'bg-cyan-950/70 text-cyan-300 border-cyan-500/40'
-            }`}>
-              {activeCard.cardDirection === 'ja_to_en' ? 'JA ➔ EN 作文' : 'EN ➔ JA 読解'}
-            </span>
-            <span className="text-[10px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-              間隔: {activeCard.intervalDays || 1}日 (正解: {activeCard.repetitionCount || 0}回)
-            </span>
+          <div className="text-slate-500 text-[11px] font-mono">
+            {activeCard.cardState === 'learning' ? 'ステップ 1m/10m' : `間隔: ${activeCard.intervalDays || 0}日`}
           </div>
         </div>
 
-        {/* Card Body: Front vs Back (全文表示) */}
-        <div className="space-y-4 text-center my-auto py-2">
+        {/* Card Content */}
+        <div className="min-h-[160px] flex flex-col justify-center text-center space-y-4">
           {activeCard.cardDirection === 'ja_to_en' ? (
             /* =================================================================
                和 ➔ 英 (瞬間英作文モード: 日本語全文 ➔ 英語全文)
@@ -563,34 +717,33 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
                 <span>瞬間英作文 (和 ➔ 英)</span>
               </div>
 
-              <div className="space-y-1 py-1">
-                <span className="text-xs font-bold text-slate-400 block">【この日本語を英語で表現】</span>
-                <div className="text-xl sm:text-2xl font-extrabold text-white leading-snug">
-                  「{displaySentenceTranslation || displayWordMeaning}」
-                </div>
+              <div className="py-2">
+                <p className="text-lg sm:text-2xl font-bold text-white leading-relaxed px-2">
+                  {displaySentenceTranslation || displayWordMeaning}
+                </p>
                 {isWordCard && displayWordMeaning && displaySentenceTranslation && displayWordMeaning !== displaySentenceTranslation && (
-                  <div className="text-xs text-sky-400 pt-1">
-                    （対象語句: {displayWordMeaning}）
-                  </div>
+                  <p className="text-xs text-sky-400 mt-1">
+                    （キー表現: <span className="font-semibold text-sky-300">{displayWordMeaning}</span>）
+                  </p>
                 )}
               </div>
 
               {isFlipped ? (
                 <div className="space-y-3 pt-3 border-t border-slate-800 animate-fadeIn text-left">
-                  <div className="flex items-center justify-between p-4 bg-slate-950/80 border border-indigo-500/30 rounded-2xl">
-                    <div>
-                      <span className="text-[11px] font-bold text-cyan-400 block mb-1">正解の英文:</span>
-                      <p className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
-                        {isWordCard ? highlightWordInSentence(displaySentence, displayWord) : displaySentence}
-                      </p>
+                  <div className="p-4 bg-slate-950/80 border border-indigo-500/30 rounded-2xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-indigo-400">英語の正解 (模範例文):</span>
+                      <button
+                        onClick={() => speakText(displaySentence)}
+                        className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors"
+                        title="発音を再生"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => speakText(displaySentence)}
-                      className="p-2 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors border border-sky-500/30 ml-2 shrink-0"
-                      title="発音を再生"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
+                    <div className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
+                      {isWordCard ? highlightWordInSentence(displaySentence, displayWord) : displaySentence}
+                    </div>
                   </div>
 
                   {activeCard.contextNote && (
@@ -735,6 +888,83 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <Sliders className="w-5 h-5 text-blue-400" />
+                <h3 className="text-base font-bold text-white">Anki出題制限・卒業設定</h3>
+              </div>
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-300">
+              <div className="space-y-1.5">
+                <label className="font-bold text-white block">1日の新規カード出題数 (New Cards/Day)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={newCardsLimit}
+                  onChange={(e) => setNewCardsLimit(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-bold"
+                />
+                <p className="text-slate-500 text-[11px]">初めて学習するカードの1日あたりの上限です（デフォルト: 20枚）</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-white block">1日の最大復習カード数 (Max Reviews/Day)</label>
+                <input
+                  type="number"
+                  min="10"
+                  max="500"
+                  value={maxReviewsLimit}
+                  onChange={(e) => setMaxReviewsLimit(Math.max(10, parseInt(e.target.value, 10) || 10))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-bold"
+                />
+                <p className="text-slate-500 text-[11px]">復習期日が到来したカードの1日あたりの上限です（デフォルト: 200枚）</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-white block">自動卒業・マスター同期の間隔日数 (Mature Days)</label>
+                <input
+                  type="number"
+                  min="7"
+                  max="90"
+                  value={graduationDays}
+                  onChange={(e) => setGraduationDays(Math.max(7, parseInt(e.target.value, 10) || 7))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-bold"
+                />
+                <p className="text-slate-500 text-[11px]">復習間隔がこの日数を超えたら、CEFRマスターDBで自動的に「既知（Mastered）」として同期されます（本家Anki基準: 21日）</p>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleSaveSettings}
+                className="flex items-center space-x-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30"
+              >
+                <Check className="w-4 h-4" />
+                <span>設定を保存</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

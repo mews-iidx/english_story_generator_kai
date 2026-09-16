@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import { Story, TargetEmbedding } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
@@ -129,6 +130,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   // 今回のセッションで「要復習」とマークされたターゲットID
   const lapsedTargetIdsRef = useRef<Set<string>>(new Set());
+  const sessionLookedUpTokensRef = useRef<Set<string>>(new Set());
 
   // 出題ターゲット（構文・出題単語）の可視化切り替え（デフォルトOFF）
   const [showTargetHighlights, setShowTargetHighlights] = useState<boolean>(() => {
@@ -152,6 +154,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setShowSentenceTranslation(false);
     setSentenceTranslationText('');
     lapsedTargetIdsRef.current.clear();
+    sessionLookedUpTokensRef.current.clear();
   }, [currentStory.id]);
 
   useEffect(() => {
@@ -490,6 +493,19 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     if (onRecordStoryRead) {
       onRecordStoryRead(currentStory.id, wpm);
+    }
+
+    // ★ 全文CEFRスキャン＆マスターDB自動同期タスクをバックグラウンドキューへ投入
+    try {
+      enqueueMasteryScanTask({
+        sourceType: 'story',
+        sourceId: currentStory.id,
+        title: currentStory.title,
+        text: currentStory.storyContent || (currentStory as any).story || "",
+        lookedUpTokens: Array.from(sessionLookedUpTokensRef.current),
+      });
+    } catch (e) {
+      console.error('Failed to enqueue mastery scan task', e);
     }
 
     setIsFinished(true);

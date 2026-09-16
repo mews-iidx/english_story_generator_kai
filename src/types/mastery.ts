@@ -35,6 +35,9 @@ export interface PatternMasterItem {
   meaning: string;
   focus: string;
   variations: [PatternVariation, PatternVariation, PatternVariation];
+  shortLabelJa?: string;
+  structureFormula?: string;
+  triggerKeywords?: string[];
 }
 
 export interface VocabMasterItem {
@@ -43,6 +46,9 @@ export interface VocabMasterItem {
   meaning: string;
   cefr: CefrLevel;
   partOfSpeech: string;
+  posKey?: 'noun' | 'verb' | 'adj' | 'adv' | 'prep' | 'conj' | 'pron' | 'other';
+  surfaceForms?: string[];
+  disambiguationNote?: string;
 }
 
 export type MasteryStatus = 'unseen' | 'exposed' | 'lapsed' | 'mastered';
@@ -55,6 +61,12 @@ export interface ItemProgress {
   assemblyMasteredAt?: string;
 
   encounterCount?: number;
+  consecutiveSuccessCount?: number;
+  distinctContextCount?: number; // 同日内の異なる文脈での多重遭遇カウント（汎化用）
+  lastEncounterDate?: string;     // YYYY-MM-DD
+  ankiCardId?: string;
+  srsIntervalDays?: number;
+
   mistakeCount?: number;
   comprehensionMistakeCount?: number;
   assemblyMistakeCount?: number;
@@ -71,6 +83,24 @@ export interface ItemProgress {
   lastMistakeAt?: string;
   lastErrorReason?: string;
   currentVariationIndex?: number;
+}
+
+export interface MasteryScanTask {
+  id: string;
+  sourceType: 'story' | 'call' | 'mentor';
+  sourceId?: string;
+  title?: string;
+  text: string;
+  userUtterances?: string[];
+  lookedUpTokens?: string[];
+  createdAt: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  result?: {
+    matchedVocabCount: number;
+    matchedPatternCount: number;
+    newExposedCount: number;
+    newMasteredCount: number;
+  };
 }
 
 export interface UserMasteryState {

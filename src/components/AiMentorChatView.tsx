@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
 import { Bot, User, Send, Sparkles, RefreshCw, Trash2, Plus, Check, X } from 'lucide-react';
 import { chatWithAiMentor } from '../services/gemini';
@@ -108,6 +109,17 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       }
 
       onSendMessage(query, res.replyText, res.suggestedVocabs || []);
+
+      try {
+        enqueueMasteryScanTask({
+          sourceType: 'mentor',
+          title: 'AIメンター対話',
+          text: `${query} ${res.replyText}`,
+          userUtterances: [query],
+        });
+      } catch (err) {
+        console.error('Failed to enqueue mentor scan task', err);
+      }
     } catch (e: any) {
       alert(`AIメンターエラー: ${e.message || e}`);
     } finally {

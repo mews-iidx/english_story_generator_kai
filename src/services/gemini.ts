@@ -120,41 +120,50 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
 
   promptText += `【★最重要：本文の目標単語数】\n英語本文（story）の長さは【約 ${targetWordCount} 語（words）】を目安に作成してください。しっかりと展開のある満足感の高いボリュームにしてください。\n\n`;
 
-  // 1. CEFR文法・構文パターンのターゲットバインディング指示
-  if (targetPatterns && targetPatterns.length > 0) {
-    promptText += `【★最重要：習得対象のCEFR文法・構文パターン（ターゲットバインディング）】\n`;
-    promptText += `学習者が身につけるべき重要構文です。**以下の構文パターンをストーリーの本文（セリフや地の文）の中に必ず自然な文脈で登場させてください**：\n`;
-    targetPatterns.forEach((p, idx) => {
-      promptText += `${idx + 1}. [ID: ${p.id}] "${p.name}" (要点: ${p.focus}${p.meaning ? ` / 意味: ${p.meaning}` : ''})\n`;
-    });
-    promptText += `\n※登場させた構文は、後述の target_embeddings JSON 配列にそのID・使用フレーズ・訳・解説を必ず明記してください。\n\n`;
-  }
+  promptText += `【★認知的優先順位に基づくストーリー構成ルール（4-Tier Cognitive Hierarchy）】\n`;
+  promptText += `学習効果を最大化するため、以下の4層の優先順位に従ってストーリーを構成してください：\n\n`;
 
-  // 2. 語彙のターゲットバインディング指示
-  const combinedVocabs = Array.from(new Set([
-    ...targetVocabs,
-    ...(targetVocabMaster?.map(v => v.phrase) || [])
-  ]));
-
-  if (combinedVocabs.length > 0) {
-    promptText += `【復習対象の重要単語・イディオム・定型句】\n`;
-    combinedVocabs.forEach((v, idx) => {
-      promptText += `${idx + 1}. "${v}"\n`;
-    });
-    promptText += `\n★単語・イディオムの出題ルール：前回とは異なる自然な文脈や生き生きとしたシチュエーションで登場させてください。\n\n`;
-  }
-
+  // Priority 1: 直近の会話でのミス・弱点克服（1〜2項目）
   const { targetErrorPatterns } = params;
   if (targetErrorPatterns && targetErrorPatterns.length > 0) {
-    promptText += `【★最重要：克服すべき発話文法・語法パターン（本質の応用出題）】\n`;
-    promptText += `ユーザーが過去の会話で詰まったり間違えたりした文法・語法パターンです。同じ例文のコピペではなく、**その本質的な型・ニュアンスを今回のストーリーに自然に織り込み、登場人物のセリフや文章として登場させてください**：\n`;
+    promptText += `【★Priority 1: 直近の発話エラー・弱点克服（最優先）】\n`;
+    promptText += `学習者が直近の英会話で間違えた文法・語法パターンです。コピペではなく、この型・ニュアンスを今回のストーリーの登場人物の自然なセリフや行動描写として登場させてください：\n`;
     targetErrorPatterns.forEach((p: any, idx: number) => {
       promptText += `${idx + 1}. パターン: "${p.corePattern}" (自然な用例: ${p.naturalExpression} - 解説: ${p.explanation})\n`;
     });
     promptText += `\n`;
   }
 
-  if (userPrompt && userPrompt.trim().length > 0) {
+  // Priority 2: Anki復習対象・忘却曲線アイテム（3〜4項目）
+  const combinedVocabs = Array.from(new Set([
+    ...targetVocabs,
+    ...(targetVocabMaster?.map(v => v.phrase) || [])
+  ]));
+
+  if (combinedVocabs.length > 0) {
+    promptText += `【★Priority 2: Anki忘却曲線復習語彙（高優先）】\n`;
+    promptText += `復習期日を迎えた単語・イディオムです。前回の文脈とは異なる、生き生きとした新しいシチュエーションで登場させてください：\n`;
+    combinedVocabs.forEach((v, idx) => {
+      promptText += `${idx + 1}. "${v}"\n`;
+    });
+    promptText += `\n`;
+  }
+
+  // Priority 3: CEFRマスターDB 未知構文・未知語彙（2〜3項目）
+  if (targetPatterns && targetPatterns.length > 0) {
+    promptText += `【★Priority 3: CEFR未知構文・未知パターンのあぶり出し（中優先）】\n`;
+    promptText += `学習者がまだ定着させていないCEFR目標構文です。文脈から意味が自然に推測できるように登場させてください：\n`;
+    targetPatterns.forEach((p, idx) => {
+      promptText += `${idx + 1}. [ID: ${p.id}] "${p.name}" (公式: ${p.focus}${p.meaning ? ` / 意味: ${p.meaning}` : ''})\n`;
+    });
+    promptText += `\n※登場させた構文は、後述の target_embeddings JSON 配列にそのID・使用フレーズ・訳・解説を必ず明記してください。\n\n`;
+  }
+
+  // Priority 4: 既知の土台（本文の約80%）
+  promptText += `【★Priority 4: 既知の土台（本文の約80%）】\n`;
+  promptText += `学習者のCEFRレベル【${cefrLevel}】に応じた平易で流暢な英文を土台とし、辞書を引かなくてもテンポよく直読直解できる多読体験（i+1）を提供してください。\n\n`;
+
+    if (userPrompt && userPrompt.trim().length > 0) {
     promptText += `【ユーザーの希望テーマ・ジャンル】\n"${userPrompt}"\n\n`;
   } else {
     promptText += `【テーマ】\n指定なし（おまかせ）。日常、冒険、発見、ポッドキャストトーク、ミステリー、SFなど楽しいシチュエーション。\n\n`;
