@@ -595,9 +595,25 @@ export const App: React.FC = () => {
 
   // 単語・構文を弱点リストに追加 / Lapse記録
   // 1文カード（英和・和英の兄弟カード）を自動生成して保存
-  const handleSaveSentenceCard = (params: SaveSentenceCardParams) => {
+  const handleSaveSentenceCard = async (params: SaveSentenceCardParams) => {
+    let finalParams = { ...params };
+
+    // 単語カードで文の翻訳がまだ単語の訳のままになっている場合、1文丸ごとを文単位で翻訳
+    if (params.focusType === 'word' && params.sentence && params.focusWord) {
+      if (!params.translation || params.translation === params.focusMeaning || params.translation.length <= 10) {
+        try {
+          const res = await translateWithGoogleFree(params.sentence, settings.geminiApiKey);
+          if (res.translatedText && !res.translatedText.includes('（翻訳取得失敗）')) {
+            finalParams.translation = res.translatedText;
+          }
+        } catch (e) {
+          console.warn('Failed to translate full sentence for Anki card:', e);
+        }
+      }
+    }
+
     saveSentenceCardWithSiblings({
-      ...params,
+      ...finalParams,
       sourceStoryId: readingStory?.id,
     });
     const updatedVocabs = loadVocabs();

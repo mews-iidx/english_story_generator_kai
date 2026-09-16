@@ -128,7 +128,7 @@ export const CallView: React.FC<CallViewProps> = ({
   const [isCustomTopicModalOpen, setIsCustomTopicModalOpen] = useState(false);
   const [customTopicInput, setCustomTopicInput] = useState('');
   const [rallyMessages, setRallyMessages] = useState<RallyChatMessage[]>([]);
-  const [currentSuggestionChips, setCurrentSuggestionChips] = useState<RallySuggestionChip[]>([]);
+  const [_currentSuggestionChips, setCurrentSuggestionChips] = useState<RallySuggestionChip[]>([]);
   const [isRallyLoading, setIsRallyLoading] = useState(false);
   const [equippedFeedbackIds, setEquippedFeedbackIds] = useState<Set<string>>(new Set());
   const [activePersona, setActivePersona] = useState<Persona | null>(null);
@@ -1135,160 +1135,6 @@ export const CallView: React.FC<CallViewProps> = ({
           </div>
         )}
 
-        {/* ==================== 📝 振り返り・武器化キュー (Review & Arsenal Queue) ==================== */}
-        <div className="bg-gradient-to-r from-slate-900/95 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-300 text-lg shadow-inner">
-                📝
-              </div>
-              <div>
-                <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                  <span>振り返り・武器化キュー</span>
-                  {pendingSessions.length > 0 && (
-                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold border border-amber-500/40 animate-pulse">
-                      {pendingSessions.length} 件の振り返り待ち
-                    </span>
-                  )}
-                </h3>
-                <p className="text-[11px] text-slate-400">
-                  通話やラリー終了後に自動キューイング。準備ができたらいつでも呼び出して質問・Anki登録できます。
-                </p>
-              </div>
-            </div>
-
-            {/* Filter Tabs */}
-            <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-xs font-semibold self-start sm:self-auto">
-              <button
-                type="button"
-                onClick={() => setReviewQueueFilter('pending')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
-                  reviewQueueFilter === 'pending'
-                    ? 'bg-cyan-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                未完了 ({pendingSessions.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setReviewQueueFilter('all')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
-                  reviewQueueFilter === 'all'
-                    ? 'bg-slate-800 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                すべて ({callSessions.length})
-              </button>
-            </div>
-          </div>
-
-          {/* Session Cards List */}
-          {displayedSessions.length === 0 ? (
-            <div className="p-6 text-center bg-slate-950/50 rounded-2xl border border-slate-800/80 space-y-2">
-              <div className="text-2xl">☕</div>
-              <p className="text-xs text-slate-400">
-                {reviewQueueFilter === 'pending'
-                  ? '現在、振り返り待ちのセッションはありません。'
-                  : 'これまでの会話セッション履歴はありません。'}
-              </p>
-              <p className="text-[11px] text-slate-400">
-                瞬間ラリーや友達通話を行うと、ここに自動でセッションがキューイングされます。
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
-              {displayedSessions.slice(0, 6).map((session) => {
-                const isAnalyzingStatus = session.reviewAnalysis?.status === 'analyzing';
-                const vocabCount = (session.reviewAnalysis?.extractedVocabs || session.extractedVocabs || []).length;
-                const errorCount = (session.reviewAnalysis?.detectedErrors || []).length;
-                const qaCount = (session.reviewAnalysis?.qaMessages || []).length;
-
-                return (
-                  <div
-                    key={session.id}
-                    onClick={() => handleOpenReview(session)}
-                    className={`group p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between space-y-3 ${
-                      isAnalyzingStatus
-                        ? 'bg-slate-950/80 border-amber-500/30 hover:border-amber-500/50'
-                        : session.isReviewed
-                        ? 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700'
-                        : 'bg-slate-950/90 border-cyan-500/30 hover:border-cyan-500/60 shadow-lg shadow-cyan-950/20'
-                    }`}
-                  >
-                    {/* Top Row: Title & Status Badge */}
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-base flex-shrink-0 shadow-inner">
-                          {session.sessionType === 'rally' ? '⚡' : session.personaEmoji || '🎙️'}
-                        </div>
-                        <div className="min-w-0">
-                          <h4 className="text-xs sm:text-sm font-bold text-white truncate group-hover:text-cyan-300 transition-colors">
-                            {session.title || session.topic || session.personaName || '英会話セッション'}
-                          </h4>
-                          <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                            <span>{formatRelativeTime(session.startedAt)}</span>
-                            <span>•</span>
-                            <span className="font-mono">{formatDuration(session.durationSeconds)}</span>
-                            <span>•</span>
-                            <span>{session.messages.filter((m) => m.role === 'user').length} 往復</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Status Tag */}
-                      <div className="flex-shrink-0">
-                        {isAnalyzingStatus ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-500/40 text-amber-300 text-[10px] font-bold animate-pulse">
-                            <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                            <span>AI分析中...</span>
-                          </span>
-                        ) : session.isReviewed ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-medium">
-                            <Check className="w-2.5 h-2.5" />
-                            <span>完了</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold shadow-sm shadow-emerald-950">
-                            <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
-                            <span>準備完了</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Middle Row: Content Highlights & Summary Preview */}
-                    <div className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed bg-slate-900/60 p-2 rounded-xl border border-slate-800/60">
-                      {session.reviewAnalysis?.recapSummary || session.recapSummary || 'セッションの概要はありません。'}
-                    </div>
-
-                    {/* Bottom Row: Stats & Action CTA */}
-                    <div className="flex items-center justify-between pt-1 text-[11px] border-t border-slate-800/80">
-                      <div className="flex items-center gap-2 text-slate-400">
-                        {vocabCount > 0 && (
-                          <span className="text-cyan-300 font-semibold">⚔️ 武器 {vocabCount}件</span>
-                        )}
-                        {errorCount > 0 && (
-                          <span className="text-amber-300 font-semibold">🛡️ カルテ {errorCount}件</span>
-                        )}
-                        {qaCount > 0 && (
-                          <span className="text-indigo-300 font-semibold">💬 Q&A {qaCount}件</span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-1 text-cyan-400 group-hover:text-cyan-300 font-bold text-xs">
-                        <span>振り返る</span>
-                        <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
         {/* Mode Switcher Tabs */}
         <div className="flex items-center justify-center pt-2">
           <div className="bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center gap-1 shadow-xl">
@@ -1589,6 +1435,160 @@ export const CallView: React.FC<CallViewProps> = ({
           </div>
         )}
 
+        {/* ==================== 📝 振り返り・武器化キュー (Review & Arsenal Queue) ==================== */}
+        <div className="bg-gradient-to-r from-slate-900/95 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-300 text-lg shadow-inner">
+                📝
+              </div>
+              <div>
+                <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                  <span>振り返り・武器化キュー</span>
+                  {pendingSessions.length > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold border border-amber-500/40 animate-pulse">
+                      {pendingSessions.length} 件の振り返り待ち
+                    </span>
+                  )}
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  通話やラリー終了後に自動キューイング。準備ができたらいつでも呼び出して質問・Anki登録できます。
+                </p>
+              </div>
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-xs font-semibold self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setReviewQueueFilter('pending')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  reviewQueueFilter === 'pending'
+                    ? 'bg-cyan-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                未完了 ({pendingSessions.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setReviewQueueFilter('all')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  reviewQueueFilter === 'all'
+                    ? 'bg-slate-800 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                すべて ({callSessions.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Session Cards List */}
+          {displayedSessions.length === 0 ? (
+            <div className="p-6 text-center bg-slate-950/50 rounded-2xl border border-slate-800/80 space-y-2">
+              <div className="text-2xl">☕</div>
+              <p className="text-xs text-slate-400">
+                {reviewQueueFilter === 'pending'
+                  ? '現在、振り返り待ちのセッションはありません。'
+                  : 'これまでの会話セッション履歴はありません。'}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                瞬間ラリーや友達通話を行うと、ここに自動でセッションがキューイングされます。
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
+              {displayedSessions.slice(0, 6).map((session) => {
+                const isAnalyzingStatus = session.reviewAnalysis?.status === 'analyzing';
+                const vocabCount = (session.reviewAnalysis?.extractedVocabs || session.extractedVocabs || []).length;
+                const errorCount = (session.reviewAnalysis?.detectedErrors || []).length;
+                const qaCount = (session.reviewAnalysis?.qaMessages || []).length;
+
+                return (
+                  <div
+                    key={session.id}
+                    onClick={() => handleOpenReview(session)}
+                    className={`group p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between space-y-3 ${
+                      isAnalyzingStatus
+                        ? 'bg-slate-950/80 border-amber-500/30 hover:border-amber-500/50'
+                        : session.isReviewed
+                        ? 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700'
+                        : 'bg-slate-950/90 border-cyan-500/30 hover:border-cyan-500/60 shadow-lg shadow-cyan-950/20'
+                    }`}
+                  >
+                    {/* Top Row: Title & Status Badge */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-base flex-shrink-0 shadow-inner">
+                          {session.sessionType === 'rally' ? '⚡' : session.personaEmoji || '🎙️'}
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="text-xs sm:text-sm font-bold text-white truncate group-hover:text-cyan-300 transition-colors">
+                            {session.title || session.topic || session.personaName || '英会話セッション'}
+                          </h4>
+                          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                            <span>{formatRelativeTime(session.startedAt)}</span>
+                            <span>•</span>
+                            <span className="font-mono">{formatDuration(session.durationSeconds)}</span>
+                            <span>•</span>
+                            <span>{session.messages.filter((m) => m.role === 'user').length} 往復</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Status Tag */}
+                      <div className="flex-shrink-0">
+                        {isAnalyzingStatus ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-500/40 text-amber-300 text-[10px] font-bold animate-pulse">
+                            <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                            <span>AI分析中...</span>
+                          </span>
+                        ) : session.isReviewed ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-medium">
+                            <Check className="w-2.5 h-2.5" />
+                            <span>完了</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold shadow-sm shadow-emerald-950">
+                            <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                            <span>準備完了</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Middle Row: Content Highlights & Summary Preview */}
+                    <div className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed bg-slate-900/60 p-2 rounded-xl border border-slate-800/60">
+                      {session.reviewAnalysis?.recapSummary || session.recapSummary || 'セッションの概要はありません。'}
+                    </div>
+
+                    {/* Bottom Row: Stats & Action CTA */}
+                    <div className="flex items-center justify-between pt-1 text-[11px] border-t border-slate-800/80">
+                      <div className="flex items-center gap-2 text-slate-400">
+                        {vocabCount > 0 && (
+                          <span className="text-cyan-300 font-semibold">⚔️ 武器 {vocabCount}件</span>
+                        )}
+                        {errorCount > 0 && (
+                          <span className="text-amber-300 font-semibold">🛡️ カルテ {errorCount}件</span>
+                        )}
+                        {qaCount > 0 && (
+                          <span className="text-indigo-300 font-semibold">💬 Q&A {qaCount}件</span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1 text-cyan-400 group-hover:text-cyan-300 font-bold text-xs">
+                        <span>振り返る</span>
+                        <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Custom Topic Modal */}
         {isCustomTopicModalOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1785,11 +1785,7 @@ export const CallView: React.FC<CallViewProps> = ({
                   >
                     <p className="whitespace-pre-wrap">{msg.text}</p>
 
-                    {!isUser && msg.nextQuestionJa && (
-                      <p className="mt-1.5 pt-1.5 border-t border-slate-800/80 text-[11px] text-slate-400">
-                        💡 日本語意図: {msg.nextQuestionJa}
-                      </p>
-                    )}
+{/* msg.nextQuestionJa removed per user request */}
                   </div>
                 </div>
 
@@ -1884,14 +1880,15 @@ export const CallView: React.FC<CallViewProps> = ({
           <div ref={chatMessagesEndRef} />
         </div>
 
-        {/* Suggestion Chips */}
-        {currentSuggestionChips.length > 0 && !isRallyLoading && (
+        {/* Suggestion Chips (Disabled per user request for real sparring) */}
+        {/*
+        {_currentSuggestionChips.length > 0 && !isRallyLoading && (
           <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 flex-shrink-0">
             <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0 flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-amber-400" />
               ヒント:
             </span>
-            {currentSuggestionChips.map((chip, idx) => (
+            {_currentSuggestionChips.map((chip, idx) => (
               <button
                 key={idx}
                 type="button"
@@ -1904,6 +1901,7 @@ export const CallView: React.FC<CallViewProps> = ({
             ))}
           </div>
         )}
+        */}
 
         {/* Input Bar */}
         <form

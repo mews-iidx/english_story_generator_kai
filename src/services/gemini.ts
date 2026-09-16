@@ -1535,33 +1535,18 @@ Your goal is to keep an engaging, fast-paced conversational rally with the learn
      • If their English is already 100% natural and error-free:
        - hasCorrection: false.`}
 
-3. 3 SUGGESTION CHIPS (カンペ候補):
-   Generate 3 diverse, natural ways the user could reply to your nextQuestion:
-   - 1 positive / enthusiastic angle
-   - 1 nuanced / alternative / negative angle
-   - 1 counter-question or playful angle
-   Each chip MUST have:
-   - "text": Natural English sentence (e.g. "Honestly, I'd probably go for...")
-   - "labelJa": Short Japanese summary (e.g. "正直〜を選ぶと答える")
-
 【STRICT JSON OUTPUT FORMAT】
 Return ONLY a pure JSON object:
 {
   "reaction": "...",
   "nextQuestion": "...",
-  "nextQuestionJa": "...",
   "feedback": {
     "hasCorrection": true | false,
     "userOriginalText": "...",
     "grammarFix": "...",
     "naturalExpression": "...",
     "explanation": "..."
-  },
-  "suggestionChips": [
-    { "text": "...", "labelJa": "..." },
-    { "text": "...", "labelJa": "..." },
-    { "text": "...", "labelJa": "..." }
-  ]
+  }
 }`;
 
   const formattedHistory = history.slice(-6).map(h => ({

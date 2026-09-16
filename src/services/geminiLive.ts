@@ -42,7 +42,7 @@ export function buildLiveSystemInstruction(persona?: Persona | null, isRallyMode
 
 【最重要会話ルール】
 1. 【超ショートラリー（1〜2文）】: 一度に長く喋りすぎず、1〜2文（5〜8秒程度）のテンポ良い日常英語で返答し、必ず最後に相手に質問を返して会話のキャッチボールを維持してください。
-2. 【開始時の第一声】: 接続開始直後、あなたから元気に「Hey! Ready for our sparring on ${topic}?」のように挨拶と最初の質問を投げかけて会話をスタートしてください。
+2. 【開始時の第一声】: 通話開始時は、元気かつ自然に短い挨拶（例: "Hey there! Ready to practice talking about ${topic}?"）と最初の質問を投げかけて会話をスタートしてください。「Awesome」などの不自然な相槌だけで始めないでください。
 3. 【バイリンガル・ヘルパー機能】:
    - ユーザーが英語で話しているときは、自然な英語で会話を続けてください。
    - もしユーザーが日本語で話したり詰まった場合は、即座に自然な英語表現を教えて「言ってみて！」と促し、英語へ戻してください。
@@ -253,6 +253,30 @@ export class GeminiLiveSession {
     this.ws.send(JSON.stringify(setupMsg));
   }
 
+  
+  /**
+   * クライアントから Gemini Live へテキストメッセージ/プロンプトを送信
+   */
+  public sendTextMessage(text: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      clientContent: {
+        turns: [
+          {
+            role: 'user',
+            parts: [{ text }],
+          },
+        ],
+        turnComplete: true,
+      },
+    };
+    try {
+      this.ws.send(JSON.stringify(msg));
+    } catch (e) {
+      console.warn('[Gemini Live] Failed to send text message:', e);
+    }
+  }
+
   private setupMicrophonePipeline(): void {
     if (!this.audioContext || !this.mediaStream) return;
 
@@ -342,6 +366,14 @@ export class GeminiLiveSession {
         this.isSetupComplete = true;
         this.updateState('connected');
         this.setupMicrophonePipeline();
+
+        // AIから自然に最初の一言を話しかけさせるための自動キックオフメッセージ
+        const topic = this.options.customTopic || 'daily life and hobbies';
+        const kickoffText = this.options.isRallyMode
+          ? `[Call connected. Please greet the user naturally in 1 short casual English sentence and ask your opening question on "${topic}" to start our sparring.]`
+          : `[Call connected. Please greet the user warmly and naturally in 1 short English sentence as ${this.options.persona?.name || 'their friend'} and ask a natural opening question.]`;
+        
+        this.sendTextMessage(kickoffText);
         return;
       }
 
@@ -362,6 +394,7 @@ export class GeminiLiveSession {
 
       // 3. モデルの発話データ (音声 & テキスト)
       const modelTurn = serverContent.modelTurn;
+      let hasPartText = false;
       if (modelTurn && Array.isArray(modelTurn.parts)) {
         for (const part of modelTurn.parts) {
           // 音声ストリーム (24kHz PCM)
@@ -371,12 +404,14 @@ export class GeminiLiveSession {
           }
           // 文字起こしストリーム
           if (part.text) {
+            hasPartText = true;
             this.options.callbacks.onAssistantTranscript(part.text);
           }
         }
       }
 
-      if (serverContent.outputTranscription?.text) {
+      // part.text が無かった場合のみ outputTranscription.text を使用 (二重重複文字起こしを防止)
+      if (!hasPartText && serverContent.outputTranscription?.text) {
         this.options.callbacks.onAssistantTranscript(serverContent.outputTranscription.text);
       }
 
