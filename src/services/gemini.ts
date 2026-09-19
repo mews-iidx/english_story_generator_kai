@@ -1343,6 +1343,115 @@ ${translation ? `【日本語訳】: "${translation}"` : ''}
 
 // ===================== DRILL EVALUATION WITH GEMINI =====================
 
+export interface GenerateDynamicDrillParams {
+  pattern: {
+    id: string;
+    cefr: string;
+    categoryLabel?: string;
+    name: string;
+    meaning: string;
+    focus: string;
+  };
+  apiKey: string;
+  model?: string;
+}
+
+export interface DynamicDrillQuestion {
+  sentenceEn: string;
+  translationJa: string;
+  targetTokens: string[];
+  hint?: string;
+}
+
+/**
+ * CEFR構文ルールに基づき、現代の自然な日常会話例文と正確な日本語訳をリアルタイムに動的生成
+ */
+export async function generateDynamicDrillQuestion(params: GenerateDynamicDrillParams): Promise<DynamicDrillQuestion> {
+  const { pattern, apiKey, model = 'gemini-3.7-flash' } = params;
+
+  if (!apiKey) {
+    return {
+      sentenceEn: 'I practice English every day to improve my speaking skills.',
+      translationJa: 'スピーキング力を高めるために毎日英語を練習しています。',
+      targetTokens: ['practice'],
+      hint: pattern.name,
+    };
+  }
+
+  const systemInstruction = `あなたは英語教育・CEFR文法カリキュラム設計の専門家です。
+指定されたCEFR文法・構文ルールに厳密に従って、現代の日常英会話（またはカジュアルな生活・仕事・趣味シーン）でネイティブが実際に使う【自然で分かりやすい短い英文1文（5〜12単語程度）】と、その【正確で自然な日本語訳】を生成してください。
+
+【絶対ルール】
+1. 英文（sentenceEn）は、指定されたCEFRレベル（${pattern.cefr}）にふさわしい平易で自然な日常表現1文にしてください。
+2. 英文には必ずターゲット構文ルール（${pattern.name}: ${pattern.focus}）を明確に含めてください。
+3. 日本語訳（translationJa）は、和文英訳（瞬間英作文）のお題として分かりやすく、かつ自然な日本語にしてください。
+4. 試験のメタ情報（Passや国名など）や記号ゴミ、不自然な直訳は絶対に含めないでください。
+5. targetTokensには、この構文の核となる英単語・キーワード（小文字）を1〜2個配列で含めてください。
+
+【必ず守る出力フォーマット（純粋なJSONのみ）】:
+{
+  "sentenceEn": "...",
+  "translationJa": "...",
+  "targetTokens": ["..."],
+  "hint": "..."
+}`;
+
+  const promptText = `【CEFRレベル】: ${pattern.cefr} (${pattern.categoryLabel || '基本文法'})
+【ターゲット構文名】: ${pattern.name}
+【構文の焦点・公式】: ${pattern.focus}
+【Can-Do目標】: ${pattern.meaning}
+
+上記構文を用いた自然な出題用例文と日本語訳をJSONで生成してください。`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS]));
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: [{ role: 'user', parts: [{ text: promptText }] }],
+          generationConfig: {
+            temperature: 0.7,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const cleaned = rawText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (parsed.sentenceEn && parsed.translationJa) {
+        return {
+          sentenceEn: parsed.sentenceEn.trim(),
+          translationJa: parsed.translationJa.trim(),
+          targetTokens: Array.isArray(parsed.targetTokens) ? parsed.targetTokens : [],
+          hint: parsed.hint || pattern.name,
+        };
+      }
+    } catch (err) {
+      console.warn(`generateDynamicDrillQuestion failed with ${currentModel}:`, err);
+    }
+  }
+
+  // フォールバック
+  return {
+    sentenceEn: 'I like studying English because it helps me communicate with people.',
+    translationJa: '世界中の人とコミュニケーションが取れるようになるので、英語を勉強するのが好きです。',
+    targetTokens: ['because'],
+    hint: pattern.name,
+  };
+}
+
 export interface EvaluateDrillParams {
   promptJa: string;
   targetItem: {

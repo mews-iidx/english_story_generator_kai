@@ -22,7 +22,7 @@ import {
   recordDrillResult,
   saveSentenceCardWithSiblings
 } from '../services/storage';
-import { evaluateDrillAnswerWithGemini, EvaluateDrillResult } from '../services/gemini';
+import { evaluateDrillAnswerWithGemini, EvaluateDrillResult, generateDynamicDrillQuestion, DynamicDrillQuestion } from '../services/gemini';
 import { playCorrectSound, playWrongSound } from '../utils/audio';
 
 interface DrillViewProps {
@@ -49,6 +49,9 @@ export const DrillView: React.FC<DrillViewProps> = ({
   
   const [currentPattern, setCurrentPattern] = useState<PatternMasterItem | null>(null);
   const [variationIndex, setVariationIndex] = useState<number>(0);
+  const [currentDynamicQuestion, setCurrentDynamicQuestion] = useState<DynamicDrillQuestion | null>(null);
+  const [isGeneratingQuestion, setIsGeneratingQuestion] = useState<boolean>(false);
+  const dynamicCacheRef = useRef<Map<string, DynamicDrillQuestion>>(new Map());
   const [userAnswer, setUserAnswer] = useState<string>('');
   
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
@@ -129,7 +132,56 @@ export const DrillView: React.FC<DrillViewProps> = ({
     setUserAnswer('');
     setEvalResult(null);
     setIsSavedToAnki(false);
-  }, []);
+
+    // 動的生成キャッシュを確認 & なければ即時生成
+    if (dynamicCacheRef.current.has(selected.id)) {
+      setCurrentDynamicQuestion(dynamicCacheRef.current.get(selected.id)!);
+      setIsGeneratingQuestion(false);
+    } else {
+      setCurrentDynamicQuestion(null);
+      setIsGeneratingQuestion(true);
+      generateDynamicDrillQuestion({
+        pattern: {
+          id: selected.id,
+          cefr: selected.cefr,
+          categoryLabel: selected.categoryLabel,
+          name: selected.name,
+          meaning: selected.meaning,
+          focus: selected.focus,
+        },
+        apiKey,
+        model: selectedModel,
+      }).then((dynQ) => {
+        dynamicCacheRef.current.set(selected.id, dynQ);
+        setCurrentDynamicQuestion(dynQ);
+        setIsGeneratingQuestion(false);
+      }).catch(() => {
+        setIsGeneratingQuestion(false);
+      });
+    }
+
+    // 次の候補（1〜2問）をバックグラウンドで先行プリフェッチ（待ち時間ゼロ化）
+    const prefetchCandidates = candidatePool
+      .filter(p => p.id !== selected.id && !dynamicCacheRef.current.has(p.id))
+      .slice(0, 2);
+
+    for (const p of prefetchCandidates) {
+      generateDynamicDrillQuestion({
+        pattern: {
+          id: p.id,
+          cefr: p.cefr,
+          categoryLabel: p.categoryLabel,
+          name: p.name,
+          meaning: p.meaning,
+          focus: p.focus,
+        },
+        apiKey,
+        model: selectedModel,
+      }).then((dynQ) => {
+        dynamicCacheRef.current.set(p.id, dynQ);
+      }).catch(() => {});
+    }
+  }, [apiKey, selectedModel]);
 
   // レベルやモード変更時に次の問題をピック
   useEffect(() => {
@@ -158,7 +210,8 @@ export const DrillView: React.FC<DrillViewProps> = ({
 
     setIsEvaluating(true);
     try {
-      const promptJa = currentVariation.translation || currentPattern.meaning;
+      const promptJa = currentDynamicQuestion?.translationJa || currentVariation.translation || currentPattern.meaning;
+      const modelSentence = currentDynamicQuestion?.sentenceEn || currentVariation.sentence;
       
       const result = await evaluateDrillAnswerWithGemini({
         promptJa,
@@ -167,7 +220,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
           name: currentPattern.name,
           meaning: currentPattern.meaning,
           focus: currentPattern.focus,
-          sampleSentences: currentPattern.variations?.map(v => v.sentence) || [],
+          sampleSentences: [modelSentence, ...(currentPattern.variations?.map(v => v.sentence) || [])],
         },
         drillType,
         userAnswer: userAnswer.trim(),
@@ -223,7 +276,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
     if (!currentPattern || !currentVariation || isEvaluating) return;
 
     setIsEvaluating(true);
-    const modelSentence = currentVariation.sentence;
+    const modelSentence = currentDynamicQuestion?.sentenceEn || currentVariation.sentence;
     const result: EvaluateDrillResult = {
       result: 'wrong',
       feedback: `正解の構文は【${currentPattern.name}】です。公式: ${currentPattern.focus}。模範解答を確認してAnkiに登録しましょう！`,
@@ -256,9 +309,13 @@ export const DrillView: React.FC<DrillViewProps> = ({
   const handleSaveToAnki = () => {
     if (!currentPattern || !currentVariation || isSavedToAnki) return;
 
+    const targetSentence = evalResult?.correctedSentence || currentDynamicQuestion?.sentenceEn || currentVariation.sentence;
+    const targetTranslation = currentDynamicQuestion?.translationJa || currentVariation.translation;
+    const targetTokens = currentDynamicQuestion?.targetTokens || currentVariation.targetTokens || [];
+
     saveSentenceCardWithSiblings({
-      sentence: evalResult?.correctedSentence || currentVariation.sentence,
-      translation: currentVariation.translation,
+      sentence: targetSentence,
+      translation: targetTranslation,
       focusType: 'pattern',
       focusWord: currentPattern.focus || currentPattern.name,
       focusMeaning: currentPattern.meaning,
@@ -266,7 +323,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
         patternName: currentPattern.name,
         formula: currentPattern.focus,
         meaningTemplate: currentPattern.meaning,
-        highlightTokens: currentVariation.targetTokens || [],
+        highlightTokens: targetTokens,
         briefNote: currentPattern.meaning,
       }],
     });
@@ -444,14 +501,23 @@ export const DrillView: React.FC<DrillViewProps> = ({
                 ? '【この日本語を英語で表現してください】'
                 : '【この英文の意味を理解できますか？】'}
             </span>
-            <div className="text-2xl sm:text-3xl font-extrabold text-white leading-snug tracking-tight">
-              「{drillType === 'assembly' ? currentVariation.translation : currentVariation.sentence}」
+            <div className="text-2xl sm:text-3xl font-extrabold text-white leading-snug tracking-tight min-h-[48px] flex items-center justify-center">
+              {isGeneratingQuestion && !currentDynamicQuestion ? (
+                <span className="text-slate-400 text-base sm:text-lg flex items-center justify-center gap-2 animate-pulse font-normal">
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-400" />
+                  <span>自然な例文とお題を動的生成中...</span>
+                </span>
+              ) : (
+                `「${drillType === 'assembly' 
+                  ? (currentDynamicQuestion?.translationJa || currentVariation.translation) 
+                  : (currentDynamicQuestion?.sentenceEn || currentVariation.sentence)}」`
+              )}
             </div>
             {drillType === 'comprehension' && (
               <div className="flex justify-center pt-1">
                 <button
                   type="button"
-                  onClick={() => speakText(currentVariation.sentence)}
+                  onClick={() => speakText(currentDynamicQuestion?.sentenceEn || currentVariation.sentence)}
                   className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-xl text-xs font-semibold transition-all"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
@@ -538,7 +604,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold text-emerald-400 block">構文公式: {currentPattern.focus}</span>
                       <button
-                        onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
+                        onClick={() => speakText(evalResult.correctedSentence || currentDynamicQuestion?.sentenceEn || currentVariation.sentence)}
                         className="p-1.5 text-emerald-400 hover:bg-emerald-950 rounded-lg transition-colors"
                         title="発音を再生"
                       >
@@ -546,7 +612,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                       </button>
                     </div>
                     <div className="text-sm font-bold text-white font-serif">
-                      {evalResult.correctedSentence || currentVariation.sentence}
+                      {evalResult.correctedSentence || currentDynamicQuestion?.sentenceEn || currentVariation.sentence}
                     </div>
                     <div className="text-xs text-slate-300">
                       {currentVariation.translation}
@@ -585,7 +651,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                         構文公式: {currentPattern.focus}
                       </span>
                       <button
-                        onClick={() => speakText(evalResult.correctedSentence || currentVariation.sentence)}
+                        onClick={() => speakText(evalResult.correctedSentence || currentDynamicQuestion?.sentenceEn || currentVariation.sentence)}
                         className="p-1.5 text-rose-400 hover:bg-rose-950 rounded-lg transition-colors"
                         title="発音を再生"
                       >
@@ -593,7 +659,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                       </button>
                     </div>
                     <div className="text-base font-bold text-white font-serif">
-                      {evalResult.correctedSentence || currentVariation.sentence}
+                      {evalResult.correctedSentence || currentDynamicQuestion?.sentenceEn || currentVariation.sentence}
                     </div>
                     <div className="text-xs text-slate-300">
                       {currentVariation.translation}
