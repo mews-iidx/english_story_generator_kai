@@ -30,6 +30,21 @@ export interface DiagnoseUserResponseParams {
   model?: string;
 }
 
+const SITUATION_SEEDS = [
+  '💻 職場・IT・PCトラブル（Wi-Fiが切れた、メールの返信、締め切り、会議、PCの再起動）',
+  '🍳 料理・食事・グルメ（新しいレシピ、夕食の準備、美味しいデザート、お弁当、味付け）',
+  '🐕 ペット・動物（犬の散歩、猫の昼寝、動物病院、可愛い仕草、餌やり）',
+  '📱 スマホ・SNS・買い物（バッテリー残量、ネット通販の荷物、写真の共有、アプリの通知）',
+  '🎬 映画・音楽・エンタメ（おすすめの映画、ライブ、ゲームの新作、読書、ギターの練習）',
+  '🏃‍♂️ 健康・運動・睡眠（ジョギング、昨夜の睡眠不足、ジム、水分補給、ストレッチ）',
+  '🚗 移動・交通・街歩き（渋滞、買い出し、スーパーのセール、公園のベンチ、自転車のパンク）',
+  '🌤️ 天気・週末の過ごし方（急な夕立、気持ちいい晴天、ピクニック、家で映画鑑賞）',
+  '🤝 友達・家族との日常（週末の約束、久しぶりの再会、サプライズプレゼント、感謝の言葉）',
+  '🏠 家事・部屋の片付け（掃除機の故障、部屋の模様替え、洗濯物が乾かない、ゴミ出し）',
+  '🎒 学び・新しい挑戦（新しいスキルの練習、英会話の練習、図書館で勉強、資格試験）',
+  '☕ カフェ・リラックス（お気に入りの席、本を読みながら休憩、テラス席での雑談）',
+];
+
 export async function generateLabBatch(params: GenerateLabBatchParams): Promise<LabQuestion[]> {
   const {
     wordCount,
@@ -44,24 +59,32 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
     return getFallbackBatch(wordCount, count, cefrLevel);
   }
 
+  // シャッフルして5つの異なるシチュエーションを抽出
+  const shuffledSeeds = [...SITUATION_SEEDS].sort(() => Math.random() - 0.5);
+  const selectedSituations = shuffledSeeds.slice(0, count);
+
+  const situationPrompts = selectedSituations
+    .map((s, idx) => `  - ${idx + 1}問目の場面: ${s}`)
+    .join('\n');
+
   const systemInstruction = `あなたは第二言語習得論（SLA）およびリスニング認知負荷トレーニングの専門家です。
 リスニングの「ワーキングメモリ（脳内バッファ）限界測定トレーニング」のために、指定された【単語数（${wordCount}単語程度）】に厳密に合わせた、自然で生き生きとしたネイティブの日常会話短文を【${count}問】作成してください。
 
 【絶対ルール】
 1. 各英文の単語数は、目標単語数【${wordCount}単語】（±1語以内）に厳密に一致させてください。
-   - 4語の例: "This is my dog." (4語), "I like green tea." (4語), "Where is the station?" (4語)
-   - 8語の例: "I need to wake up early tomorrow morning." (8語)
-2. 英文は生きた日常会話・口語表現にしてください。
-3. 日本語訳（translationJa）は、自然で正確な日本語にしてください。
-4. keyPoints には、この文の聞き取りポイント（例: "SVOの骨格", "前置詞の追加", "関係代名詞の修飾", "リンキング"）を短く添えてください。
+2. 5問はすべて全く異なるシチュエーション、異なる主語（I, You, She, He, We, My friend, The dog など）、異なる動詞を用いて作成してください。
+3. 【禁止事項】「駅への行き方 (way to the station)」「傘を忘れた (forgot umbrella/milk)」「コーヒーを飲む (drink coffee)」「日本を訪れる (planning to visit Japan)」のようなステレオタイプな教科書フレーズは絶対に避け、現代の多様な生活シーンから作成してください。
+4. 英文は生きたカジュアルな日常会話・口語表現にしてください。
+5. 日本語訳（translationJa）は、自然で正確な日本語にしてください。
+6. keyPoints には、この文の聞き取りポイント（例: "SVOの骨格", "前置詞句", "関係代名詞", "理由節", "リンキング"）を短く添えてください。
 
 【必ず守る出力フォーマット（純粋なJSON配列のみ）】:
 [
   {
-    "sentenceEn": "This is a pen.",
-    "translationJa": "これはペンです。",
-    "wordCount": 4,
-    "keyPoints": "基礎SVO/主語と補語"
+    "sentenceEn": "...",
+    "translationJa": "...",
+    "wordCount": ${wordCount},
+    "keyPoints": "..."
   }
 ]`;
 
@@ -70,7 +93,10 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
 【生成問題数】: ${count} 問
 【想定再生速度】: ${speedWpm} WPM
 
-上記条件に合致するリスニング出題用英文をJSON配列で生成してください。`;
+【各問の割り当てシチュエーション（必ずこのテーマに沿って作成）】:
+${situationPrompts}
+
+上記条件に合致する、重複のない多彩なリスニング出題用英文をJSON配列で生成してください。`;
 
   const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS])).filter(Boolean);
 
@@ -84,7 +110,7 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
           systemInstruction: { parts: [{ text: systemInstruction }] },
           contents: [{ role: 'user', parts: [{ text: promptText }] }],
           generationConfig: {
-            temperature: 0.8,
+            temperature: 0.95, // 多様性を高める
             responseMimeType: 'application/json',
           },
         }),
@@ -130,37 +156,39 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
 function getFallbackBatch(wordCount: number, count: number, cefrLevel: CefrLevel): LabQuestion[] {
   const fallbacksByCount: Record<number, { en: string; ja: string }[]> = {
     4: [
-      { en: 'This is my dog.', ja: 'これは私の犬です。' },
-      { en: 'I like hot coffee.', ja: '私は温かいコーヒーが好きです。' },
-      { en: 'Where is my phone?', ja: '私のスマホはどこですか？' },
-      { en: 'She is very happy.', ja: '彼女はとても幸せです。' },
-      { en: 'Can you help me?', ja: '手伝ってくれますか？' },
+      { en: 'My dog is sleeping.', ja: '私の犬は眠っています。' },
+      { en: 'The battery is low.', ja: 'バッテリー残量が少ないです。' },
+      { en: 'This soup smells great.', ja: 'このスープはとても良い香りがします。' },
+      { en: 'We need more time.', ja: '私たちにはもっと時間が必要です。' },
+      { en: 'He plays the guitar.', ja: '彼はギターを弾きます。' },
+      { en: 'The movie was amazing.', ja: 'その映画は素晴らしかったです。' },
     ],
     6: [
-      { en: 'We will meet at the station.', ja: '私たちは駅で集合します。' },
-      { en: 'He is drinking a cold tea.', ja: '彼は冷たいお茶を飲んでいます。' },
-      { en: 'I forgot to lock the door.', ja: 'ドアに鍵をかけるのを忘れました。' },
-      { en: 'She bought a new red car.', ja: '彼女は新しい赤い車を買いました。' },
-      { en: 'Please send me the details later.', ja: '後で詳細を送ってください。' },
+      { en: 'My phone battery died this morning.', ja: '今朝スマホの充電が切れました。' },
+      { en: 'The cat is hiding under the bed.', ja: '猫がベッドの下に隠れています。' },
+      { en: 'I cooked pasta for my dinner.', ja: '夕食にパスタを作りました。' },
+      { en: 'She sent me a funny video.', ja: '彼女は私に面白い動画を送ってくれました。' },
+      { en: 'We should clean the kitchen today.', ja: '今日はキッチンを掃除するべきです。' },
     ],
     8: [
-      { en: 'I need to wake up early tomorrow morning.', ja: '明日の朝は早く起きる必要があります。' },
-      { en: 'The doctor told him to take some rest.', ja: '医者は彼に少し休むように言いました。' },
-      { en: 'She decided to study English for her career.', ja: '彼女はキャリアのために英語を勉強することに決めました。' },
-      { en: 'We had a wonderful dinner near the beach.', ja: '私たちは海岸の近くで素晴らしい夕食を食べました。' },
-      { en: 'He was looking for his lost car keys.', ja: '彼は紛失した車の鍵を探していました。' },
+      { en: 'My computer suddenly restarted during the online meeting.', ja: 'オンライン会議中にパソコンが突然再起動しました。' },
+      { en: 'The little dog was barking at the mailman.', ja: 'その小さな犬は郵便配達員に吠えていました。' },
+      { en: 'I tried a new spicy ramen recipe yesterday.', ja: '昨日、新しい激辛ラーメンのレシピを試しました。' },
+      { en: 'She is looking for her lost wireless earbuds.', ja: '彼女は紛失したワイヤレスイヤホンを探しています。' },
+      { en: 'We took many photos during the outdoor festival.', ja: '私たちは野外フェスでたくさんの写真を撮りました。' },
     ],
     12: [
-      { en: 'I wanted to call you yesterday, but my phone battery was completely dead.', ja: '昨日あなたに電話したかったのですが、スマホの充電が完全に切れていました。' },
-      { en: 'The doctor explained the treatment plan before the surgery started this morning.', ja: '今朝手術が始まる前に、医師は治療計画について説明しました。' },
-      { en: 'She loves reading books that give her new perspectives on daily life.', ja: '彼女は日常生活に新しい視点を与えてくれる本を読むのが大好きです。' },
-      { en: 'We should leave early tomorrow so that we can avoid heavy traffic.', ja: '渋滞を避けることができるように、明日は早く出発すべきです。' },
-      { en: 'He could not understand why the train was delayed for thirty minutes.', ja: '彼はなぜ電車が30分も遅延したのか理解できませんでした。' },
+      { en: 'I wanted to reply to your email earlier, but my laptop was updating.', ja: 'もっと早くメールに返信したかったのですが、ノートPCがアップデート中でした。' },
+      { en: 'The chef explained how to bake the perfect chocolate cake from scratch.', ja: 'シェフは完璧なチョコレートケーキを最初から焼く方法を説明しました。' },
+      { en: 'She downloaded a new language app that helps her practice speaking skills.', ja: '彼女はスピーキングの練習を助けてくれる新しい語学アプリをダウンロードしました。' },
+      { en: 'We decided to order some pizza because nobody wanted to cook tonight.', ja: '今夜は誰も料理をしたくなかったので、ピザを注文することにしました。' },
+      { en: 'He was surprised to see how fast his little puppy was running.', ja: '彼は子犬がどれほど速く走っているかを見て驚きました。' },
     ],
   };
 
   const pool = fallbacksByCount[wordCount] || fallbacksByCount[4];
-  const list = pool.slice(0, count);
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const list = shuffled.slice(0, count);
 
   return list.map((item, idx) => {
     const words = item.en.split(/\s+/).filter(Boolean);
