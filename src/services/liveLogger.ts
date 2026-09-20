@@ -1,33 +1,26 @@
-export interface LiveLogEntry {
+export type LogLevel = 'INFO' | 'WARN' | 'ERROR';
+export type LogCategory = 'story' | 'call' | 'quiz_drill' | 'sync_storage' | 'system';
+
+export interface AppLogEntry {
   id: string;
   isoTime: string;
   relativeTimeMs: number;
-  type:
-    | 'INIT'
-    | 'WS_CONNECTING'
-    | 'WS_CONNECTED'
-    | 'SETUP_SENT'
-    | 'SETUP_COMPLETE'
-    | 'KICKOFF_SENT'
-    | 'USER_SPEECH_START'
-    | 'USER_SPEECH_END'
-    | 'USER_CHUNK'
-    | 'USER_COMMITTED'
-    | 'ASST_FIRST_AUDIO'
-    | 'ASST_TRANSCRIPT'
-    | 'TURN_COMPLETE'
-    | 'INTERRUPTED'
-    | 'DISCONNECTED'
-    | 'ERROR';
+  level: LogLevel;
+  category: LogCategory;
+  tag: string;
   message: string;
-  details?: Record<string, any>;
+  details?: Record<string, any> | string;
 }
 
-const STORAGE_KEY = 'compile_eng_live_debug_logs';
-const MAX_LOGS = 1000;
+// 既存の互換性維持のためのエイリアス
+export type LiveLogEntry = AppLogEntry;
 
-class LiveLoggerService {
-  private logs: LiveLogEntry[] = [];
+const STORAGE_KEY = 'compile_eng_app_debug_logs';
+const OLD_STORAGE_KEY = 'compile_eng_live_debug_logs';
+const MAX_LOGS = 1500;
+
+class AppLoggerService {
+  private logs: AppLogEntry[] = [];
   private sessionStartTime: number = Date.now();
   private listeners: Array<() => void> = [];
 
@@ -37,9 +30,21 @@ class LiveLoggerService {
 
   private loadFromStorage() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(OLD_STORAGE_KEY);
       if (raw) {
-        this.logs = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.logs = parsed.map((item: any) => ({
+            id: item.id || 'log_' + Date.now(),
+            isoTime: item.isoTime || new Date().toISOString(),
+            relativeTimeMs: typeof item.relativeTimeMs === 'number' ? item.relativeTimeMs : 0,
+            level: item.level || (item.type === 'ERROR' ? 'ERROR' : 'INFO'),
+            category: item.category || 'call',
+            tag: item.tag || item.type || 'LOG',
+            message: item.message || '',
+            details: item.details,
+          }));
+        }
       }
     } catch (e) {
       this.logs = [];
@@ -59,17 +64,21 @@ class LiveLoggerService {
     this.sessionStartTime = Date.now();
   }
 
-  public log(
-    type: LiveLogEntry['type'],
+  public logEntry(
+    level: LogLevel,
+    category: LogCategory,
+    tag: string,
     message: string,
-    details?: Record<string, any>
+    details?: Record<string, any> | string
   ) {
     const now = Date.now();
-    const entry: LiveLogEntry = {
-      id: 'log_' + now + '_' + Math.random().toString(36).substring(2, 5),
+    const entry: AppLogEntry = {
+      id: 'log_' + now + '_' + Math.random().toString(36).substring(2, 6),
       isoTime: new Date(now).toISOString(),
       relativeTimeMs: now - this.sessionStartTime,
-      type,
+      level,
+      category,
+      tag,
       message,
       details,
     };
@@ -84,18 +93,61 @@ class LiveLoggerService {
       } catch (e) {}
     });
 
-    // Console output for devtools
+    // Console output for developer inspection
     const relSec = (entry.relativeTimeMs / 1000).toFixed(2);
-    console.log(`[LiveLog +${relSec}s] [${type}] ${message}`, details || '');
+    const prefix = `[${level}] [${category.toUpperCase()}] [${tag}] (+${relSec}s) ${message}`;
+    if (level === 'ERROR') {
+      console.error(prefix, details || '');
+    } else if (level === 'WARN') {
+      console.warn(prefix, details || '');
+    } else {
+      console.log(prefix, details || '');
+    }
   }
 
-  public getLogs(): LiveLogEntry[] {
+  // 互換性用（LiveLogger.log）
+  public log(type: string, message: string, details?: Record<string, any> | string) {
+    const isError = type === 'ERROR' || type.includes('ERROR');
+    const level: LogLevel = isError ? 'ERROR' : 'INFO';
+    this.logEntry(level, 'call', type, message, details);
+  }
+
+  public info(category: LogCategory, tag: string, message: string, details?: Record<string, any> | string) {
+    this.logEntry('INFO', category, tag, message, details);
+  }
+
+  public warn(category: LogCategory, tag: string, message: string, details?: Record<string, any> | string) {
+    this.logEntry('WARN', category, tag, message, details);
+  }
+
+  public error(category: LogCategory, tag: string, message: string, details?: Record<string, any> | string) {
+    this.logEntry('ERROR', category, tag, message, details);
+  }
+
+  public logStory(tag: string, message: string, details?: Record<string, any> | string, level: LogLevel = 'INFO') {
+    this.logEntry(level, 'story', tag, message, details);
+  }
+
+  public logCall(tag: string, message: string, details?: Record<string, any> | string, level: LogLevel = 'INFO') {
+    this.logEntry(level, 'call', tag, message, details);
+  }
+
+  public logQuizDrill(tag: string, message: string, details?: Record<string, any> | string, level: LogLevel = 'INFO') {
+    this.logEntry(level, 'quiz_drill', tag, message, details);
+  }
+
+  public logSync(tag: string, message: string, details?: Record<string, any> | string, level: LogLevel = 'INFO') {
+    this.logEntry(level, 'sync_storage', tag, message, details);
+  }
+
+  public getLogs(): AppLogEntry[] {
     return [...this.logs];
   }
 
   public clearLogs() {
     this.logs = [];
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(OLD_STORAGE_KEY);
     this.listeners.forEach((cb) => cb());
   }
 
@@ -106,49 +158,62 @@ class LiveLoggerService {
     };
   }
 
-  public exportLogsAsText(): string {
-    if (this.logs.length === 0) {
-      return '（ログはまだ記録されていません）';
+  public exportLogsAsText(filteredLogs?: AppLogEntry[]): string {
+    const list = filteredLogs || this.logs;
+    if (list.length === 0) {
+      return '（該当するログはありません）';
     }
 
     const header = [
       '================================================================',
-      ' CompileEng Gemini Live リアルタイム通信・計測ログ',
+      ' CompileEng アプリケーション全機能 診断・計測ログ',
       ` エクスポート日時: ${new Date().toLocaleString('ja-JP')}`,
-      ` 総ログ件数: ${this.logs.length} 件`,
+      ` 総ログ件数: ${list.length} 件 (全体: ${this.logs.length} 件)`,
       '================================================================\n',
     ].join('\n');
 
-    const body = this.logs
+    const body = list
       .map((l) => {
         const timeStr = new Date(l.isoTime).toLocaleTimeString('ja-JP', { hour12: false });
         const relStr = `+${(l.relativeTimeMs / 1000).toFixed(3)}s`;
-        const detailsStr = l.details ? ` | ${JSON.stringify(l.details)}` : '';
-        return `[${timeStr} (${relStr})] [${l.type.padEnd(16)}] ${l.message}${detailsStr}`;
+        let detailsStr = '';
+        if (l.details) {
+          if (typeof l.details === 'string') {
+            detailsStr = `\n  [Details]: ${l.details}`;
+          } else {
+            try {
+              detailsStr = `\n  [Details]: ${JSON.stringify(l.details, null, 2).replace(/\n/g, '\n  ')}`;
+            } catch (e) {
+              detailsStr = `\n  [Details]: ${String(l.details)}`;
+            }
+          }
+        }
+        return `[${timeStr} (${relStr})] [${l.level.padEnd(5)}] [${l.category.toUpperCase().padEnd(12)}] [${l.tag.padEnd(20)}] ${l.message}${detailsStr}`;
       })
       .join('\n');
 
     return header + body;
   }
 
-  public downloadLogsFile(format: 'txt' | 'json' = 'txt') {
+  public downloadLogsFile(format: 'txt' | 'json' = 'txt', filteredLogs?: AppLogEntry[]) {
     const timestamp = new Date()
       .toISOString()
       .replace(/[:.]/g, '-')
       .substring(0, 19);
     
+    const list = filteredLogs || this.logs;
     let content: string;
     let mimeType: string;
     let filename: string;
 
     if (format === 'json') {
-      content = JSON.stringify(this.logs, null, 2);
+      content = JSON.stringify(list, null, 2);
       mimeType = 'application/json';
-      filename = `compile_eng_live_logs_${timestamp}.json`;
+      filename = `compile_eng_logs_${timestamp}.json`;
     } else {
-      content = this.exportLogsAsText();
+      content = this.exportLogsAsText(list);
       mimeType = 'text/plain;charset=utf-8';
-      filename = `compile_eng_live_logs_${timestamp}.txt`;
+      filename = `compile_eng_logs_${timestamp}.txt`;
     }
 
     const blob = new Blob([content], { type: mimeType });
@@ -163,4 +228,5 @@ class LiveLoggerService {
   }
 }
 
-export const LiveLogger = new LiveLoggerService();
+export const AppLogger = new AppLoggerService();
+export const LiveLogger = AppLogger; // 互換性のためのエイリアス

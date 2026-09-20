@@ -5,6 +5,7 @@ import { PatternMasterItem, VocabMasterItem } from '../types/mastery';
 import { parseRobustStoryJson } from '../utils/jsonParser';
 import { ChatSuggestedVocab } from '../types/chat';
 import { Persona, CallMessage, ExtractedCallVocab } from '../types/persona';
+import { AppLogger, LiveLogger } from './liveLogger';
 
 export interface GenerateStoryParams {
   apiKey: string;
@@ -36,6 +37,7 @@ export interface GeneratedStoryResult {
 const FALLBACK_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite'];
 
 export async function generateStoryWithGemini(params: GenerateStoryParams): Promise<GeneratedStoryResult> {
+  const startTime = Date.now();
   const { 
     apiKey, 
     model = 'gemini-3.7-flash', 
@@ -55,8 +57,22 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   } = params;
 
   if (!apiKey) {
+    AppLogger.error('story', 'STORY_NO_API_KEY', '物語生成エラー: Gemini APIキーが設定されていません。');
     throw new Error('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
   }
+
+  AppLogger.info('story', 'STORY_GENERATE_START', `物語生成を開始します: 「${userPrompt || 'おまかせ'}」 (CEFR: ${cefrLevel}, タイプ: ${contentType}, 目標語数: ${targetWordCount}語, エピソード: ${episodeIndex || 1}/${totalEpisodes || 1})`, {
+    cefrLevel,
+    contentType,
+    seriesType,
+    episodeIndex,
+    totalEpisodes,
+    targetWordCount,
+    userPrompt,
+    vocabsCount: targetVocabs?.length || 0,
+    patternsCount: targetPatterns?.length || 0,
+    models: Array.from(new Set([model, ...FALLBACK_MODELS])).filter(Boolean),
+  });
 
   const levelGuidelines: Record<CefrLevel, string> = {
     A1: '【超初級 (A1 / 中学1〜2年レベル)】\n極めて平易な基本単語（英検5級〜4級レベル）のみを使用し、1文は短く簡潔に（7〜10語程度）。現在形や平易な過去形を中心とした、読みやすい文章を作成してください。',
@@ -204,6 +220,12 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   for (const currentModel of candidateModels) {
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      AppLogger.info('story', 'STORY_API_REQUEST', `Gemini APIリクエスト送信 [モデル: ${currentModel}]`, {
+        model: currentModel,
+        endpoint: endpoint.split('?')[0],
+        promptLength: promptText.length,
+        promptPreview: promptText.slice(0, 500) + '...',
+      });
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒タイムアウト
@@ -226,6 +248,13 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         const errMsg = errData.error?.message || `HTTP ${response.status} ${response.statusText}`;
+        AppLogger.error('story', 'STORY_API_ERROR', `Gemini APIエラー [モデル: ${currentModel}, HTTP ${response.status}]: ${errMsg}`, {
+          status: response.status,
+          statusText: response.statusText,
+          error: errData,
+          model: currentModel,
+          fullPrompt: promptText,
+        });
         throw new Error(`Gemini API Error (${currentModel}): ${errMsg}`);
       }
 
@@ -233,10 +262,25 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
       if (!rawText) {
+        AppLogger.error('story', 'STORY_EMPTY_RESPONSE', `Geminiからの返答テキストが空でした [モデル: ${currentModel}]`, {
+          rawResponse: data,
+          model: currentModel,
+          fullPrompt: promptText,
+        });
         throw new Error('Geminiから有効なレスポンスが得られませんでした。');
       }
 
-      const parsedData = parseRobustStoryJson(rawText);
+      let parsedData;
+      try {
+        parsedData = parseRobustStoryJson(rawText);
+      } catch (parseErr: any) {
+        AppLogger.error('story', 'STORY_PARSE_ERROR', `物語JSONのパースに失敗しました [モデル: ${currentModel}]: ${parseErr.message}`, {
+          rawText,
+          parseError: parseErr.message,
+          fullPrompt: promptText,
+        });
+        throw parseErr;
+      }
 
       // 単語数の概算カウント
       const actualWords = (parsedData.story || '').trim().split(/\s+/).filter(Boolean).length;
@@ -279,6 +323,18 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
       const usage = data?.usageMetadata;
       const promptTokens = usage?.promptTokenCount || 0;
       const candidatesTokens = usage?.candidatesTokenCount || 0;
+      const elapsedMs = Date.now() - startTime;
+
+      AppLogger.info('story', 'STORY_GENERATE_SUCCESS', `物語生成が成功しました: 『${storyResult.title}』(英字${actualWords}語, 所要時間: ${elapsedMs}ms, トークン: ${promptTokens + candidatesTokens})`, {
+        storyId: storyResult.id,
+        title: storyResult.title,
+        titleJa: storyResult.titleJa,
+        wordCount: actualWords,
+        targetWordCount,
+        elapsedMs,
+        model: currentModel,
+        tokenUsage: { promptTokens, candidatesTokens },
+      });
 
       return {
         story: storyResult,
@@ -290,10 +346,21 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
     } catch (err: any) {
       console.warn(`Model ${currentModel} failed for story generation:`, err?.message || err);
       lastError = err;
+      AppLogger.warn('story', 'STORY_MODEL_FALLBACK', `モデル ${currentModel} での生成に失敗。フォールバックを試行します: ${err?.message || err}`, {
+        error: err?.message || String(err),
+        model: currentModel,
+      });
       // すべてのエラーについて次のフォールバックモデルを試行
       continue;
     }
   }
+
+  AppLogger.error('story', 'STORY_GENERATE_FAILED', `物語生成が全モデルで失敗しました: ${lastError?.message}`, {
+    error: lastError?.message,
+    stack: lastError?.stack,
+    triedModels: candidateModels,
+    fullPrompt: promptText,
+  });
 
   throw lastError || new Error('ストーリー生成に失敗しました。');
 }
@@ -1438,10 +1505,21 @@ export async function generateDynamicDrillQuestion(params: GenerateDynamicDrillP
           hint: parsed.hint || pattern.name,
         };
       }
-    } catch (err) {
+    } catch (err: any) {
+      LiveLogger.warn('quiz_drill', 'DYNAMIC_DRILL_MODEL_ERROR', `Model ${currentModel} failed for dynamic drill`, {
+        error: err?.message || String(err),
+        model: currentModel,
+        patternId: pattern.id,
+        patternName: pattern.name,
+      });
       console.warn(`generateDynamicDrillQuestion failed with ${currentModel}:`, err);
     }
   }
+
+  LiveLogger.error('quiz_drill', 'DYNAMIC_DRILL_ALL_FAILED', 'All models failed for dynamic drill question generation, fallback used', {
+    patternId: pattern.id,
+    patternName: pattern.name,
+  });
 
   // フォールバック
   return {
@@ -1561,10 +1639,23 @@ ${targetItem.sampleSentences && targetItem.sampleSentences.length > 0 ? `【参�
         errorReason: parsed.errorReason,
         tokenUsage: usage,
       };
-    } catch (err) {
+    } catch (err: any) {
+      LiveLogger.warn('quiz_drill', 'EVAL_DRILL_MODEL_ERROR', `Model ${currentModel} failed for drill evaluation`, {
+        error: err?.message || String(err),
+        model: currentModel,
+        promptJa,
+        targetItem: targetItem.name,
+        userAnswer,
+      });
       console.warn(`evaluateDrillAnswerWithGemini failed with ${currentModel}:`, err);
     }
   }
+
+  LiveLogger.error('quiz_drill', 'EVAL_DRILL_ALL_FAILED', 'All models failed for drill evaluation', {
+    promptJa,
+    targetItem: targetItem.name,
+    userAnswer,
+  });
 
   return {
     result: 'wrong',

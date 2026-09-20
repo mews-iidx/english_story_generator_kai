@@ -73,6 +73,7 @@ import {
   getUnmasteredTargetVocabs,
 } from './services/storage';
 
+import { AppLogger } from './services/liveLogger';
 import { generateStorySeriesWithGemini, fetchContextualWordMeaning,
   extractSentenceCorePatternsWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
@@ -412,6 +413,13 @@ export const App: React.FC = () => {
       triggerAutoSync(vocabs, updatedStories);
     } catch (err: any) {
       console.error('Queue task execution failed', err);
+      AppLogger.error('story', 'STORY_QUEUE_TASK_FAILED', `キュータスク『${nextTask.title}』の実行に失敗しました: ${err?.message || err}`, {
+        taskId: nextTask.id,
+        taskTitle: nextTask.title,
+        error: err?.message || String(err),
+        stack: err?.stack,
+        params: nextTask.params,
+      });
       updateStoryTask(nextTask.id, t => ({
         ...t,
         status: 'failed',
