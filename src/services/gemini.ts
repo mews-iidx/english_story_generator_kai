@@ -1411,13 +1411,22 @@ ${translation ? `【日本語訳】: "${translation}"` : ''}
 // ===================== DRILL EVALUATION WITH GEMINI =====================
 
 export interface GenerateDynamicDrillParams {
-  pattern: {
+  targetType?: 'pattern' | 'vocab';
+  pattern?: {
     id: string;
-    cefr: string;
+    cefr: CefrLevel;
     categoryLabel?: string;
     name: string;
     meaning: string;
     focus: string;
+    sampleSentences?: string[];
+  };
+  vocab?: {
+    id: string;
+    phrase: string;
+    meaning: string;
+    cefr: CefrLevel;
+    partOfSpeech?: string;
   };
   apiKey: string;
   model?: string;
@@ -1431,26 +1440,58 @@ export interface DynamicDrillQuestion {
 }
 
 /**
- * CEFR構文ルールに基づき、現代の自然な日常会話例文と正確な日本語訳をリアルタイムに動的生成
+ * CEFR構文ルールまたは重要語彙に基づき、現代の自然な日常会話例文とお題をリアルタイム動的生成
  */
 export async function generateDynamicDrillQuestion(params: GenerateDynamicDrillParams): Promise<DynamicDrillQuestion> {
-  const { pattern, apiKey, model = 'gemini-3.7-flash' } = params;
+  const { targetType, pattern, vocab, apiKey, model = 'gemini-3.7-flash' } = params;
+
+  const isVocab = (targetType === 'vocab' || !!vocab) && !pattern;
+  const targetLevel = isVocab ? (vocab?.cefr || 'A2') : (pattern?.cefr || 'A2');
+  const itemName = isVocab ? (vocab?.phrase || 'word') : (pattern?.name || 'pattern');
+
+  const itemId = isVocab ? (vocab?.id || 'voc') : (pattern?.id || 'pat');
 
   if (!apiKey) {
+    if (isVocab && vocab) {
+      return {
+        sentenceEn: `I always remember to use the word ${vocab.phrase} when speaking.`,
+        translationJa: `話すときはいつも「${vocab.meaning}」を使うように意識しています。`,
+        targetTokens: vocab.phrase.toLowerCase().split(/\s+/),
+        hint: vocab.phrase,
+      };
+    }
     return {
-      sentenceEn: 'I practice English every day to improve my speaking skills.',
-      translationJa: 'スピーキング力を高めるために毎日英語を練習しています。',
-      targetTokens: ['practice'],
-      hint: pattern.name,
+      sentenceEn: pattern?.sampleSentences?.[0] || 'I practice English every day to improve my skills.',
+      translationJa: pattern?.meaning || '英語力を高めるために毎日練習しています。',
+      targetTokens: pattern?.focus ? pattern.focus.toLowerCase().split(/\s+/).slice(0, 2) : ['practice'],
+      hint: pattern?.name || '構文',
     };
   }
 
-  const systemInstruction = `あなたは英語教育・CEFR文法カリキュラム設計の専門家です。
+  const systemInstruction = isVocab
+    ? `あなたは英語教育・CEFR語彙カリキュラム設計の専門家です。
+指定されたCEFR重要英単語・表現（${vocab?.phrase}: ${vocab?.meaning}）を自然に用いて、現代の日常英会話（またはカジュアルな生活・仕事・趣味シーン）でネイティブが実際に使う【自然で分かりやすい短い英文1文（5〜12単語程度）】と、その【正確で自然な日本語訳】を生成してください。
+
+【絶対ルール】
+1. 英文（sentenceEn）は、指定されたCEFRレベル（${targetLevel}）にふさわしい平易で自然な日常表現1文にしてください。
+2. 英文には必ずターゲット単語・表現（${vocab?.phrase}）を明確に含めてください。
+3. 日本語訳（translationJa）は、和文英訳（瞬間英作文）のお題として分かりやすく、かつ自然な日本語にしてください。
+4. 試験のメタ情報や記号ゴミ、不自然な直訳は絶対に含めないでください。
+5. targetTokensには、ターゲット単語（${vocab?.phrase}）の核となる構成単語（小文字）を配列で含めてください。
+
+【必ず守る出力フォーマット（純粋なJSONのみ）】:
+{
+  "sentenceEn": "...",
+  "translationJa": "...",
+  "targetTokens": ["..."],
+  "hint": "..."
+}`
+    : `あなたは英語教育・CEFR文法カリキュラム設計の専門家です。
 指定されたCEFR文法・構文ルールに厳密に従って、現代の日常英会話（またはカジュアルな生活・仕事・趣味シーン）でネイティブが実際に使う【自然で分かりやすい短い英文1文（5〜12単語程度）】と、その【正確で自然な日本語訳】を生成してください。
 
 【絶対ルール】
-1. 英文（sentenceEn）は、指定されたCEFRレベル（${pattern.cefr}）にふさわしい平易で自然な日常表現1文にしてください。
-2. 英文には必ずターゲット構文ルール（${pattern.name}: ${pattern.focus}）を明確に含めてください。
+1. 英文（sentenceEn）は、指定されたCEFRレベル（${targetLevel}）にふさわしい平易で自然な日常表現1文にしてください。
+2. 英文には必ずターゲット構文ルール（${pattern?.name}: ${pattern?.focus}）を明確に含めてください。
 3. 日本語訳（translationJa）は、和文英訳（瞬間英作文）のお題として分かりやすく、かつ自然な日本語にしてください。
 4. 試験のメタ情報（Passや国名など）や記号ゴミ、不自然な直訳は絶対に含めないでください。
 5. targetTokensには、この構文の核となる英単語・キーワード（小文字）を1〜2個配列で含めてください。
@@ -1463,10 +1504,17 @@ export async function generateDynamicDrillQuestion(params: GenerateDynamicDrillP
   "hint": "..."
 }`;
 
-  const promptText = `【CEFRレベル】: ${pattern.cefr} (${pattern.categoryLabel || '基本文法'})
-【ターゲット構文名】: ${pattern.name}
-【構文の焦点・公式】: ${pattern.focus}
-【Can-Do目標】: ${pattern.meaning}
+  const promptText = isVocab
+    ? `【CEFRレベル】: ${targetLevel}
+【ターゲット単語・イディオム】: ${vocab?.phrase}
+【品詞】: ${vocab?.partOfSpeech || '単語'}
+【主な意味】: ${vocab?.meaning}
+
+上記単語・表現を自然に用いた短い出題用例文と日本語訳をJSONで生成してください。`
+    : `【CEFRレベル】: ${targetLevel} (${pattern?.categoryLabel || '基本文法'})
+【ターゲット構文名】: ${pattern?.name}
+【構文の焦点・公式】: ${pattern?.focus}
+【Can-Do目標】: ${pattern?.meaning}
 
 上記構文を用いた自然な出題用例文と日本語訳をJSONで生成してください。`;
 
@@ -1501,32 +1549,43 @@ export async function generateDynamicDrillQuestion(params: GenerateDynamicDrillP
         return {
           sentenceEn: parsed.sentenceEn.trim(),
           translationJa: parsed.translationJa.trim(),
-          targetTokens: Array.isArray(parsed.targetTokens) ? parsed.targetTokens : [],
-          hint: parsed.hint || pattern.name,
+          targetTokens: Array.isArray(parsed.targetTokens) ? parsed.targetTokens : [itemName.toLowerCase()],
+          hint: parsed.hint || itemName,
         };
       }
     } catch (err: any) {
-      LiveLogger.warn('quiz_drill', 'DYNAMIC_DRILL_MODEL_ERROR', `Model ${currentModel} failed for dynamic drill`, {
+      LiveLogger.warn('quiz_drill', 'DYNAMIC_DRILL_MODEL_ERROR', `Model ${currentModel} failed for dynamic drill (${itemName})`, {
         error: err?.message || String(err),
         model: currentModel,
-        patternId: pattern.id,
-        patternName: pattern.name,
+        itemId,
+        itemName,
+        itemType: isVocab ? 'vocab' : 'pattern',
       });
       console.warn(`generateDynamicDrillQuestion failed with ${currentModel}:`, err);
     }
   }
 
-  LiveLogger.error('quiz_drill', 'DYNAMIC_DRILL_ALL_FAILED', 'All models failed for dynamic drill question generation, fallback used', {
-    patternId: pattern.id,
-    patternName: pattern.name,
+  LiveLogger.error('quiz_drill', 'DYNAMIC_DRILL_ALL_FAILED', `All models failed for dynamic drill question generation for ${itemName}`, {
+    itemId,
+    itemName,
+    itemType: isVocab ? 'vocab' : 'pattern',
   });
 
-  // フォールバック
+  // 対象アイテムに応じた動的フォールバック（固定汎例文の廃止）
+  if (isVocab && vocab) {
+    return {
+      sentenceEn: `We should practice using "${vocab.phrase}" in daily conversations.`,
+      translationJa: `日常会話で「${vocab.meaning}」を使えるように練習しましょう。`,
+      targetTokens: vocab.phrase.toLowerCase().split(/\s+/),
+      hint: vocab.phrase,
+    };
+  }
+
   return {
-    sentenceEn: 'I like studying English because it helps me communicate with people.',
-    translationJa: '世界中の人とコミュニケーションが取れるようになるので、英語を勉強するのが好きです。',
-    targetTokens: ['because'],
-    hint: pattern.name,
+    sentenceEn: pattern?.sampleSentences?.[0] || `I always try to use ${pattern?.name || 'this pattern'} when writing English.`,
+    translationJa: pattern?.meaning ? `${pattern.meaning}を使って表現してみましょう。` : 'この構文を使って表現してみましょう。',
+    targetTokens: pattern?.focus ? pattern.focus.toLowerCase().split(/\s+/).slice(0, 2) : ['practice'],
+    hint: pattern?.name || '構文',
   };
 }
 
