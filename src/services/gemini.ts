@@ -1546,9 +1546,11 @@ export async function generateDynamicDrillQuestion(params: GenerateDynamicDrillP
       const parsed = JSON.parse(cleaned);
 
       if (parsed.sentenceEn && parsed.translationJa) {
+        const cleanEn = parsed.sentenceEn.trim().replace(/^[`"']+|[`"']+$/g, '');
+        const cleanJa = parsed.translationJa.trim().replace(/^[`"'$]+|[`"'$]+$/g, '').replace(/^[「『]|["』]$/g, '');
         return {
-          sentenceEn: parsed.sentenceEn.trim(),
-          translationJa: parsed.translationJa.trim(),
+          sentenceEn: cleanEn,
+          translationJa: cleanJa,
           targetTokens: Array.isArray(parsed.targetTokens) ? parsed.targetTokens : [itemName.toLowerCase()],
           hint: parsed.hint || itemName,
         };

@@ -712,9 +712,9 @@ export const DrillView: React.FC<DrillViewProps> = ({
                 : '【この英文の意味を理解できますか？】'}
             </span>
             <div className="text-2xl sm:text-3xl font-extrabold text-white leading-snug tracking-tight min-h-[48px] flex items-center justify-center">
-              `「${drillType === 'assembly' 
-                ? currentDrillItem.question.translationJa 
-                : currentDrillItem.question.sentenceEn}」`
+              「{drillType === 'assembly'
+                ? currentDrillItem.question.translationJa.replace(/^[「『]|["』]$/g, '').trim()
+                : currentDrillItem.question.sentenceEn.replace(/^["']|["']$/g, '').trim()}」
             </div>
             {drillType === 'comprehension' && (
               <div className="flex justify-center pt-1">
