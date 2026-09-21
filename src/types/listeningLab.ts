@@ -7,12 +7,19 @@ export type LabBottleneckType =
   | 'unknown_vocab'      // 未知語・多義語
   | 'perfect';           // 完全理解
 
+export interface LabChunk {
+  text: string;
+  translationJa: string;
+  boundaryReason: string;
+}
+
 export interface LabQuestion {
   id: string;
   sentenceEn: string;
   translationJa: string;
   wordCount: number;
   words: string[];
+  chunks: LabChunk[];
   cefrLevel: CefrLevel;
   keyPoints?: string;
 }
@@ -38,6 +45,7 @@ export interface LabQuestionRecord {
   speedWpm: number;
   cefrLevel: CefrLevel;
   userResponse: string;
+  chunks?: LabChunk[];
   diagnosis: LabDiagnosisResult;
 }
 
