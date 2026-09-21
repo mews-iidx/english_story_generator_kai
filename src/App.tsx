@@ -859,12 +859,17 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteVocab = (vocabId: string) => {
-    if (confirm('この語彙を削除しますか？')) {
-      removeVocabFromStorage(vocabId);
-      const updated = loadVocabs();
-      setVocabs(updated);
-      triggerAutoSync(updated, stories);
-    }
+    removeVocabFromStorage(vocabId);
+    const updated = loadVocabs();
+    setVocabs(updated);
+    triggerAutoSync(updated, stories);
+  };
+
+  const handleUpdateVocab = (updatedCard: VocabItem) => {
+    saveSingleVocab(updatedCard);
+    const updated = loadVocabs();
+    setVocabs(updated);
+    triggerAutoSync(updated, stories);
   };
 
   const handleDeleteStory = (storyId: string) => {
@@ -1120,6 +1125,10 @@ export const App: React.FC = () => {
                 onRecordTokenUsage={handleRecordTokenUsage}
                 savedVocabPhrases={savedVocabPhrases}
                 onCallStateChange={(active: boolean) => setIsCallActive(active)}
+                chatMessages={chatMessages}
+                onSendChatMessage={handleSendChatMessage}
+                onClearChat={handleClearChat}
+                initialChatInput={initialChatInput}
               />
             )}
 
@@ -1148,6 +1157,8 @@ export const App: React.FC = () => {
                 vocabs={vocabs}
                 dueVocabs={dueVocabs}
                 onAddToVocab={handleAddToVocab}
+                onUpdateVocab={handleUpdateVocab}
+                onDeleteVocab={handleDeleteVocab}
                 onRecordTokenUsage={handleRecordTokenUsage}
                 onRateAnkiCard={handleRateAnkiCard}
                 onRevertAnkiCard={handleRevertAnkiCard}

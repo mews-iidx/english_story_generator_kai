@@ -3,22 +3,24 @@ import { QuizMode, QuizQuestion, QuizMessage } from '../types/quiz';
 import { CefrLevel } from '../types/settings';
 import { VocabItem } from '../types/vocab';
 import { generateQuizQuestion, evaluateQuizAnswer } from '../services/quizGemini';
-import { Send, Volume2, Sparkles, RefreshCw, CheckCircle2, XCircle, Play, Zap } from 'lucide-react';
+import { Send, Volume2, Sparkles, RefreshCw, CheckCircle2, XCircle, Play, PlusCircle, Edit3, Bot } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import confetti from 'canvas-confetti';
 import { AnkiFlashcardView } from './AnkiFlashcardView';
+import { AnkiCardEditorView } from './AnkiCardEditorView';
 import { getTodayDateString } from '../utils/srs';
-// import { loadAnkiUnifiedDeck } from '../services/storage';
 
 interface QuizViewProps {
   apiKey: string;
   model: string;
   cefrLevel: CefrLevel;
-  onLevelChange: (level: CefrLevel) => void;
+  onLevelChange?: (level: CefrLevel) => void;
   dueVocabs: string[];
   vocabs: VocabItem[];
-  onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
-  onRecordTokenUsage: (promptTokens: number, candidatesTokens: number) => void;
+  onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string, level?: CefrLevel) => void;
+  onUpdateVocab?: (updatedCard: VocabItem) => void;
+  onDeleteVocab?: (vocabId: string) => void;
+  onRecordTokenUsage?: (promptTokens: number, candidatesTokens: number) => void;
   onRateAnkiCard?: (vocabId: string, rating: 'again' | 'hard' | 'good' | 'easy') => void;
   onRevertAnkiCard?: (previousCard: VocabItem) => void;
 }
@@ -27,15 +29,16 @@ export const QuizView: React.FC<QuizViewProps> = ({
   apiKey,
   model,
   cefrLevel,
-  onLevelChange,
   dueVocabs,
   vocabs,
   onAddToVocab,
+  onUpdateVocab,
+  onDeleteVocab,
   onRecordTokenUsage,
   onRateAnkiCard,
   onRevertAnkiCard,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'anki' | 'ai_quiz'>('anki');
+  const [activeSubTab, setActiveSubTab] = useState<'anki' | 'editor' | 'ai_quiz'>('anki');
   const [mode, setMode] = useState<QuizMode>('en_to_ja');
   const [isStarted, setIsStarted] = useState(false);
   const [messages, setMessages] = useState<QuizMessage[]>([]);
@@ -60,195 +63,182 @@ export const QuizView: React.FC<QuizViewProps> = ({
   }, [messages, isLoading, isStarted, activeSubTab]);
 
   const handleModeChange = (newMode: QuizMode) => {
-    if (newMode === mode) return;
     setMode(newMode);
-    if (isStarted) {
-      setMessages([]);
-      setCurrentQuestion(null);
-      handleFetchNextQuestion(newMode);
-    }
+    setIsStarted(false);
+    setMessages([]);
+    setCurrentQuestion(null);
   };
 
-  const handleStartQuiz = () => {
+  const handleStartQuiz = async () => {
     if (!apiKey) {
-      alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
+      alert('Gemini APIキーを設定してください。');
       return;
     }
     setIsStarted(true);
     setMessages([]);
-    setCurrentQuestion(null);
-    handleFetchNextQuestion(mode);
+    await handleFetchNextQuestion();
   };
 
-  const handleFetchNextQuestion = async (targetMode = mode) => {
+  const handleFetchNextQuestion = async () => {
     setIsLoading(true);
     try {
       const res = await generateQuizQuestion({
         apiKey,
         model,
+        mode,
         cefrLevel,
-        mode: targetMode,
         targetVocabs: dueVocabs,
       });
 
-      if (res.tokenUsage) {
+      if (res.tokenUsage && onRecordTokenUsage) {
         onRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
       }
 
       setCurrentQuestion(res.question);
-
-      const botMsg: QuizMessage = {
-        id: 'msg_' + Date.now(),
+      const questionMsg: QuizMessage = {
+        id: Date.now().toString(),
         sender: 'ai',
         type: 'question',
         content: res.question.promptText,
         questionData: res.question,
-        timestamp: new Date().toISOString(),
+        timestamp: new Date().toLocaleTimeString(),
       };
-      setMessages((prev) => [...prev, botMsg]);
-
-      if (targetMode === 'en_to_ja' && res.question.promptText) {
-        speakText(res.question.promptText);
-      }
-    } catch (err: any) {
-      console.error('Failed to fetch quiz question', err);
-      alert(`問題の出題に失敗しました:\n${err.message}`);
+      setMessages((prev) => [...prev, questionMsg]);
+    } catch (e: any) {
+      console.error(e);
+      alert('クイズの出題に失敗しました: ' + (e.message || String(e)));
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleSendAnswer = async () => {
-    if (!inputText.trim() || isLoading || !currentQuestion) return;
-
-    const userAns = inputText.trim();
+    if (!inputText.trim() || !currentQuestion || isLoading) return;
+    const answerText = inputText.trim();
     setInputText('');
 
-    const userMsg: QuizMessage = {
-      id: 'msg_user_' + Date.now(),
+    const answerMsg: QuizMessage = {
+      id: Date.now().toString(),
       sender: 'user',
       type: 'answer',
-      content: userAns,
-      timestamp: new Date().toISOString(),
+      content: answerText,
+      timestamp: new Date().toLocaleTimeString(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev, answerMsg]);
 
     setIsLoading(true);
     try {
-      const evalRes = await evaluateQuizAnswer({
+      const res = await evaluateQuizAnswer({
         apiKey,
         model,
         question: currentQuestion,
-        userAnswer: userAns,
+        userAnswer: answerText,
       });
 
-      if (evalRes.tokenUsage) {
-        onRecordTokenUsage(evalRes.tokenUsage.promptTokens, evalRes.tokenUsage.candidatesTokens);
+      if (res.tokenUsage && onRecordTokenUsage) {
+        onRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
       }
 
       const evalMsg: QuizMessage = {
-        id: 'msg_eval_' + Date.now(),
+        id: (Date.now() + 1).toString(),
         sender: 'ai',
         type: 'evaluation',
-        content: evalRes.evaluation.feedback,
-        evaluationData: evalRes.evaluation,
-        timestamp: new Date().toISOString(),
+        content: res.evaluation.feedback,
+        evaluationData: res.evaluation,
+        timestamp: new Date().toLocaleTimeString(),
       };
       setMessages((prev) => [...prev, evalMsg]);
 
-      if (evalRes.evaluation.isCorrect) {
-        confetti({
-          particleCount: 50,
-          spread: 60,
-          origin: { y: 0.8 },
-          colors: ['#3b82f6', '#10b981', '#60a5fa'],
-        });
-      } else {
-        if (evalRes.evaluation.targetPhrase) {
-          onAddToVocab(
-            evalRes.evaluation.targetPhrase,
-            evalRes.evaluation.targetPhraseMeaning || evalRes.evaluation.modelAnswer,
-            currentQuestion.promptText,
-            evalRes.evaluation.nuanceExplanation
-          );
-        }
+      if (res.evaluation.isCorrect) {
+        confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
       }
-    } catch (err: any) {
-      console.error('Evaluation error', err);
-      alert(`回答の判定に失敗しました:\n${err.message}`);
+
+      if (currentQuestion.targetPhrase && !res.evaluation.isCorrect) {
+        onAddToVocab(
+          currentQuestion.targetPhrase,
+          res.evaluation.modelAnswer,
+          currentQuestion.promptText,
+          'AIクイズでの復習対象'
+        );
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert('回答の判定に失敗しました: ' + (e.message || String(e)));
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4">
-      {/* 1. Header & Subtab switcher (Anki vs AI Quiz) */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2.5">
-          {/* Subtab buttons */}
-          <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
-            <button
-              onClick={() => setActiveSubTab('anki')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all ${
-                activeSubTab === 'anki'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Zap className="w-3.5 h-3.5 text-yellow-300" />
-              <span>🔥 Anki 一問一答 {dueCount > 0 ? `(${dueCount}要復習)` : `(完了)`}</span>
-            </button>
+    <div className="max-w-4xl mx-auto space-y-6 pb-20 px-3 sm:px-4 animate-fadeIn">
+      {/* 1. Sub-Tab Switcher */}
+      <div className="flex items-center justify-center">
+        <div className="bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center gap-1 shadow-xl">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('anki')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+              activeSubTab === 'anki'
+                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/25 scale-[1.02]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>🃏 Anki学習</span>
+            {dueCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-white text-slate-950">
+                {dueCount}
+              </span>
+            )}
+          </button>
 
-            <button
-              onClick={() => setActiveSubTab('ai_quiz')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all ${
-                activeSubTab === 'ai_quiz'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-              <span>✍️ AI 瞬間英作文・読解</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('editor')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+              activeSubTab === 'editor'
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-600/25 scale-[1.02]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Edit3 className="w-4 h-4" />
+            <span>📝 カードエディタ・一覧</span>
+            <span className="text-[10px] opacity-70 font-mono">({vocabs.length})</span>
+          </button>
 
-          <div className="flex items-center space-x-1">
-            {(['A1', 'A2', 'B1', 'B2', 'C1'] as const).map((lvl) => (
-              <button
-                key={lvl}
-                onClick={() => onLevelChange(lvl)}
-                className={`px-2 py-0.5 rounded-md text-xs font-bold transition-all ${
-                  cefrLevel === lvl
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-950 text-slate-400 border border-slate-800'
-                }`}
-              >
-                {lvl}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('ai_quiz')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+              activeSubTab === 'ai_quiz'
+                ? 'bg-gradient-to-r from-purple-600 to-cyan-600 text-white shadow-lg shadow-purple-600/25 scale-[1.02]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Bot className="w-4 h-4" />
+            <span>🤖 AIクイズ</span>
+          </button>
         </div>
       </div>
 
-      {/* Subtab 1: Anki 4-step Flashcard Mode */}
-      {activeSubTab === 'anki' && (
+      {/* 2. Sub-Tab Content */}
+      {activeSubTab === 'anki' ? (
         <AnkiFlashcardView
           vocabs={vocabs}
-          onRateCard={(id, rating) => {
-            if (onRateAnkiCard) onRateAnkiCard(id, rating);
-          }}
-          onRevertCard={(prevCard) => {
-            if (onRevertAnkiCard) onRevertAnkiCard(prevCard);
-          }}
+          onRateCard={onRateAnkiCard || (() => {})}
+          onRevertCard={onRevertAnkiCard}
         />
-      )}
-
-      {/* Subtab 2: AI Interactive Quiz (Free-form answer chat) */}
-      {activeSubTab === 'ai_quiz' && (
+      ) : activeSubTab === 'editor' ? (
+        <AnkiCardEditorView
+          vocabs={vocabs}
+          onUpdateCard={onUpdateVocab || (() => {})}
+          onDeleteCard={onDeleteVocab || (() => {})}
+          onAddCard={onAddToVocab}
+        />
+      ) : (
+        /* AI Quiz View */
         <>
-          {/* Mode Switcher */}
-          <div className="flex items-center justify-between bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/60 border border-slate-800/60 p-3 sm:p-4 rounded-2xl">
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => handleModeChange('en_to_ja')}

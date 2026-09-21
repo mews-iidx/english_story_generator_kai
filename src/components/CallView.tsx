@@ -1,4 +1,6 @@
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { AiMentorChatView } from './AiMentorChatView';
+import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Persona,
@@ -58,6 +60,7 @@ import {
   HelpCircle,
   ChevronRight,
   RotateCcw,
+  Bot,
 } from 'lucide-react';
 
 interface CallViewProps {
@@ -88,6 +91,10 @@ interface CallViewProps {
   onRecordTokenUsage?: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases: Set<string>;
   onCallStateChange?: (isActive: boolean) => void;
+  chatMessages?: ChatMessage[];
+  onSendChatMessage?: (userText: string, replyText: string, suggestedVocabs: ChatSuggestedVocab[]) => void;
+  onClearChat?: () => void;
+  initialChatInput?: string;
 }
 
 interface RallyChatMessage {
@@ -119,10 +126,14 @@ export const CallView: React.FC<CallViewProps> = ({
   onRecordTokenUsage,
   savedVocabPhrases,
   onCallStateChange,
+  chatMessages,
+  onSendChatMessage,
+  onClearChat,
+  initialChatInput,
 }) => {
   // 画面モード: lobby (一覧) | call (音声通話中) | chat (テキストチャット中) | rally_chat (ラリー特訓中) | review (振り返り・Q&Aスタジオ)
   const [viewState, setViewState] = useState<'lobby' | 'call' | 'chat' | 'rally_chat' | 'review'>('lobby');
-  const [activeTab, setActiveTab] = useState<'rally' | 'friend'>('rally');
+  const [activeTab, setActiveTab] = useState<'rally' | 'friend' | 'mentor'>('rally');
 
   // 瞬間ラリー特訓 State
   const [rallyTopics, setRallyTopics] = useState<string[]>(DEFAULT_RALLY_TOPICS);
@@ -1229,27 +1240,40 @@ export const CallView: React.FC<CallViewProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('rally')}
-              className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                 activeTab === 'rally'
                   ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/25 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <Zap className="w-4 h-4 text-yellow-300 animate-bounce" />
-              <span>⚡ 瞬間ラリー特訓（即答＆武器化）</span>
+              <Zap className="w-4 h-4 text-yellow-300" />
+              <span>⚡ クイック英会話（即答ラリー）</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('friend')}
-              className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                 activeTab === 'friend'
                   ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-600/25 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <Smile className="w-4 h-4 text-cyan-300" />
-              <span>👫 友達フリートーク（記憶＆雑談）</span>
+              <span>👫 AI通話・雑談</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('mentor')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                activeTab === 'mentor'
+                  ? 'bg-gradient-to-r from-purple-600 to-cyan-600 text-white shadow-lg shadow-purple-600/25 scale-[1.02]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Bot className="w-4 h-4 text-purple-300" />
+              <span>💬 AI相談</span>
             </button>
           </div>
         </div>
@@ -1676,6 +1700,24 @@ export const CallView: React.FC<CallViewProps> = ({
             </div>
           )}
         </div>
+
+
+        {/* ==================== TAB 3: AIメンター相談 ==================== */}
+        {activeTab === 'mentor' && (
+          <div className="space-y-6 animate-fadeIn">
+            <AiMentorChatView
+              apiKey={apiKey}
+              model={model}
+              messages={chatMessages || []}
+              onSendMessage={onSendChatMessage || (() => {})}
+              onAddToVocab={onAddToVocab}
+              onClearChat={onClearChat || (() => {})}
+              onRecordTokenUsage={onRecordTokenUsage || (() => {})}
+              savedVocabPhrases={savedVocabPhrases}
+              initialInput={initialChatInput}
+            />
+          </div>
+        )}
 
         {/* Custom Topic Modal */}
         {isCustomTopicModalOpen && (

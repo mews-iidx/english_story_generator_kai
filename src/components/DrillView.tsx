@@ -72,6 +72,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
 
   // Pre-generation Queue & Current Question State
+  const [isSessionActive, setIsSessionActive] = useState<boolean>(false);
   const [drillQueue, setDrillQueue] = useState<DrillQueueItem[]>([]);
   const [currentDrillItem, setCurrentDrillItem] = useState<DrillQueueItem | null>(null);
   const [isQueueLoading, setIsQueueLoading] = useState<boolean>(true);
@@ -250,23 +251,24 @@ export const DrillView: React.FC<DrillViewProps> = ({
     }
   }, [drillQueue, currentDrillItem, selectedCefr, filterMode, drillType, targetScope, apiKey, selectedModel, getCandidatePool]);
 
-  // 設定やレベル変更時にキューをリセットして再構築
+  // 設定やレベル変更時にキューをリセット（AI通信は開始ボタンを押すまで保留）
   useEffect(() => {
+    setIsSessionActive(false);
     setDrillQueue([]);
     setCurrentDrillItem(null);
-    setIsQueueLoading(true);
+    setIsQueueLoading(false);
     setUserAnswer('');
     setEvalResult(null);
     setIsSavedToAnki(false);
     setLastSavedCardIds(null);
   }, [selectedCefr, filterMode, drillType, targetScope]);
 
-  // キューが少なくなった時に自動補充
+  // キューが少なくなった時に自動補充（セッション実行中のみ！）
   useEffect(() => {
-    if (drillQueue.length < QUEUE_TARGET_SIZE) {
+    if (isSessionActive && drillQueue.length < QUEUE_TARGET_SIZE) {
       refillQueue();
     }
-  }, [drillQueue.length, refillQueue]);
+  }, [isSessionActive, drillQueue.length, refillQueue]);
 
   // 入力フォーカス
   useEffect(() => {
@@ -484,6 +486,21 @@ export const DrillView: React.FC<DrillViewProps> = ({
     }
   };
 
+  const handleStartSession = () => {
+    setIsSessionActive(true);
+    setIsQueueLoading(true);
+    refillQueue();
+  };
+
+  const handleStopSession = () => {
+    setIsSessionActive(false);
+    setDrillQueue([]);
+    setCurrentDrillItem(null);
+    setIsQueueLoading(false);
+    setUserAnswer('');
+    setEvalResult(null);
+  };
+
   // 全体進捗のサマリー計算
   const masteryProgress = useMemo(() => {
     const state = loadMasteryState();
@@ -662,8 +679,60 @@ export const DrillView: React.FC<DrillViewProps> = ({
         </div>
       )}
 
-      {/* 2. Main Question Card */}
-      {isQueueLoading && !currentDrillItem ? (
+      {/* 2. Main Question Arena */}
+      {!isSessionActive ? (
+        /* Start Setup Card (No AI communication until user clicks button!) */
+        <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-6 shadow-2xl animate-fadeIn">
+          <div className="w-20 h-20 bg-gradient-to-tr from-amber-500/20 to-orange-500/20 text-amber-400 border border-amber-500/30 rounded-3xl flex items-center justify-center mx-auto shadow-xl shadow-amber-500/10">
+            <Zap className="w-10 h-10 fill-amber-400" />
+          </div>
+
+          <div className="space-y-2 max-w-lg mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-black text-white">
+              瞬間英作文・構文スピードドリル
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+              あなたの習熟度マスターデータから、{selectedCefr} レベルの
+              <strong className="text-amber-300 ml-1">
+                {targetScope === 'pattern' ? '構文マスター' : targetScope === 'vocab' ? '重要語彙' : '構文＆単語'}
+              </strong>
+              を出題します。下のボタンを押すとAIが出題を生成・開始します。
+            </p>
+          </div>
+
+          {/* Quick Config Summary */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg mx-auto pt-2">
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+              <span className="text-[11px] text-slate-400 font-bold">対象レベル</span>
+              <div className="text-lg font-black text-white font-mono">{selectedCefr}</div>
+            </div>
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+              <span className="text-[11px] text-slate-400 font-bold">ドリル形式</span>
+              <div className="text-lg font-black text-indigo-300 font-mono">
+                {drillType === 'assembly' ? '瞬間英作文' : '英語読解'}
+              </div>
+            </div>
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 col-span-2 sm:col-span-1">
+              <span className="text-[11px] text-slate-400 font-bold">習得進捗</span>
+              <div className="text-lg font-black text-emerald-400 font-mono">
+                {masteryProgress.percentage}%
+              </div>
+            </div>
+          </div>
+
+          {/* Start CTA Button */}
+          <div className="pt-3">
+            <button
+              type="button"
+              onClick={handleStartSession}
+              className="flex items-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 rounded-2xl text-base sm:text-lg font-black shadow-xl shadow-orange-500/25 transition-all mx-auto active:scale-95 cursor-pointer"
+            >
+              <Zap className="w-5 h-5 fill-slate-950" />
+              <span>▶️ ドリルを開始する（AI問題生成）</span>
+            </button>
+          </div>
+        </div>
+      ) : isQueueLoading && !currentDrillItem ? (
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-12 shadow-2xl text-center space-y-4">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
           <div className="space-y-1">
@@ -699,8 +768,18 @@ export const DrillView: React.FC<DrillViewProps> = ({
               </span>
             </div>
 
-            <div className="text-xs text-slate-500 font-medium">
-              {selectedCefr} レベル
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-slate-500 font-medium hidden sm:inline">
+                {selectedCefr} レベル
+              </span>
+              <button
+                type="button"
+                onClick={handleStopSession}
+                className="px-3 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-colors"
+                title="ドリルを中断して設定画面に戻る"
+              >
+                ⏸️ 終了・設定へ
+              </button>
             </div>
           </div>
 
