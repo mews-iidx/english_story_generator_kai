@@ -16,6 +16,7 @@ import {
 import { Story, StoryListeningMetrics } from '../types/story';
 import { LabChunk } from '../types/listeningLab';
 import { splitIntoSmartChunks } from '../services/listeningLabService';
+import { speakNaturalWithWordTracking, stopSpeech } from '../utils/speech';
 
 interface StoryListeningStepViewProps {
   story: Story;
@@ -74,7 +75,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   const chunkPauseStartRef = useRef<number>(0);
   const chunkLatenciesRef = useRef<number[]>([]);
   const storyStartTimeRef = useRef<number>(Date.now());
-  const playbackTimerRef = useRef<any>(null);
+  const cancelSpeechRef = useRef<(() => void) | null>(null);
 
   const currentSentence = sentenceList[currentSentenceIdx] || null;
   const currentChunks = currentSentence ? currentSentence.chunks : [];
@@ -82,14 +83,11 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
   // Stop playback on unmount or sentence change
   const stopPlayback = useCallback(() => {
-    if (playbackTimerRef.current) {
-      clearTimeout(playbackTimerRef.current);
-      clearInterval(playbackTimerRef.current);
-      playbackTimerRef.current = null;
+    if (cancelSpeechRef.current) {
+      cancelSpeechRef.current();
+      cancelSpeechRef.current = null;
     }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
+    stopSpeech();
     setStepWordIdx(-1);
   }, []);
 
@@ -99,7 +97,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     };
   }, [stopPlayback]);
 
-  // Play single chunk word by word and pause at boundary
+  // Play single chunk with natural connected speech + real-time word boundary tracking
   const playChunk = useCallback((sIdx: number, cIdx: number) => {
     const targetSentence = sentenceList[sIdx];
     if (!targetSentence) return;
@@ -115,52 +113,22 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     setStepStatus('playing_chunk');
 
     const chunk = targetChunks[cIdx];
-    const words = chunk.text.trim().split(/\s+/).filter(Boolean);
+    const rateMultiplier = Math.max(0.6, Math.min(1.8, speedWpm / 110));
 
-    let wIdx = 0;
-    setStepWordIdx(0);
-
-    const speakAndStepWord = () => {
-      if (wIdx >= words.length) {
-        // Chunk finished -> pause at boundary for compression & start timer
-        stopPlayback();
-        setStepWordIdx(-1);
-        setStepStatus('paused_at_boundary');
-        chunkPauseStartRef.current = Date.now();
-        return;
-      }
-
-      const word = words[wIdx];
-      setStepWordIdx(wIdx);
-
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(word);
-        utterance.lang = 'en-US';
-        const rateMultiplier = Math.max(0.7, Math.min(1.8, speedWpm / 105));
-        utterance.rate = rateMultiplier;
-        window.speechSynthesis.speak(utterance);
-      }
-
-      wIdx++;
-    };
-
-    speakAndStepWord();
-    const intervalMs = Math.round((60 / speedWpm) * 1000);
-    playbackTimerRef.current = setInterval(() => {
-      if (wIdx < words.length) {
-        speakAndStepWord();
-      } else {
-        if (playbackTimerRef.current) {
-          clearInterval(playbackTimerRef.current);
-          playbackTimerRef.current = null;
-        }
-        stopPlayback();
+    // 自然な文章読み上げ（ワナ・ア・リンキング発動）＋ onboundary で単語位置同期
+    cancelSpeechRef.current = speakNaturalWithWordTracking(
+      chunk.text,
+      rateMultiplier,
+      (wIdx) => {
+        setStepWordIdx(wIdx);
+      },
+      () => {
+        // チャンク音声終了 ➔ 境界で一時停止（脳内圧縮タイム開始）
         setStepWordIdx(-1);
         setStepStatus('paused_at_boundary');
         chunkPauseStartRef.current = Date.now();
       }
-    }, intervalMs);
+    );
   }, [sentenceList, speedWpm, stopPlayback]);
 
   // Advance to next chunk / sentence
@@ -288,7 +256,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             <div className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[10px]">
               1
             </div>
-            <span>初見チャンクリスニング（変数 $X$ 処理）</span>
+            <span>初見チャンクリスニング（自然音声・変数 $X$ 処理）</span>
           </div>
 
           <div className="text-slate-600 font-mono">────▶</div>
@@ -409,7 +377,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                     初見リスニングを開始
                   </h3>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    単語が1語ずつ流れ、意味の切れ目（/）で一時停止します。分からない単語があっても「変数 $X$」として流しながら進みましょう。
+                    自然な発音・音声変化（ワナ・ア・リンキング）でチャンクが流れ、切れ目（/）で一時停止します。分からない単語は「変数 $X$」として流しながら進みましょう。
                   </p>
                 </div>
                 <button
@@ -422,16 +390,16 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                 </button>
               </div>
             ) : stepStatus === 'playing_chunk' ? (
-              /* Streaming words in chunk */
+              /* Streaming words in chunk synchronized with natural speech */
               <div className="space-y-3 animate-in fade-in zoom-in-95 duration-100">
                 <span className="px-3 py-1 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono text-xs font-bold">
                   Chunk {currentChunkIdx + 1} / {currentChunks.length} 再生中...
                 </span>
-                <div className="text-4xl sm:text-6xl font-black text-white font-mono tracking-wide py-2">
-                  {stepWordIdx >= 0 ? currentChunk?.text.trim().split(/\s+/)[stepWordIdx] : '...'}
+                <div className="text-4xl sm:text-6xl font-black text-white font-mono tracking-wide py-2 min-h-[72px] flex items-center justify-center">
+                  {stepWordIdx >= 0 ? currentChunk?.text.trim().split(/\s+/)[stepWordIdx] : currentChunk?.text}
                 </div>
                 <p className="text-xs text-slate-500 font-medium">
-                  耳と目でキャッチしてください
+                  自然な発音（音声変化）を耳と目でキャッチしてください
                 </p>
               </div>
             ) : stepStatus === 'paused_at_boundary' ? (
