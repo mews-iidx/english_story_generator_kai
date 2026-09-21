@@ -27,7 +27,6 @@ import {
   SkipForward
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
-import { speakNaturalWithWordTracking } from '../utils/speech';
 import {
   LabQuestion,
   LabChunk,
@@ -202,21 +201,52 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     setStepStatus('playing_chunk');
 
     const chunk = currentChunks[chunkIndex];
+    const chunkWords = chunk.text.trim().split(/\s+/).filter(Boolean);
+    let wordIdx = 0;
     setStepWordIdx(0);
 
-    const rateMultiplier = Math.max(0.6, Math.min(1.8, targetSpeedWpm / 110));
-    speakNaturalWithWordTracking(
-      chunk.text,
-      rateMultiplier,
-      (wIdx) => {
-        setStepWordIdx(wIdx);
-      },
-      () => {
+    const speakAndStepWord = () => {
+      if (wordIdx >= chunkWords.length) {
+        if (playbackTimerRef.current) {
+          clearInterval(playbackTimerRef.current);
+          playbackTimerRef.current = null;
+        }
+        stopPlayback();
+        setStepWordIdx(-1);
+        setStepStatus('paused_at_boundary');
+        return;
+      }
+
+      const word = chunkWords[wordIdx];
+      setStepWordIdx(wordIdx);
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(word.replace(/[^a-zA-Z0-9'-]/g, ''));
+        utterance.lang = 'en-US';
+        const rateMultiplier = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 100));
+        utterance.rate = rateMultiplier;
+        window.speechSynthesis.speak(utterance);
+      }
+
+      wordIdx++;
+    };
+
+    speakAndStepWord();
+    const intervalMs = Math.round((60 / targetSpeedWpm) * 1000);
+    playbackTimerRef.current = setInterval(() => {
+      if (wordIdx < chunkWords.length) {
+        speakAndStepWord();
+      } else {
+        if (playbackTimerRef.current) {
+          clearInterval(playbackTimerRef.current);
+          playbackTimerRef.current = null;
+        }
         stopPlayback();
         setStepWordIdx(-1);
         setStepStatus('paused_at_boundary');
       }
-    );
+    }, intervalMs);
   }, [currentQuestion, currentChunks, targetSpeedWpm, stopPlayback]);
 
   // Advance to next chunk in step-pause mode
@@ -284,19 +314,40 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       return;
     }
 
-    // 2. Word RSVP Continuous: Natural connected speech with onboundary word tracking
+    // 2. Word RSVP Continuous: Word by word interval reading
     if (displayMode === 'rsvp_word') {
-      const rateMultiplier = Math.max(0.6, Math.min(1.8, targetSpeedWpm / 110));
-      speakNaturalWithWordTracking(
-        currentQuestion.sentenceEn,
-        rateMultiplier,
-        (wIdx) => {
-          setActiveWordIndex(wIdx);
-        },
-        () => {
+      let currentWordIdx = 0;
+      setActiveWordIndex(0);
+
+      const speakNextWord = () => {
+        if (currentWordIdx >= words.length) {
+          stopPlayback();
+          return;
+        }
+
+        const word = words[currentWordIdx];
+        setActiveWordIndex(currentWordIdx);
+
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(word.replace(/[^a-zA-Z0-9'-]/g, ''));
+          utterance.lang = 'en-US';
+          utterance.rate = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 100));
+          window.speechSynthesis.speak(utterance);
+        }
+
+        currentWordIdx++;
+      };
+
+      speakNextWord();
+      const intervalMs = Math.round((60 / targetSpeedWpm) * 1000);
+      playbackTimerRef.current = setInterval(() => {
+        if (currentWordIdx < words.length) {
+          speakNextWord();
+        } else {
           stopPlayback();
         }
-      );
+      }, intervalMs);
       return;
     }
 

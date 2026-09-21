@@ -21,7 +21,7 @@ import {
 import { Story, StoryListeningMetrics } from '../types/story';
 import { LabChunk } from '../types/listeningLab';
 import { splitIntoSmartChunks } from '../services/listeningLabService';
-import { speakNaturalWithWordTracking, stopSpeech } from '../utils/speech';
+import { stopSpeech } from '../utils/speech';
 
 interface StoryListeningStepViewProps {
   story: Story;
@@ -47,16 +47,16 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   onSkipToReader,
   onBackToBookshelf,
 }) => {
-  // Playback stream mode: 'sentence' (1文流し) vs 'chunk' (塊流し)
+  // Playback stream mode: 'sentence' (1文流し) vs 'chunk' (Thought Group流し)
   const [streamMode, setStreamMode] = useState<ListeningStreamMode>('sentence');
 
-  // Speed setting (WPM)
-  const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  // Speed setting (WPM) - 単語ごとのインターバル時間を直接制御
+  const [speedWpm, setSpeedWpm] = useState<number>(100);
 
   // Japanese translation toggle (hidden by default per user request)
   const [showTranslation, setShowTranslation] = useState<boolean>(false);
 
-  // Story breakdown into sentences, translations, and chunks
+  // Story breakdown into sentences, translations, and Thought Groups
   const sentenceList: StorySentenceItem[] = useMemo(() => {
     if (!story.storyContent) return [];
 
@@ -93,11 +93,11 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   const [stepWordIdx, setStepWordIdx] = useState<number>(-1);
   const [stepStatus, setStepStatus] = useState<StepStatus>('idle');
 
-  // Latency tracking metrics
+  // Latency tracking metrics & playback timer
   const pauseStartRef = useRef<number>(0);
   const latenciesRef = useRef<number[]>([]);
   const storyStartTimeRef = useRef<number>(Date.now());
-  const cancelSpeechRef = useRef<(() => void) | null>(null);
+  const playbackTimerRef = useRef<any>(null);
 
   const currentSentence = sentenceList[currentSentenceIdx] || null;
   const currentChunks = currentSentence ? currentSentence.chunks : [];
@@ -105,9 +105,9 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
   // Stop playback safely
   const stopPlayback = useCallback(() => {
-    if (cancelSpeechRef.current) {
-      cancelSpeechRef.current();
-      cancelSpeechRef.current = null;
+    if (playbackTimerRef.current) {
+      clearInterval(playbackTimerRef.current);
+      playbackTimerRef.current = null;
     }
     stopSpeech();
     setStepWordIdx(-1);
@@ -129,7 +129,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     setStepStatus('idle');
   };
 
-  // Play single item (1 sentence or 1 chunk)
+  // Play single item (1 sentence or 1 chunk) with word-by-word reading
   const playCurrentTarget = useCallback((sIdx: number, cIdx: number, mode: ListeningStreamMode) => {
     const targetSentence = sentenceList[sIdx];
     if (!targetSentence) {
@@ -144,51 +144,73 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     setCurrentChunkIdx(cIdx);
     setStepStatus('playing');
 
-    const rateMultiplier = playbackRate;
+    // 対象の単語リストを抽出
+    const targetText = mode === 'sentence'
+      ? targetSentence.text
+      : (targetSentence.chunks[cIdx]?.text || '');
 
-    if (mode === 'sentence') {
-      // 1文流しモード: 文全体を一気に自然発話（リンキング・弱形・イントネーション有効）
-      cancelSpeechRef.current = speakNaturalWithWordTracking(
-        targetSentence.text,
-        rateMultiplier,
-        (wIdx) => {
-          setStepWordIdx(wIdx);
-        },
-        () => {
-          setStepWordIdx(-1);
-          setStepStatus('paused_at_boundary');
-          pauseStartRef.current = Date.now();
+    const words = targetText.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      setStepStatus('paused_at_boundary');
+      return;
+    }
+
+    let currentWord = 0;
+    setStepWordIdx(0);
+
+    const speakSingleWord = (word: string) => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const cleanWord = word.replace(/[^a-zA-Z0-9'-]/g, '');
+        if (cleanWord) {
+          const utterance = new SpeechSynthesisUtterance(cleanWord);
+          utterance.lang = 'en-US';
+          const rateMultiplier = Math.max(0.7, Math.min(1.8, speedWpm / 100));
+          utterance.rate = rateMultiplier;
+          window.speechSynthesis.speak(utterance);
         }
-      );
-    } else {
-      // 塊流しモード: チャンク単位で自然発話
-      const targetChunks = targetSentence.chunks;
-      if (cIdx >= targetChunks.length) {
-        // Fallback to next sentence
-        if (sIdx + 1 < sentenceList.length) {
-          playCurrentTarget(sIdx + 1, 0, mode);
-        } else {
-          stopPlayback();
-          setStepStatus('all_completed');
+      }
+    };
+
+    const speakAndStepWord = () => {
+      if (currentWord >= words.length) {
+        if (playbackTimerRef.current) {
+          clearInterval(playbackTimerRef.current);
+          playbackTimerRef.current = null;
         }
+        stopPlayback();
+        setStepWordIdx(-1);
+        setStepStatus('paused_at_boundary');
+        pauseStartRef.current = Date.now();
         return;
       }
 
-      const chunk = targetChunks[cIdx];
-      cancelSpeechRef.current = speakNaturalWithWordTracking(
-        chunk.text,
-        rateMultiplier,
-        (wIdx) => {
-          setStepWordIdx(wIdx);
-        },
-        () => {
-          setStepWordIdx(-1);
-          setStepStatus('paused_at_boundary');
-          pauseStartRef.current = Date.now();
+      const word = words[currentWord];
+      setStepWordIdx(currentWord);
+      speakSingleWord(word);
+      currentWord++;
+    };
+
+    // 1単語目を即座に発話
+    speakAndStepWord();
+
+    // WPMに基づく等間隔タイマーで単語を1つずつ進める
+    const intervalMs = Math.round((60 / speedWpm) * 1000);
+    playbackTimerRef.current = setInterval(() => {
+      if (currentWord < words.length) {
+        speakAndStepWord();
+      } else {
+        if (playbackTimerRef.current) {
+          clearInterval(playbackTimerRef.current);
+          playbackTimerRef.current = null;
         }
-      );
-    }
-  }, [sentenceList, playbackRate, stopPlayback]);
+        stopPlayback();
+        setStepWordIdx(-1);
+        setStepStatus('paused_at_boundary');
+        pauseStartRef.current = Date.now();
+      }
+    }, intervalMs);
+  }, [sentenceList, speedWpm, stopPlayback]);
 
   // Advance to next step
   const handleAdvance = useCallback(() => {
@@ -211,7 +233,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
         setStepStatus('all_completed');
       }
     } else {
-      // 塊流し: 次のチャンクまたは次の文へ
+      // Thought Group流し: 次のチャンクまたは次の文へ
       if (!currentSentence) return;
       if (currentChunkIdx + 1 < currentChunks.length) {
         const nextCIdx = currentChunkIdx + 1;
@@ -335,7 +357,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             <div className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[10px]">
               1
             </div>
-            <span>初見リスニング（{streamMode === 'sentence' ? '1文流し' : '塊流し'}・変数 $X$ 処理）</span>
+            <span>初見リスニング（{streamMode === 'sentence' ? '1文流し' : 'Thought Group'}・単語同期）</span>
           </div>
 
           <div className="text-slate-600 font-mono">────▶</div>
@@ -395,9 +417,9 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             </div>
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 col-span-2 sm:col-span-1">
-              <span className="text-[11px] text-slate-400 font-bold">再生速度</span>
+              <span className="text-[11px] text-slate-400 font-bold">設定再生速度</span>
               <div className="text-xl sm:text-2xl font-black text-indigo-400 font-mono">
-                {playbackRate.toFixed(1)} <span className="text-xs font-normal text-slate-400">x</span>
+                {speedWpm} <span className="text-xs font-normal text-slate-400">WPM</span>
               </div>
             </div>
           </div>
@@ -406,7 +428,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
           <div className="pt-4">
             <button
               onClick={handleFinishAndOpenReader}
-              className="flex items-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-base sm:text-lg font-black shadow-xl shadow-indigo-600/30 transition-all mx-auto active:scale-95"
+              className="flex items-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-base sm:text-lg font-black shadow-xl shadow-indigo-600/30 transition-all mx-auto active:scale-95 cursor-pointer"
             >
               <BookOpen className="w-5 h-5" />
               <span>📖 リーダーを開いて精読 ＆ Anki送りへ進む ▶</span>
@@ -459,7 +481,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               )}
             </div>
 
-            {/* Speed spinner */}
+            {/* Speed spinner (WPM) */}
             <div className="flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-xs">
               <span className="text-slate-400 font-semibold flex items-center gap-1 mr-1">
                 <Zap className="w-3.5 h-3.5 text-cyan-400" />
@@ -467,18 +489,18 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() => setPlaybackRate(prev => Math.max(0.6, Number((prev - 0.1).toFixed(1))))}
+                onClick={() => setSpeedWpm(prev => Math.max(50, prev - 10))}
                 className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
                 title="遅く"
               >
                 <Minus className="w-3 h-3" />
               </button>
-              <span className="font-mono font-bold text-cyan-300 min-w-[45px] text-center">
-                {playbackRate.toFixed(1)}x
+              <span className="font-mono font-bold text-cyan-300 min-w-[50px] text-center">
+                {speedWpm} WPM
               </span>
               <button
                 type="button"
-                onClick={() => setPlaybackRate(prev => Math.min(1.8, Number((prev + 0.1).toFixed(1))))}
+                onClick={() => setSpeedWpm(prev => Math.min(250, prev + 10))}
                 className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
                 title="速く"
               >
@@ -501,29 +523,29 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                   </h3>
                   <p className="text-xs text-slate-400 leading-relaxed">
                     {streamMode === 'sentence'
-                      ? '自然な文章発話で1文が一気に再生され、文末で一時停止します。和訳はボタンを押すと確認できます。'
-                      : '意味・認知のまとまり（Thought Group）ごとに自然な発音で再生され、切れ目（/）で一時停止します。'}
+                      ? '単語ごとに音声が再生され、1文の終わりで一時停止します。和訳はボタンを押すと確認できます。'
+                      : '意味・認知のまとまり（Thought Group）ごとに単語が再生され、切れ目で一時停止します。'}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => playCurrentTarget(0, 0, streamMode)}
-                  className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 mx-auto"
+                  className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 mx-auto cursor-pointer"
                 >
                   <Play className="w-4 h-4 fill-white" />
                   <span>▶️ リスニング開始（Spaceキー）</span>
                 </button>
               </div>
             ) : stepStatus === 'playing' ? (
-              /* Playing: Streaming words with natural speech synchronization */
+              /* Playing: Streaming words with exact interval word-by-word reading */
               <div className="space-y-4 w-full max-w-2xl mx-auto animate-in fade-in zoom-in-95 duration-100">
                 <div className="flex items-center justify-center gap-2">
                   <span className="px-3 py-1 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono text-xs font-bold flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
                     <span>
                       {streamMode === 'sentence'
-                        ? `文 ${currentSentenceIdx + 1} / ${sentenceList.length} 再生中...`
-                        : `Chunk ${currentChunkIdx + 1} / ${currentChunks.length} 再生中...`}
+                        ? `文 ${currentSentenceIdx + 1} / ${sentenceList.length} 再生中... (${(stepWordIdx + 1)} / ${currentSentenceWords.length}語)`
+                        : `Chunk ${currentChunkIdx + 1} / ${currentChunks.length} 再生中... (${(stepWordIdx + 1)} / ${currentChunkWords.length}語)`}
                     </span>
                   </span>
                 </div>
@@ -566,7 +588,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                 )}
 
                 <p className="text-xs text-slate-500 font-medium">
-                  自然な発音（音声変化・リンキング）を耳と目でキャッチしてください
+                  {speedWpm} WPM の速度で1語ずつ発話・表示中
                 </p>
               </div>
             ) : stepStatus === 'paused_at_boundary' ? (
@@ -578,7 +600,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                     <span>
                       {streamMode === 'sentence'
                         ? `文 ${currentSentenceIdx + 1} / ${sentenceList.length} 再生完了`
-                        : `Chunk ${currentChunkIdx + 1} / ${currentChunks.length} 完了（切れ目: ／）`}
+                        : `Thought Group ${currentChunkIdx + 1} / ${currentChunks.length} 完了（切れ目: ／）`}
                     </span>
                   </span>
                 </div>
@@ -592,7 +614,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                   </div>
                   {streamMode === 'chunk' && currentChunk?.boundaryReason && (
                     <div className="text-[11px] text-slate-500 font-mono">
-                      Thought Group区分: {currentChunk.boundaryReason}
+                      区分: {currentChunk.boundaryReason}
                     </div>
                   )}
                 </div>
@@ -603,7 +625,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowTranslation(prev => !prev)}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-slate-850 hover:bg-slate-800 text-xs font-bold text-sky-300 hover:text-sky-200 border border-sky-500/30 transition-all active:scale-95 shadow"
+                      className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-slate-850 hover:bg-slate-800 text-xs font-bold text-sky-300 hover:text-sky-200 border border-sky-500/30 transition-all active:scale-95 shadow cursor-pointer"
                     >
                       {showTranslation ? (
                         <>
@@ -647,7 +669,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                   <button
                     type="button"
                     onClick={handleAdvance}
-                    className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
+                    className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 cursor-pointer"
                   >
                     <SkipForward className="w-4 h-4" />
                     <span>
@@ -656,7 +678,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                           ? `次の文（文 ${currentSentenceIdx + 2}/${sentenceList.length}）へ ▶ (Space)`
                           : '🎉 全文完了！サマリーへ 🚀'
                         : currentChunkIdx + 1 < currentChunks.length
-                        ? `次のチャンク（${currentChunkIdx + 2}/${currentChunks.length}）へ ▶ (Space)`
+                        ? `次のThought Group（${currentChunkIdx + 2}/${currentChunks.length}）へ ▶ (Space)`
                         : currentSentenceIdx + 1 < sentenceList.length
                         ? `次の文（文 ${currentSentenceIdx + 2}/${sentenceList.length}）へ ▶ (Space)`
                         : '🎉 全文完了！サマリーへ 🚀'}
@@ -666,7 +688,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                   <button
                     type="button"
                     onClick={() => playCurrentTarget(currentSentenceIdx, currentChunkIdx, streamMode)}
-                    className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all"
+                    className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
                     <span>再聴</span>
