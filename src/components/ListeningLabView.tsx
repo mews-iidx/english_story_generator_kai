@@ -22,11 +22,14 @@ import {
   ChevronDown,
   ChevronRight,
   TrendingUp,
-  Scissors
+  Scissors,
+  Pause,
+  SkipForward
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
 import {
   LabQuestion,
+  LabChunk,
   LabDiagnosisResult,
   LabQuestionRecord,
   LabAnalyticsSummary,
@@ -51,7 +54,8 @@ interface ListeningLabViewProps {
 const WORD_COUNT_OPTIONS = [4, 6, 8, 12, 16, 20] as const;
 
 type ActiveTab = 'training' | 'analytics';
-type DisplayMode = 'audio_only' | 'rsvp_chunk' | 'rsvp_word' | 'text_reveal';
+type DisplayMode = 'chunk_step_pause' | 'audio_only' | 'rsvp_chunk' | 'rsvp_word' | 'text_reveal';
+type StepStatus = 'idle' | 'playing_chunk' | 'paused_at_boundary' | 'all_chunks_done';
 
 export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   apiKey,
@@ -63,20 +67,25 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   // Configuration State
   const [targetWordCount, setTargetWordCount] = useState<number>(4);
   const [targetSpeedWpm, setTargetSpeedWpm] = useState<number>(60);
-  const [displayMode, setDisplayMode] = useState<DisplayMode>('audio_only');
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('chunk_step_pause');
   const cefrLevel = userLevel;
 
-  // Batch Session State
+  // Batch Session State (Initially empty, user clicks to generate explicitly)
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => 'sess_' + Date.now());
   const [questions, setQuestions] = useState<LabQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isGeneratingBatch, setIsGeneratingBatch] = useState<boolean>(false);
 
-  // Playback & RSVP Flash State
+  // Playback & Continuous RSVP State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [activeWordIndex, setActiveWordIndex] = useState<number>(-1);
   const [activeChunkIndex, setActiveChunkIndex] = useState<number>(-1);
   const playbackTimerRef = useRef<any>(null);
+
+  // Chunk-Step-Pause Interactive State
+  const [stepChunkIdx, setStepChunkIdx] = useState<number>(0);
+  const [stepWordIdx, setStepWordIdx] = useState<number>(-1);
+  const [stepStatus, setStepStatus] = useState<StepStatus>('idle');
 
   // User Input & AI Diagnosis State
   const [userResponse, setUserResponse] = useState<string>('');
@@ -90,6 +99,14 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   const currentQuestion = questions[currentIndex] || null;
+
+  const currentChunks: LabChunk[] = useMemo(() => {
+    if (!currentQuestion) return [];
+    if (currentQuestion.chunks && currentQuestion.chunks.length > 0) {
+      return currentQuestion.chunks;
+    }
+    return splitIntoSmartChunks(currentQuestion.sentenceEn, currentQuestion.translationJa);
+  }, [currentQuestion]);
 
   // Speed level guide helper
   const speedGuide = useMemo(() => {
@@ -106,9 +123,38 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     setAnalytics(calculateLabAnalytics());
   }, []);
 
-  // Generate a batch of 5 questions
+  // Stop playback on unmount or question change
+  const stopPlayback = useCallback(() => {
+    if (playbackTimerRef.current) {
+      clearTimeout(playbackTimerRef.current);
+      clearInterval(playbackTimerRef.current);
+      playbackTimerRef.current = null;
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsPlaying(false);
+    setActiveWordIndex(-1);
+    setActiveChunkIndex(-1);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopPlayback();
+    };
+  }, [stopPlayback]);
+
+  // Reset interactive step state on question change
+  useEffect(() => {
+    setStepChunkIdx(0);
+    setStepWordIdx(-1);
+    setStepStatus('idle');
+  }, [currentIndex, questions]);
+
+  // Generate a batch of 5 questions (Triggered explicitly by user)
   const handleGenerateBatch = useCallback(async () => {
     if (isGeneratingBatch) return;
+    stopPlayback();
     setIsGeneratingBatch(true);
     const newSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     setCurrentSessionId(newSessionId);
@@ -118,6 +164,9 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     setIsSessionCompleted(false);
     setActiveWordIndex(-1);
     setActiveChunkIndex(-1);
+    setStepChunkIdx(0);
+    setStepWordIdx(-1);
+    setStepStatus('idle');
 
     try {
       const batch = await generateLabBatch({
@@ -134,73 +183,115 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     } finally {
       setIsGeneratingBatch(false);
     }
-  }, [targetWordCount, targetSpeedWpm, cefrLevel, apiKey, selectedModel, isGeneratingBatch]);
+  }, [targetWordCount, targetSpeedWpm, cefrLevel, apiKey, selectedModel, isGeneratingBatch, stopPlayback]);
 
-  // Initial batch load
-  useEffect(() => {
-    if (questions.length === 0 && !isGeneratingBatch) {
-      handleGenerateBatch();
-    }
-  }, []);
+  // ===================== PLAYBACK ENGINES =====================
 
-  // Stop playback on unmount or question change
-  const stopPlayback = () => {
-    if (playbackTimerRef.current) {
-      clearTimeout(playbackTimerRef.current);
-      clearInterval(playbackTimerRef.current);
-      playbackTimerRef.current = null;
+  // Interactive Chunk-Step-Pause: Play a single chunk with word flash and pause at boundary
+  const playStepChunk = useCallback((chunkIndex: number) => {
+    if (!currentQuestion || currentChunks.length === 0) return;
+    if (chunkIndex >= currentChunks.length) {
+      setStepStatus('all_chunks_done');
+      return;
     }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-    setIsPlaying(false);
-    setActiveWordIndex(-1);
-    setActiveChunkIndex(-1);
-  };
 
-  useEffect(() => {
-    return () => {
-      stopPlayback();
+    stopPlayback();
+    setIsPlaying(true);
+    setStepChunkIdx(chunkIndex);
+    setStepStatus('playing_chunk');
+
+    const chunk = currentChunks[chunkIndex];
+    const chunkWords = chunk.text.trim().split(/\s+/).filter(Boolean);
+
+    let wordIdx = 0;
+    setStepWordIdx(0);
+
+    const speakAndStepWord = () => {
+      if (wordIdx >= chunkWords.length) {
+        // Chunk finished -> Pause at boundary for compression!
+        stopPlayback();
+        setStepWordIdx(-1);
+        setStepStatus('paused_at_boundary');
+        return;
+      }
+
+      const word = chunkWords[wordIdx];
+      setStepWordIdx(wordIdx);
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(word);
+        utterance.lang = 'en-US';
+        const rateMultiplier = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 100));
+        utterance.rate = rateMultiplier;
+        window.speechSynthesis.speak(utterance);
+      }
+
+      wordIdx++;
     };
-  }, []);
 
-  // Step-by-step Audio & RSVP Playback Engine
-  const playCurrentQuestion = () => {
+    speakAndStepWord();
+    const intervalMs = Math.round((60 / targetSpeedWpm) * 1000);
+    playbackTimerRef.current = setInterval(() => {
+      if (wordIdx < chunkWords.length) {
+        speakAndStepWord();
+      } else {
+        if (playbackTimerRef.current) {
+          clearInterval(playbackTimerRef.current);
+          playbackTimerRef.current = null;
+        }
+        stopPlayback();
+        setStepWordIdx(-1);
+        setStepStatus('paused_at_boundary');
+      }
+    }, intervalMs);
+  }, [currentQuestion, currentChunks, targetSpeedWpm, stopPlayback]);
+
+  // Advance to next chunk in step-pause mode
+  const handleAdvanceStepChunk = useCallback(() => {
+    if (stepChunkIdx + 1 < currentChunks.length) {
+      const nextIdx = stepChunkIdx + 1;
+      setStepChunkIdx(nextIdx);
+      playStepChunk(nextIdx);
+    } else {
+      setStepStatus('all_chunks_done');
+    }
+  }, [stepChunkIdx, currentChunks.length, playStepChunk]);
+
+  // Standard / Continuous Playback Engine (Audio-only / RSVP Continuous / Text Reveal)
+  const playContinuousQuestion = useCallback(() => {
     if (!currentQuestion) return;
     stopPlayback();
     setIsPlaying(true);
 
     const words = currentQuestion.words;
-    const chunks = currentQuestion.chunks && currentQuestion.chunks.length > 0
-      ? currentQuestion.chunks
-      : splitIntoSmartChunks(currentQuestion.sentenceEn, currentQuestion.translationJa);
+    const chunks = currentChunks;
 
-    // 1. Chunk RSVP Mode: Play chunk-by-chunk with visual synchronization
+    // 1. Chunk RSVP Continuous: Sequential flash of chunks without stopping
     if (displayMode === 'rsvp_chunk') {
-      let chunkIdx = 0;
+      let cIdx = 0;
       setActiveChunkIndex(0);
 
-      const playNextChunk = () => {
-        if (chunkIdx >= chunks.length) {
+      const playNextContinuousChunk = () => {
+        if (cIdx >= chunks.length) {
           stopPlayback();
           return;
         }
 
-        const currentChunk = chunks[chunkIdx];
-        setActiveChunkIndex(chunkIdx);
+        const chunk = chunks[cIdx];
+        setActiveChunkIndex(cIdx);
 
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(currentChunk.text);
+          const utterance = new SpeechSynthesisUtterance(chunk.text);
           utterance.lang = 'en-US';
-          const rateMultiplier = Math.max(0.6, Math.min(1.8, targetSpeedWpm / 110));
+          const rateMultiplier = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 110));
           utterance.rate = rateMultiplier;
 
           utterance.onend = () => {
-            chunkIdx++;
-            if (chunkIdx < chunks.length) {
-              // Pause slightly between chunks to allow brain packing
-              playbackTimerRef.current = setTimeout(playNextChunk, 250);
+            cIdx++;
+            if (cIdx < chunks.length) {
+              playbackTimerRef.current = setTimeout(playNextContinuousChunk, 200);
             } else {
               stopPlayback();
             }
@@ -212,17 +303,16 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
 
           window.speechSynthesis.speak(utterance);
         } else {
-          // Fallback if no TTS
-          chunkIdx++;
-          playbackTimerRef.current = setTimeout(playNextChunk, 1000);
+          cIdx++;
+          playbackTimerRef.current = setTimeout(playNextContinuousChunk, 900);
         }
       };
 
-      playNextChunk();
+      playNextContinuousChunk();
       return;
     }
 
-    // 2. Word RSVP Mode or Slow Stepped Speech (<= 80 WPM)
+    // 2. Word RSVP Continuous or Slow Stepped Speech (<= 80 WPM)
     if (displayMode === 'rsvp_word' || targetSpeedWpm <= 80) {
       let currentWordIdx = 0;
       setActiveWordIndex(0);
@@ -259,7 +349,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       return;
     }
 
-    // 3. Standard Continuous Flow (Audio Only / Text Reveal)
+    // 3. Standard Continuous Audio Stream
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(currentQuestion.sentenceEn);
@@ -281,7 +371,33 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
         setIsPlaying(false);
       }, (words.length / (targetSpeedWpm / 60)) * 1000);
     }
-  };
+  }, [currentQuestion, currentChunks, displayMode, targetSpeedWpm, stopPlayback]);
+
+  // Space / Enter Keyboard Shortcut for step advancement
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (activeTab !== 'training') return;
+      // Do not capture if focused in input or textarea
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      if (e.code === 'Space' || e.code === 'Enter') {
+        if (displayMode === 'chunk_step_pause') {
+          e.preventDefault();
+          if (stepStatus === 'idle') {
+            playStepChunk(0);
+          } else if (stepStatus === 'paused_at_boundary') {
+            handleAdvanceStepChunk();
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, displayMode, stepStatus, playStepChunk, handleAdvanceStepChunk]);
 
   // Adjust WPM by delta (+10 / -10)
   const handleAdjustWpm = (delta: number) => {
@@ -345,6 +461,9 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       setDiagnosisResult(null);
       setActiveWordIndex(-1);
       setActiveChunkIndex(-1);
+      setStepChunkIdx(0);
+      setStepWordIdx(-1);
+      setStepStatus('idle');
     } else {
       setIsSessionCompleted(true);
     }
@@ -392,7 +511,6 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     }
   };
 
-  // Bandwidth matrix headers
   const matrixWpmColumns = [60, 80, 100, 120, 150, 180, 200];
 
   const getCellColor = (cell?: { avgScore: number; attempts: number }) => {
@@ -401,10 +519,6 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     if (cell.avgScore >= 70) return 'bg-amber-950/80 text-amber-300 border-amber-500/40 font-bold';
     return 'bg-red-950/80 text-red-300 border-red-500/40 font-bold';
   };
-
-  const currentChunks = currentQuestion?.chunks && currentQuestion.chunks.length > 0
-    ? currentQuestion.chunks
-    : (currentQuestion ? splitIntoSmartChunks(currentQuestion.sentenceEn, currentQuestion.translationJa) : []);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-16 animate-fadeIn">
@@ -426,7 +540,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               </h1>
             </div>
             <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
-              単語数 × 速度（WPM）をコントロールし、<strong>「全文キャッシュ癖（最後まで聞いてから訳す癖）」</strong>を脱却して<strong>「チャンク即時パッキング」</strong>を身体化する実験室。
+              単語数 × 速度（WPM）を調整し、<strong>「全文キャッシュ癖」</strong>を壊して<strong>「チャンクごとの即時情景パッキング」</strong>を身体化する実験室。
             </p>
           </div>
 
@@ -538,7 +652,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               </div>
             </div>
 
-            {/* Control 3: Display Mode (Audio Only / Chunk RSVP / Word RSVP / Text Reveal) */}
+            {/* Control 3: Display Mode */}
             <div>
               <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1">
                 <Headphones className="w-3.5 h-3.5 text-emerald-400" />
@@ -549,9 +663,10 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
                 className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-1.5 font-semibold focus:outline-none focus:border-indigo-500"
               >
-                <option value="audio_only">🎧 音声のみ（推奨・耳に全集中）</option>
-                <option value="rsvp_chunk">⚡ 1チャンクRSVPフラッシュ（意味の塊でフラッシュ）</option>
-                <option value="rsvp_word">🔤 1単語RSVPフラッシュ（1語ずつテンポ良く）</option>
+                <option value="chunk_step_pause">⏸️ チャンク一時停止（単語フラッシュ＋切れ目で停止して脳内圧縮） ⭐推奨</option>
+                <option value="audio_only">🎧 音声のみ（全文連続・耳に全集中）</option>
+                <option value="rsvp_chunk">⚡ 1チャンクRSVP（英語塊で連続フラッシュ）</option>
+                <option value="rsvp_word">🔤 1単語RSVP（1語ずつ連続フラッシュ）</option>
                 <option value="text_reveal">📖 全文テキスト表示</option>
               </select>
             </div>
@@ -559,17 +674,17 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
             {/* Action Buttons */}
             <div className="col-span-full flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
               <span className="text-xs text-slate-400 font-medium">
-                現在の設定: <strong className="text-indigo-300">{targetWordCount}単語</strong> × <strong className="text-cyan-300">{targetSpeedWpm} WPM</strong>
+                設定: <strong className="text-indigo-300">{targetWordCount}単語</strong> × <strong className="text-cyan-300">{targetSpeedWpm} WPM</strong>
               </span>
 
               <button
                 type="button"
                 onClick={handleGenerateBatch}
                 disabled={isGeneratingBatch}
-                className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600/90 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md"
+                className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600/90 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isGeneratingBatch ? 'animate-spin' : ''}`} />
-                <span>{isGeneratingBatch ? '問題セットを生成中...' : 'この設定で新しい5問を生成'}</span>
+                <span>{isGeneratingBatch ? '問題セットを生成中...' : '新しい5問を生成して開始'}</span>
               </button>
             </div>
           </div>
@@ -579,7 +694,67 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       {/* 2. Main Content: Training Mode */}
       {activeTab === 'training' && (
         <div className="space-y-6">
-          {isGeneratingBatch ? (
+          {/* Welcome Screen (When no questions generated yet) */}
+          {questions.length === 0 && !isGeneratingBatch ? (
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-6 shadow-2xl animate-fadeIn">
+              <div className="w-16 h-16 bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-indigo-500/10">
+                <Brain className="w-8 h-8" />
+              </div>
+              <div className="max-w-xl mx-auto space-y-2">
+                <h2 className="text-xl sm:text-2xl font-black text-white">
+                  リスニング実験室へようこそ
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                  上のバーでお好みの<strong>【単語数】</strong>と<strong>【再生速度（WPM）】</strong>、<strong>【トレーニングモード】</strong>を設定し、下のボタンを押して5問セッションを開始してください。
+                </p>
+              </div>
+
+              {/* Feature Highlights */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl mx-auto text-left text-xs">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-1">
+                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
+                    <Pause className="w-4 h-4 text-cyan-400" />
+                    <span>チャンク一時停止</span>
+                  </div>
+                  <p className="text-slate-400 text-[11px]">
+                    意味の切れ目（/）で止まり、脳内で情景を圧縮して音を捨てるリズムを訓練。
+                  </p>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <Activity className="w-4 h-4 text-indigo-400" />
+                    <span>WPM 限界測定</span>
+                  </div>
+                  <p className="text-slate-400 text-[11px]">
+                    10刻みで速度を変え、自分の脳のキャパシティ境界（成長フロンティア）を発見。
+                  </p>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-1">
+                  <div className="font-bold text-emerald-300 flex items-center gap-1.5">
+                    <Scissors className="w-4 h-4 text-emerald-400" />
+                    <span>常時チャンク解剖</span>
+                  </div>
+                  <p className="text-slate-400 text-[11px]">
+                    回答後にどこで区切るべきだったかの解剖と直読直解ガイドを詳細表示。
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={handleGenerateBatch}
+                  className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-sm sm:text-base font-black shadow-xl shadow-indigo-600/30 transition-all mx-auto active:scale-95"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>【{targetWordCount}単語 × {targetSpeedWpm} WPM】で5問セットを生成して開始</span>
+                </button>
+              </div>
+            </div>
+          ) : isGeneratingBatch ? (
+            /* Generating Screen */
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-12 text-center space-y-4 shadow-2xl">
               <RefreshCw className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
               <div className="space-y-1">
@@ -640,98 +815,206 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                   </span>
                 </div>
 
-                {currentQuestion.keyPoints && (
-                  <span className="text-[11px] text-slate-500 font-mono hidden sm:inline-block">
-                    構文: {currentQuestion.keyPoints}
-                  </span>
-                )}
+                <span className="text-[11px] text-indigo-300 font-mono hidden sm:inline-block">
+                  モード: {displayMode === 'chunk_step_pause' ? '⏸️ チャンク一時停止' : displayMode === 'audio_only' ? '🎧 音声のみ' : displayMode === 'rsvp_chunk' ? '⚡ チャンクRSVP' : displayMode === 'rsvp_word' ? '🔤 単語RSVP' : '📖 テキスト'}
+                </span>
               </div>
 
-              {/* Playback & Visualization Stage */}
-              <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-6 sm:p-10 text-center space-y-6 shadow-inner min-h-[220px] flex flex-col justify-center items-center">
-                {displayMode === 'rsvp_chunk' && isPlaying && activeChunkIndex >= 0 ? (
-                  /* 1-Chunk RSVP Flash Mode */
-                  <div className="space-y-3 animate-in fade-in zoom-in-95 duration-150">
-                    <div className="flex items-center justify-center gap-2">
+              {/* ================= STAGE 1: CHUNK STEP PAUSE MODE ================= */}
+              {displayMode === 'chunk_step_pause' && !diagnosisResult ? (
+                <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-6 sm:p-10 text-center space-y-6 shadow-inner min-h-[250px] flex flex-col justify-center items-center">
+                  {stepStatus === 'idle' ? (
+                    <div className="space-y-4">
+                      <div className="w-12 h-12 bg-indigo-500/20 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/30">
+                        <Play className="w-6 h-6 fill-indigo-400 ml-0.5" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-base sm:text-lg font-bold text-white">
+                          第 {currentIndex + 1} 問（全 {currentChunks.length} チャンク）
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          単語が1語ずつ流れ、チャンクの切れ目で自動一時停止します。
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => playStepChunk(0)}
+                        className="flex items-center space-x-2 px-8 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/25 transition-all active:scale-95 mx-auto"
+                      >
+                        <Play className="w-4 h-4 fill-white" />
+                        <span>▶️ 第1チャンクを再生（Spaceキー）</span>
+                      </button>
+                    </div>
+                  ) : stepStatus === 'playing_chunk' ? (
+                    /* Word is currently flashing within the current chunk */
+                    <div className="space-y-3 animate-in fade-in zoom-in-95 duration-100">
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono text-[11px] font-bold">
+                          Chunk {stepChunkIdx + 1} / {currentChunks.length} 再生中...
+                        </span>
+                      </div>
+                      <div className="text-4xl sm:text-6xl font-black text-white font-mono tracking-wide py-2">
+                        {stepWordIdx >= 0 ? currentChunks[stepChunkIdx]?.text.trim().split(/\s+/)[stepWordIdx] : '...'}
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        耳と目で1語ずつキャッチしてください
+                      </p>
+                    </div>
+                  ) : stepStatus === 'paused_at_boundary' ? (
+                    /* Paused at chunk boundary for instant compression! */
+                    <div className="space-y-5 animate-in fade-in zoom-in-95 duration-200 max-w-md mx-auto">
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="px-3 py-1 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow">
+                          <Pause className="w-3.5 h-3.5" />
+                          <span>Chunk {stepChunkIdx + 1} / {currentChunks.length} 完了（切れ目: ／）</span>
+                        </span>
+                      </div>
+
+                      {/* Brain compression cue */}
+                      <div className="p-4 bg-slate-900 border border-amber-500/30 rounded-2xl space-y-1.5 shadow-lg">
+                        <div className="text-xs font-black text-amber-300 flex items-center justify-center gap-1">
+                          <Brain className="w-4 h-4 text-amber-400" />
+                          <span>🧠【脳内圧縮タイム】</span>
+                        </div>
+                        <p className="text-xs text-slate-200 leading-relaxed">
+                          ここまでを<strong>頭の中で情景（イメージ）に変換</strong>し、生の英語の「音」はゴミ箱に消去（キャッシュ解放）してください！
+                        </p>
+                      </div>
+
+                      {/* Control Buttons */}
+                      <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleAdvanceStepChunk}
+                          className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
+                        >
+                          <SkipForward className="w-4 h-4" />
+                          <span>
+                            {stepChunkIdx + 1 < currentChunks.length
+                              ? `次のチャンク（${stepChunkIdx + 2}/${currentChunks.length}）へ ▶ (Space)`
+                              : '🎉 全チャンク完了！回答入力へ ✍️'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => playStepChunk(stepChunkIdx)}
+                          className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                          <span>このチャンクを再聴</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => playStepChunk(0)}
+                          className="px-3 py-3 bg-slate-850 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-2xl text-xs font-semibold border border-slate-800 transition-all"
+                          title="最初から全チャンクを聴き直す"
+                        >
+                          最初から
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* All chunks finished in step mode */
+                    <div className="space-y-4 text-center">
+                      <div className="w-12 h-12 bg-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mx-auto border border-emerald-500/30">
+                        <Check className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-base sm:text-lg font-bold text-white">
+                          全 {currentChunks.length} チャンクの再生が完了しました！
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          下の枠に、頭の中で組み立てた意味や聞き取れた内容を入力してください。
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => playStepChunk(0)}
+                        className="flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-bold border border-slate-700 transition-all mx-auto"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                        <span>もう一度最初から聴き直す</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* ================= STAGE 2: OTHER CONTINUOUS MODES ================= */
+                <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-6 sm:p-10 text-center space-y-6 shadow-inner min-h-[220px] flex flex-col justify-center items-center">
+                  {displayMode === 'rsvp_chunk' && isPlaying && activeChunkIndex >= 0 ? (
+                    /* 1-Chunk RSVP Continuous Flash Mode (English only during playback) */
+                    <div className="space-y-3 animate-in fade-in zoom-in-95 duration-150">
                       <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-mono text-[11px] font-bold">
                         Chunk {activeChunkIndex + 1} / {currentChunks.length}
                       </span>
-                      {currentChunks[activeChunkIndex]?.boundaryReason && (
-                        <span className="text-[11px] text-slate-400">
-                          📍 {currentChunks[activeChunkIndex].boundaryReason}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-2xl sm:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-white to-indigo-300 font-mono tracking-wide py-2">
-                      {currentChunks[activeChunkIndex]?.text}
-                    </div>
-                    {currentChunks[activeChunkIndex]?.translationJa && (
-                      <div className="text-xs sm:text-sm text-indigo-300/80 font-sans">
-                        （{currentChunks[activeChunkIndex].translationJa}）
+                      <div className="text-2xl sm:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-white to-indigo-300 font-mono tracking-wide py-2">
+                        {currentChunks[activeChunkIndex]?.text}
                       </div>
-                    )}
-                  </div>
-                ) : displayMode === 'rsvp_word' && isPlaying && activeWordIndex >= 0 ? (
-                  /* 1-Word RSVP Flash Mode */
-                  <div className="space-y-2 animate-in fade-in zoom-in-95 duration-100">
-                    <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest block">
-                      Word {activeWordIndex + 1} / {currentQuestion.words.length}
-                    </span>
-                    <div className="text-3xl sm:text-5xl font-black text-white font-mono tracking-wide">
-                      {currentQuestion.words[activeWordIndex]}
                     </div>
-                  </div>
-                ) : displayMode === 'text_reveal' || diagnosisResult ? (
-                  /* Text Reveal Mode (or when diagnosed) */
-                  <div className="space-y-2 text-left sm:text-center w-full">
-                    <span className="text-[11px] font-bold text-slate-500 block uppercase tracking-wider">
-                      出題英文
-                    </span>
-                    <div className="text-xl sm:text-2xl font-bold text-white font-mono leading-relaxed">
-                      {currentQuestion.sentenceEn}
+                  ) : displayMode === 'rsvp_word' && isPlaying && activeWordIndex >= 0 ? (
+                    /* 1-Word RSVP Continuous Flash Mode */
+                    <div className="space-y-2 animate-in fade-in zoom-in-95 duration-100">
+                      <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest block">
+                        Word {activeWordIndex + 1} / {currentQuestion.words.length}
+                      </span>
+                      <div className="text-3xl sm:text-5xl font-black text-white font-mono tracking-wide">
+                        {currentQuestion.words[activeWordIndex]}
+                      </div>
                     </div>
-                    <div className="text-xs sm:text-sm text-slate-400 font-sans">
-                      訳: {currentQuestion.translationJa}
+                  ) : displayMode === 'text_reveal' || diagnosisResult ? (
+                    /* Text Reveal Mode (or when diagnosed) */
+                    <div className="space-y-2 text-left sm:text-center w-full">
+                      <span className="text-[11px] font-bold text-slate-500 block uppercase tracking-wider">
+                        出題英文
+                      </span>
+                      <div className="text-xl sm:text-2xl font-bold text-white font-mono leading-relaxed">
+                        {currentQuestion.sentenceEn}
+                      </div>
+                      <div className="text-xs sm:text-sm text-slate-400 font-sans">
+                        訳: {currentQuestion.translationJa}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  /* Pure Audio Mode (Default) */
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-center gap-1.5">
-                      <div className={`w-2 h-6 bg-cyan-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-75 h-10' : 'opacity-40'}`} />
-                      <div className={`w-2 h-8 bg-indigo-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-150 h-12' : 'opacity-40'}`} />
-                      <div className={`w-2 h-10 bg-purple-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-300 h-14' : 'opacity-40'}`} />
-                      <div className={`w-2 h-8 bg-indigo-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-150 h-12' : 'opacity-40'}`} />
-                      <div className={`w-2 h-6 bg-cyan-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-75 h-10' : 'opacity-40'}`} />
+                  ) : (
+                    /* Pure Audio Mode (Default) */
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <div className={`w-2 h-6 bg-cyan-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-75 h-10' : 'opacity-40'}`} />
+                        <div className={`w-2 h-8 bg-indigo-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-150 h-12' : 'opacity-40'}`} />
+                        <div className={`w-2 h-10 bg-purple-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-300 h-14' : 'opacity-40'}`} />
+                        <div className={`w-2 h-8 bg-indigo-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-150 h-12' : 'opacity-40'}`} />
+                        <div className={`w-2 h-6 bg-cyan-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-75 h-10' : 'opacity-40'}`} />
+                      </div>
+                      <p className="text-xs text-slate-400 font-medium">
+                        {isPlaying ? '🎧 音声を聴き取ってください...' : '耳に全集中して「再生」を押してください'}
+                      </p>
                     </div>
-                    <p className="text-xs text-slate-400 font-medium">
-                      {isPlaying ? '🎧 音声を聴き取ってください...' : '耳に全集中して「再生」を押してください'}
-                    </p>
-                  </div>
-                )}
+                  )}
 
-                {/* Big Play / Replay Buttons */}
-                <div className="flex items-center justify-center gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={playCurrentQuestion}
-                    disabled={isPlaying}
-                    className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/25 transition-all active:scale-95"
-                  >
-                    <Play className="w-4 h-4 fill-white" />
-                    <span>{isPlaying ? '再生中...' : '▶️ 再生！'}</span>
-                  </button>
+                  {/* Play Buttons for Continuous Modes */}
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={playContinuousQuestion}
+                      disabled={isPlaying}
+                      className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/25 transition-all active:scale-95"
+                    >
+                      <Play className="w-4 h-4 fill-white" />
+                      <span>{isPlaying ? '再生中...' : '▶️ 再生！'}</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={playCurrentQuestion}
-                    className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                    <span>もう一度聴く</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={playContinuousQuestion}
+                      className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                      <span>もう一度聴く</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Free-form User Reflection & Diagnosis Area */}
               {!diagnosisResult ? (
