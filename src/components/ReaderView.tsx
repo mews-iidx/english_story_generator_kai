@@ -709,11 +709,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <span className="text-slate-500 font-medium">ハイライト:</span>
               <span className="flex items-center space-x-1 text-amber-300 font-medium">
                 <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
-                <span>習得中</span>
-              </span>
-              <span className="flex items-center space-x-1 text-emerald-300 font-medium">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
-                <span>習得済み</span>
+                <span>習得中 / 要復習</span>
               </span>
               {showTargetHighlights && (
                 <>
@@ -801,12 +797,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       // 🔵 出題ターゲット単語（可視化ON時は最優先でスカイブルー強調！）
                       wordStyle = 'text-sky-300 underline decoration-sky-400/90 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/50 font-medium rounded px-0.5';
                     } else if (status === 'lapsed') {
-                      // 🟡 習得中 / 要復習（単語帳に登録中）
+                      // 🟡 習得中 / 要復習（単語帳に登録中・Anki学習中）
                       wordStyle = 'text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10';
-                    } else if (status === 'mastered') {
-                      // 🟢 習得済み（マスター済み・忘れた場合はタップで再登録可能）
-                      wordStyle = 'text-emerald-300/90 underline decoration-emerald-500/50 decoration-1 underline-offset-2 hover:text-emerald-200 hover:bg-emerald-500/10';
                     }
+                    // 既知・習得済み(mastered)単語は読書を邪魔しないよう通常テキストスタイルを維持
                   }
 
                   return (
