@@ -3,6 +3,7 @@ import {
   LabQuestion,
   LabDiagnosisResult,
   LabQuestionRecord,
+  LabSessionSummary,
   LabAnalyticsSummary,
   BandwidthMatrixData,
   LabBottleneckType
@@ -369,7 +370,10 @@ export function calculateLabAnalytics(): LabAnalyticsSummary {
 
   let totalScore = 0;
 
-  records.forEach((r) => {
+  // Group records into sessions
+  const sessionMap = new Map<string, LabQuestionRecord[]>();
+
+  records.forEach((r, idx) => {
     totalScore += r.diagnosis.comprehensionRate;
     const bType = r.diagnosis.bottleneckType || 'memory_overflow';
     if (bottleneckCounts[bType] !== undefined) {
@@ -388,13 +392,46 @@ export function calculateLabAnalytics(): LabAnalyticsSummary {
     cell.avgScore = Math.round((cell.avgScore * cell.attempts + r.diagnosis.comprehensionRate) / (cell.attempts + 1));
     cell.attempts += 1;
     cell.latestScore = r.diagnosis.comprehensionRate;
+
+    // Session grouping key
+    const sid = r.sessionId || ('sess_' + r.dateString + '_' + r.wordCount + '_' + r.speedWpm + '_' + Math.floor(idx / 5));
+    if (!sessionMap.has(sid)) {
+      sessionMap.set(sid, []);
+    }
+    sessionMap.get(sid)!.push(r);
   });
+
+  const sessionHistory: LabSessionSummary[] = [];
+  sessionMap.forEach((sRecords, sid) => {
+    if (sRecords.length === 0) return;
+    const first = sRecords[0];
+    const sTotalScore = sRecords.reduce((acc, curr) => acc + curr.diagnosis.comprehensionRate, 0);
+    const avg = Math.round(sTotalScore / sRecords.length);
+    const perfect = sRecords.filter((r) => r.diagnosis.comprehensionRate >= 90).length;
+
+    sessionHistory.push({
+      sessionId: sid,
+      timestamp: first.timestamp,
+      dateString: first.dateString,
+      wordCount: first.wordCount,
+      speedWpm: first.speedWpm,
+      cefrLevel: first.cefrLevel,
+      totalQuestions: sRecords.length,
+      averageScore: avg,
+      perfectCount: perfect,
+      records: sRecords,
+    });
+  });
+
+  sessionHistory.reverse();
 
   return {
     totalQuestions: records.length,
+    totalSessions: sessionHistory.length,
     avgComprehension: records.length > 0 ? Math.round(totalScore / records.length) : 0,
     bottleneckCounts,
     matrix,
-    recentRecords: records.slice(-20).reverse(),
+    recentRecords: records.slice(-30).reverse(),
+    sessionHistory,
   };
 }

@@ -29,6 +29,7 @@ export interface LabDiagnosisResult {
 
 export interface LabQuestionRecord {
   id: string;
+  sessionId?: string;
   timestamp: string;
   dateString: string;
   sentenceEn: string;
@@ -38,6 +39,19 @@ export interface LabQuestionRecord {
   cefrLevel: CefrLevel;
   userResponse: string;
   diagnosis: LabDiagnosisResult;
+}
+
+export interface LabSessionSummary {
+  sessionId: string;
+  timestamp: string;
+  dateString: string;
+  wordCount: number;
+  speedWpm: number;
+  cefrLevel: CefrLevel;
+  totalQuestions: number;
+  averageScore: number;
+  perfectCount: number;
+  records: LabQuestionRecord[];
 }
 
 export interface BandwidthCell {
@@ -51,8 +65,10 @@ export type BandwidthMatrixData = Record<number, Record<number, BandwidthCell>>;
 
 export interface LabAnalyticsSummary {
   totalQuestions: number;
+  totalSessions: number;
   avgComprehension: number;
   bottleneckCounts: Record<LabBottleneckType, number>;
   matrix: BandwidthMatrixData;
   recentRecords: LabQuestionRecord[];
+  sessionHistory: LabSessionSummary[];
 }

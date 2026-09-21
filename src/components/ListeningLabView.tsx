@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   FlaskConical,
   Play,
@@ -16,7 +16,12 @@ import {
   Headphones,
   Zap,
   Check,
-  BarChart3
+  BarChart3,
+  Minus,
+  Plus,
+  ChevronDown,
+  ChevronRight,
+  TrendingUp
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
 import {
@@ -42,13 +47,6 @@ interface ListeningLabViewProps {
 }
 
 const WORD_COUNT_OPTIONS = [4, 6, 8, 12, 16, 20] as const;
-const SPEED_WPM_OPTIONS = [
-  { wpm: 60, label: '60 WPM (1秒/語・超じっくり)' },
-  { wpm: 100, label: '100 WPM (ゆったり基礎)' },
-  { wpm: 140, label: '140 WPM (標準日常会話)' },
-  { wpm: 180, label: '180 WPM (ネイティブ実速)' },
-  { wpm: 220, label: '220 WPM (高速ポッドキャスト)' },
-] as const;
 
 type ActiveTab = 'training' | 'analytics';
 type DisplayMode = 'audio_only' | 'rsvp_flash' | 'text_reveal';
@@ -64,9 +62,10 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   const [targetWordCount, setTargetWordCount] = useState<number>(4);
   const [targetSpeedWpm, setTargetSpeedWpm] = useState<number>(60);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('audio_only');
-  const [cefrLevel, setCefrLevel] = useState<CefrLevel>(userLevel);
+  const cefrLevel = userLevel;
 
   // Batch Session State
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => 'sess_' + Date.now());
   const [questions, setQuestions] = useState<LabQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isGeneratingBatch, setIsGeneratingBatch] = useState<boolean>(false);
@@ -85,8 +84,19 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   // Analytics State
   const [analytics, setAnalytics] = useState<LabAnalyticsSummary>(() => calculateLabAnalytics());
   const [copiedExport, setCopiedExport] = useState<boolean>(false);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   const currentQuestion = questions[currentIndex] || null;
+
+  // Speed level guide helper
+  const speedGuide = useMemo(() => {
+    if (targetSpeedWpm <= 60) return { label: '超じっくり（1秒/語・音と文字の確認）', color: 'text-indigo-400 bg-indigo-950/60 border-indigo-500/30' };
+    if (targetSpeedWpm <= 90) return { label: 'ゆったり基礎（初心者向け・語順の意識）', color: 'text-sky-400 bg-sky-950/60 border-sky-500/30' };
+    if (targetSpeedWpm <= 130) return { label: '普通（標準的な日常会話・ニュース）', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-500/30' };
+    if (targetSpeedWpm <= 170) return { label: 'ネイティブ日常速度（ポッドキャスト）', color: 'text-amber-400 bg-amber-950/60 border-amber-500/30' };
+    if (targetSpeedWpm <= 200) return { label: 'ネイティブ実速度（映画・フリートーク）', color: 'text-orange-400 bg-orange-950/60 border-orange-500/30' };
+    return { label: 'ネイティブ早口（TED Talks・議論）', color: 'text-rose-400 bg-rose-950/60 border-rose-500/30' };
+  }, [targetSpeedWpm]);
 
   // Refresh analytics
   const refreshAnalytics = useCallback(() => {
@@ -97,6 +107,8 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   const handleGenerateBatch = useCallback(async () => {
     if (isGeneratingBatch) return;
     setIsGeneratingBatch(true);
+    const newSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    setCurrentSessionId(newSessionId);
     setCurrentIndex(0);
     setUserResponse('');
     setDiagnosisResult(null);
@@ -156,7 +168,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     const intervalMs = Math.round((60 / targetSpeedWpm) * 1000);
 
     if (targetSpeedWpm <= 80) {
-      // 60 WPM: 1語ずつ1秒おきに区切って明瞭に発音
+      // 60〜80 WPM: 1語ずつ1秒おきに区切って明瞭に発音
       let currentWordIdx = 0;
       setActiveWordIndex(0);
 
@@ -183,7 +195,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       speakNextWord();
       playbackTimerRef.current = setInterval(speakNextWord, intervalMs);
     } else {
-      // 100+ WPM: フレーズ全体を指定WPMレート（0.9〜1.4x）で流しつつ、単語ハイライトを同期
+      // 90+ WPM: フレーズ全体を指定WPMレート（0.8〜1.6x）で流しつつ、単語ハイライトを同期
       const mappedRate = Math.min(1.8, Math.max(0.7, targetSpeedWpm / 150));
 
       if ('speechSynthesis' in window) {
@@ -236,6 +248,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       // Record to LocalStorage
       const record: LabQuestionRecord = {
         id: 'rec_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        sessionId: currentSessionId,
         timestamp: new Date().toISOString(),
         dateString: new Date().toLocaleDateString('ja-JP'),
         sentenceEn: currentQuestion.sentenceEn,
@@ -275,6 +288,11 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     setUserResponse(prev => (prev ? `${prev} / ${text}` : text));
   };
 
+  // Adjust WPM by step
+  const adjustWpm = (delta: number) => {
+    setTargetSpeedWpm(prev => Math.min(260, Math.max(50, prev + delta)));
+  };
+
   // Matrix cell color helper
   const getCellColor = (cell?: { avgScore: number; attempts: number }) => {
     if (!cell || cell.attempts === 0) return 'bg-slate-950 text-slate-600 border-slate-800/80';
@@ -282,6 +300,16 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     if (cell.avgScore >= 70) return 'bg-amber-950/80 text-amber-300 border-amber-500/40 font-semibold';
     return 'bg-red-950/80 text-red-300 border-red-500/40 font-semibold';
   };
+
+  // Dynamic WPM columns for matrix
+  const matrixWpmColumns = useMemo(() => {
+    const set = new Set<number>([60, 80, 100, 120, 140, 160, 180, 200, 220]);
+    // Also include any custom WPM present in matrix data
+    Object.values(analytics.matrix).forEach(row => {
+      Object.keys(row).forEach(w => set.add(Number(w)));
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [analytics.matrix]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-24 px-3 sm:px-4 animate-fadeIn">
@@ -334,7 +362,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               }`}
             >
               <BarChart3 className="w-3.5 h-3.5" />
-              <span>📊 限界値マトリクス ({analytics.totalQuestions})</span>
+              <span>📊 限界値マトリクス ({analytics.totalSessions}セッション)</span>
             </button>
           </div>
         </div>
@@ -343,28 +371,6 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
         {activeTab === 'training' && (
           <div className="pt-4 border-t border-slate-800 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              {/* CEFR Level */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1">
-                  <span>難易度 (CEFR)</span>
-                </label>
-                <div className="flex flex-wrap gap-1">
-                  {(['A1', 'A2', 'B1', 'B2', 'C1'] as CefrLevel[]).map((lvl) => (
-                    <button
-                      key={lvl}
-                      type="button"
-                      onClick={() => setCefrLevel(lvl)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                        cefrLevel === lvl
-                          ? 'bg-cyan-600 text-white shadow-sm'
-                          : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-                      }`}
-                    >
-                      {lvl}
-                    </button>
-                  ))}
-                </div>
-              </div>
               {/* Word Count */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1">
@@ -389,23 +395,54 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 </div>
               </div>
 
-              {/* Speed WPM */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1">
-                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>再生速度 (テンポ)</span>
-                </label>
-                <select
-                  value={targetSpeedWpm}
-                  onChange={(e) => setTargetSpeedWpm(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-1.5 font-semibold focus:outline-none focus:border-indigo-500"
-                >
-                  {SPEED_WPM_OPTIONS.map((opt) => (
-                    <option key={opt.wpm} value={opt.wpm}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+              {/* Speed WPM 10-Step Spinner */}
+              <div className="sm:col-span-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>再生速度 (10刻み調整)</span>
+                  </label>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${speedGuide.color}`}>
+                    {speedGuide.label}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => adjustWpm(-10)}
+                    disabled={targetSpeedWpm <= 50}
+                    className="p-2 bg-slate-950 hover:bg-slate-800 disabled:opacity-30 text-slate-300 rounded-xl border border-slate-800 transition-all font-bold"
+                    title="-10 WPM"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+
+                  <div className="flex-1 flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1">
+                    <input
+                      type="range"
+                      min={50}
+                      max={250}
+                      step={10}
+                      value={targetSpeedWpm}
+                      onChange={(e) => setTargetSpeedWpm(Number(e.target.value))}
+                      className="flex-1 accent-cyan-500 cursor-pointer h-2"
+                    />
+                    <span className="text-sm font-extrabold text-cyan-300 font-mono w-16 text-right">
+                      {targetSpeedWpm} <span className="text-[10px] font-normal text-slate-400">WPM</span>
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustWpm(10)}
+                    disabled={targetSpeedWpm >= 250}
+                    className="p-2 bg-slate-950 hover:bg-slate-800 disabled:opacity-30 text-slate-300 rounded-xl border border-slate-800 transition-all font-bold"
+                    title="+10 WPM"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
 
               {/* Display Mode */}
@@ -419,15 +456,15 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                   onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
                   className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-1.5 font-semibold focus:outline-none focus:border-indigo-500"
                 >
-                  <option value="audio_only">🎧 音声のみ（耳に集中・推奨）</option>
-                  <option value="rsvp_flash">⚡ 1語RSVPフラッシュ（視覚補助）</option>
-                  <option value="text_reveal">📖 テキスト表示（答え合わせ）</option>
+                  <option value="audio_only">🎧 音声のみ（推奨）</option>
+                  <option value="rsvp_flash">⚡ 1語RSVPフラッシュ</option>
+                  <option value="text_reveal">📖 テキスト表示</option>
                 </select>
               </div>
             </div>
 
             {/* Action Buttons */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
               <span className="text-xs text-slate-400 font-medium">
                 現在の設定: <strong className="text-indigo-300">{targetWordCount}単語</strong> × <strong className="text-cyan-300">{targetSpeedWpm} WPM</strong>
               </span>
@@ -457,7 +494,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                   {targetWordCount}単語 × {targetSpeedWpm} WPM の英文を生成中...
                 </h3>
                 <p className="text-xs text-slate-400">
-                  自然な口語スクリプト5問を作成しています
+                  重複のない多彩な生活シーンから5問を作成しています
                 </p>
               </div>
             </div>
@@ -470,7 +507,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               <div className="space-y-2">
                 <h2 className="text-2xl font-black text-white">5問セッション完了！</h2>
                 <p className="text-sm text-slate-300">
-                  【{targetWordCount}単語 × {targetSpeedWpm} WPM】でのリスニング結果がマトリクスに記録されました。
+                  【{targetWordCount}単語 × {targetSpeedWpm} WPM】でのリスニング結果がセッション履歴に記録されました。
                 </p>
               </div>
 
@@ -492,7 +529,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                   className="flex items-center space-x-2 px-6 py-3 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-2xl text-sm font-bold transition-all"
                 >
                   <BarChart3 className="w-4 h-4 text-cyan-400" />
-                  <span>限界値マトリクスを確認</span>
+                  <span>限界値マトリクス & 正答率を確認</span>
                 </button>
               </div>
             </div>
@@ -509,9 +546,14 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                     {currentQuestion.wordCount} 語
                   </span>
                 </div>
-                <span className="text-xs text-cyan-400 font-mono font-bold bg-cyan-950/50 border border-cyan-500/30 px-2.5 py-0.5 rounded-full">
-                  {targetSpeedWpm} WPM
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${speedGuide.color}`}>
+                    {speedGuide.label}
+                  </span>
+                  <span className="text-xs text-cyan-400 font-mono font-bold bg-cyan-950/50 border border-cyan-500/30 px-2.5 py-0.5 rounded-full">
+                    {targetSpeedWpm} WPM
+                  </span>
+                </div>
               </div>
 
               {/* Streaming Audio Visualizer & RSVP Area */}
@@ -739,14 +781,19 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
         <div className="space-y-6 animate-fadeIn">
           {/* Summary Stats Overview */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-3 gap-2">
               <div className="flex items-center space-x-2.5 text-white font-bold text-lg">
                 <BarChart3 className="w-5 h-5 text-cyan-400" />
                 <span>「単語数 × 速度」リスニング限界値マトリクス</span>
               </div>
-              <span className="text-xs font-semibold text-slate-300 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded-full">
-                総測定数: {analytics.totalQuestions} 問
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-300 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded-full">
+                  累計 {analytics.totalSessions} セッション ({analytics.totalQuestions}問)
+                </span>
+                <span className="text-xs font-bold text-cyan-300 bg-cyan-950/60 border border-cyan-500/30 px-2.5 py-0.5 rounded-full">
+                  平均理解度: {analytics.avgComprehension}%
+                </span>
+              </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
@@ -759,20 +806,20 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 font-bold">
                     <th className="p-2.5 text-left">単語数 (長さ)</th>
-                    <th className="p-2.5">60 WPM<br /><span className="text-[10px] font-normal text-slate-500">(1秒/語)</span></th>
-                    <th className="p-2.5">100 WPM<br /><span className="text-[10px] font-normal text-slate-500">(ゆったり)</span></th>
-                    <th className="p-2.5">140 WPM<br /><span className="text-[10px] font-normal text-slate-500">(標準会話)</span></th>
-                    <th className="p-2.5">180 WPM<br /><span className="text-[10px] font-normal text-slate-500">(実速度)</span></th>
-                    <th className="p-2.5">220 WPM<br /><span className="text-[10px] font-normal text-slate-500">(高速)</span></th>
+                    {matrixWpmColumns.map((wpm) => (
+                      <th key={wpm} className="p-2.5">
+                        {wpm} WPM
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/80">
                   {WORD_COUNT_OPTIONS.map((wc) => (
                     <tr key={wc}>
-                      <td className="p-2.5 text-left font-bold text-slate-200">
+                      <td className="p-2.5 text-left font-bold text-slate-200 whitespace-nowrap">
                         {wc} 単語
                       </td>
-                      {[60, 100, 140, 180, 220].map((wpm) => {
+                      {matrixWpmColumns.map((wpm) => {
                         const cell = analytics.matrix[wc]?.[wpm];
                         const cellClass = getCellColor(cell);
                         return (
@@ -781,7 +828,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                               {cell && cell.attempts > 0 ? (
                                 <>
                                   <div className="text-sm font-extrabold font-mono">{cell.avgScore}%</div>
-                                  <div className="text-[10px] opacity-70">({cell.attempts}回)</div>
+                                  <div className="text-[10px] opacity-70">({cell.attempts}問)</div>
                                 </>
                               ) : (
                                 <span className="text-slate-600 font-mono text-[11px]">-</span>
@@ -812,6 +859,108 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 <span>&lt;70%: キャッシュパンク限界（要改善）</span>
               </span>
             </div>
+          </div>
+
+          {/* Session History & Accuracy Trend */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+            <div className="flex items-center space-x-2.5 text-white font-bold text-lg border-b border-slate-800 pb-3">
+              <TrendingUp className="w-5 h-5 text-emerald-400" />
+              <span>セッション別 正答率・成績推移</span>
+            </div>
+
+            {analytics.sessionHistory.length === 0 ? (
+              <p className="text-xs text-slate-500 py-6 text-center">
+                セッション履歴はまだありません。「トレーニング」タブで問題を解くとセッション単位で自動記録されます。
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {analytics.sessionHistory.map((sess, idx) => {
+                  const isExpanded = expandedSessionId === sess.sessionId;
+                  return (
+                    <div
+                      key={sess.sessionId}
+                      className="bg-slate-950 border border-slate-850 rounded-2xl p-4 space-y-3 transition-all"
+                    >
+                      {/* Session Header Bar */}
+                      <div
+                        onClick={() => setExpandedSessionId(isExpanded ? null : sess.sessionId)}
+                        className="flex flex-wrap items-center justify-between gap-3 cursor-pointer select-none"
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <div
+                            className={`p-2 rounded-xl text-xs font-black border ${
+                              sess.averageScore >= 90
+                                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
+                                : sess.averageScore >= 70
+                                ? 'bg-amber-950/80 text-amber-400 border-amber-500/40'
+                                : 'bg-red-950/80 text-red-400 border-red-500/40'
+                            }`}
+                          >
+                            {sess.averageScore}%
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                              <span>セッション #{analytics.sessionHistory.length - idx}</span>
+                              <span className="text-slate-400 font-normal">({sess.dateString})</span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 font-mono">
+                              【{sess.wordCount}単語 × {sess.speedWpm} WPM】 • {sess.totalQuestions}問中 {sess.perfectCount}問パーフェクト
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Question Mini-Score Pills */}
+                        <div className="flex items-center space-x-1.5">
+                          {sess.records.map((r, qIdx) => (
+                            <span
+                              key={r.id}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                                r.diagnosis.comprehensionRate >= 90
+                                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                                  : r.diagnosis.comprehensionRate >= 70
+                                  ? 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+                                  : 'bg-red-950/80 text-red-300 border-red-500/40'
+                              }`}
+                              title={`第${qIdx + 1}問: ${r.diagnosis.comprehensionRate}%`}
+                            >
+                              Q{qIdx + 1}: {r.diagnosis.comprehensionRate}%
+                            </span>
+                          ))}
+                          <div className="text-slate-500 pl-1">
+                            {isExpanded ? <ChevronDown className="w-4 h-4 text-indigo-400" /> : <ChevronRight className="w-4 h-4" />}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Expanded Question Details in this Session */}
+                      {isExpanded && (
+                        <div className="pt-3 border-t border-slate-850 space-y-2 text-xs">
+                          {sess.records.map((rec, rIdx) => (
+                            <div key={rec.id} className="bg-slate-900/70 border border-slate-800 p-3 rounded-xl space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="font-bold text-indigo-300">第 {rIdx + 1} 問:</span>
+                                <span className="font-mono font-bold text-cyan-400">理解度: {rec.diagnosis.comprehensionRate}%</span>
+                              </div>
+                              <div className="font-mono text-white font-bold">{rec.sentenceEn}</div>
+                              <div className="text-slate-400 text-[11px]">訳: {rec.translationJa}</div>
+                              {rec.userResponse && (
+                                <div className="text-slate-300 text-[11px] bg-slate-950 p-2 rounded-lg border border-slate-800">
+                                  <span className="text-indigo-400 font-semibold mr-1">回答メモ:</span>
+                                  {rec.userResponse}
+                                </div>
+                              )}
+                              <div className="text-[11px] text-cyan-300 flex items-center gap-1">
+                                <span>🏷️ {rec.diagnosis.bottleneckLabel}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Bottleneck Cause Breakdown */}
@@ -849,7 +998,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
           {/* Recent Records & Export Bar */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
-              <span className="text-white font-bold text-lg">測定履歴 & データ管理</span>
+              <span className="text-white font-bold text-lg">測定データ管理 & エクスポート</span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -879,36 +1028,6 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 </button>
               </div>
             </div>
-
-            {analytics.recentRecords.length === 0 ? (
-              <p className="text-xs text-slate-500 py-6 text-center">
-                測定データはまだありません。「トレーニング」タブで問題を解くと自動で集計されます。
-              </p>
-            ) : (
-              <div className="space-y-2 max-h-80 overflow-y-auto font-sans text-xs">
-                {analytics.recentRecords.map((rec) => (
-                  <div key={rec.id} className="bg-slate-950 border border-slate-850 p-3 rounded-xl space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] text-slate-400">
-                      <span className="font-bold text-slate-300">
-                        {rec.wordCount}語 × {rec.speedWpm} WPM
-                      </span>
-                      <span className="font-mono font-bold text-cyan-400">
-                        理解度: {rec.diagnosis.comprehensionRate}%
-                      </span>
-                    </div>
-                    <div className="text-slate-200 font-mono font-bold">
-                      {rec.sentenceEn}
-                    </div>
-                    {rec.userResponse && (
-                      <div className="text-slate-400 text-[11px] bg-slate-900/60 p-2 rounded-lg border border-slate-850">
-                        <span className="text-indigo-400 font-semibold mr-1">回答メモ:</span>
-                        {rec.userResponse}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}
