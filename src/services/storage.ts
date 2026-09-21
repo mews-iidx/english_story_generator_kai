@@ -6,7 +6,7 @@ import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { VocabItem, VocabLookupResult, ExtractedCorePattern } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Story } from '../types/story';
+import { Story, StoryListeningMetrics } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { ChatMessage } from '../types/chat';
 import { Persona, CallSession } from '../types/persona';
@@ -112,17 +112,42 @@ export function deleteStory(storyId: string): void {
   }
 }
 
-export function recordStoryRead(storyId: string, wpm?: number): Story | null {
+export function recordStoryListeningCompleted(
+  storyId: string,
+  metrics: StoryListeningMetrics
+): Story | null {
   const stories = loadStories();
   const index = stories.findIndex(s => s.id === storyId);
   if (index >= 0) {
     const story = stories[index];
     const updatedStory: Story = {
       ...story,
+      listeningStatus: 'completed',
+      listeningCompletedAt: story.listeningCompletedAt || new Date().toISOString(),
+      listeningMetrics: metrics,
+    };
+    stories[index] = updatedStory;
+    localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));
+    return updatedStory;
+  }
+  return null;
+}
+
+export function recordStoryRead(storyId: string, wpm?: number): Story | null {
+  const stories = loadStories();
+  const index = stories.findIndex(s => s.id === storyId);
+  if (index >= 0) {
+    const story = stories[index];
+    const isFirstRead = !story.isRead;
+    const finalWpm = isFirstRead ? (wpm || story.wpm) : (story.firstReadWpm || story.wpm || wpm);
+    const updatedStory: Story = {
+      ...story,
       isRead: true,
-      readAt: new Date().toISOString(),
+      readAt: story.readAt || new Date().toISOString(),
       readCount: (story.readCount || 0) + 1,
-      wpm: wpm || story.wpm,
+      wpm: finalWpm,
+      firstReadWpm: story.firstReadWpm || (isFirstRead ? (wpm || story.wpm) : undefined),
+      readingStatus: 'completed',
     };
     stories[index] = updatedStory;
     localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));

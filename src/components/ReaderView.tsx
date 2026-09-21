@@ -7,7 +7,8 @@ import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones,
 
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
-import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence } from '../services/storage';
+import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence, recordStoryListeningCompleted } from '../services/storage';
+import { StoryListeningStepView } from './StoryListeningStepView';
 import { getCandidateLemmas } from '../utils/storyVocabExtractor';
 import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
 
@@ -51,6 +52,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onQueueNextEpisode,
   onBackToBookshelf,
 }) => {
+  // 2-Stage Story Lifecycle: 初見チャンクリスニング ➔ いつものリーダー
+  const [isListeningStage, setIsListeningStage] = useState<boolean>(() => {
+    return currentStory.listeningStatus !== 'completed';
+  });
+
+  useEffect(() => {
+    setIsListeningStage(currentStory.listeningStatus !== 'completed');
+  }, [currentStory.id, currentStory.listeningStatus]);
+
   const [viewMode, setViewMode] = useState<'read' | 'listen'>('read');
   const [listeningStyle, setListeningStyle] = useState<'step_by_step' | 'continuous'>('step_by_step');
   const [speechRate, setSpeechRate] = useState<number>(0.95);
@@ -543,6 +553,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">📖 Story</span>;
   };
 
+  // 第1段階：初見チャンクリスニング
+  if (isListeningStage) {
+    return (
+      <StoryListeningStepView
+        story={currentStory}
+        onCompleteListening={(metrics) => {
+          recordStoryListeningCompleted(currentStory.id, metrics);
+          setIsListeningStage(false);
+        }}
+        onSkipToReader={() => {
+          setIsListeningStage(false);
+        }}
+        onBackToBookshelf={onBackToBookshelf}
+      />
+    );
+  }
+
   return (
     <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4">
       {/* 1. Top Control Bar: Back to Bookshelf & View Mode Switcher */}
@@ -555,8 +582,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           <span>本棚に戻る</span>
         </button>
 
-        {/* View Mode Toggle: Read vs Listen */}
-        <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
+        {/* Replay Listening Stage & View Mode Toggle */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsListeningStage(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-indigo-200 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-all shadow-sm"
+            title="第1段階：初見チャンクリスニングを再体験"
+          >
+            <Headphones className="w-3.5 h-3.5 text-indigo-400" />
+            <span>🎧 初見リスニング</span>
+          </button>
+
+          <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
           <button
             onClick={() => {
               setViewMode('read');
@@ -590,6 +627,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <Headphones className="w-3.5 h-3.5" />
             <span>🎧 聴くモード</span>
           </button>
+        </div>
         </div>
 
         <div className="flex items-center space-x-2 text-xs">

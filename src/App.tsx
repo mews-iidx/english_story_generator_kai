@@ -8,7 +8,7 @@ import { MasteryDashboardView } from './components/MasteryDashboardView';
 import { ReaderView } from './components/ReaderView';
 import { QuizView } from './components/QuizView';
 import { DrillView } from './components/DrillView';
-import { ListeningLabView } from './components/ListeningLabView';
+// import { ListeningLabView } from './components/ListeningLabView';
 import { StoryQueueModal } from './components/StoryQueueModal';
 import { StoryQueueTask } from './types/storyQueue';
 import { AiMentorChatView } from './components/AiMentorChatView';
@@ -1059,14 +1059,14 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* 1.8 Listening Bandwidth Lab Tab (リスニング限界突破ラボ) */}
-            {activeTab === 'listening_lab' && (
+            {/* 1.8 Listening Bandwidth Lab Tab (一時コメントアウト・後で復活可能) */}
+            {/* {activeTab === 'listening_lab' && (
               <ListeningLabView
                 apiKey={settings.geminiApiKey}
                 selectedModel={settings.geminiModel}
                 userLevel={settings.cefrLevel}
               />
-            )}
+            )} */}
 
             {/* 2. Story / Script Creation Studio Tab */}
             {activeTab === 'create' && (

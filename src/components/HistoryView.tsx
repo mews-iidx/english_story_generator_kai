@@ -316,9 +316,22 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           {story.seriesType === 'continuous' || story.seriesType === 'trilogy' ? `連載 ${story.episodeIndex}/${story.totalEpisodes}` : `話 ${story.episodeIndex}/${story.totalEpisodes}`}
                         </span>
                       )}
-                      {story.isRead && (
+                      {story.listeningStatus === 'completed' ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/40 backdrop-blur-md">
+                          🎧 聴取済 {story.listeningMetrics ? `(${(story.listeningMetrics.avgChunkLatencyMs / 1000).toFixed(1)}s/塊)` : ''}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800/80 text-slate-300 font-semibold border border-slate-700 backdrop-blur-md">
+                          🎧 リスニング未
+                        </span>
+                      )}
+                      {story.isRead ? (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 font-bold border border-emerald-400/40 backdrop-blur-md">
-                          ✓ 読了済
+                          ✓ 読了済 {story.firstReadWpm || story.wpm ? `(${story.firstReadWpm || story.wpm} WPM)` : ''}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-400/30 backdrop-blur-md">
+                          📖 未読
                         </span>
                       )}
                     </div>

@@ -14,6 +14,13 @@ export interface TargetEmbedding {
   focusPoint?: string; // e.g. "〜すぎて…できない"
 }
 
+export interface StoryListeningMetrics {
+  totalChunks: number;
+  avgChunkLatencyMs: number;
+  totalSentenceLatencyMs: number;
+  completedAt: string;
+}
+
 export interface Story {
   id: string;
   title: string;
@@ -35,6 +42,14 @@ export interface Story {
   genres?: string[]; // ジャンルタグ
   targetWordCount?: number;
   actualWordCount?: number; // 実際の単語数
+  
+  // 2-Stage Lifecycle & Listening Metrics
+  listeningStatus?: 'unstarted' | 'completed';
+  listeningCompletedAt?: string;
+  listeningMetrics?: StoryListeningMetrics;
+  readingStatus?: 'unstarted' | 'completed';
+  firstReadWpm?: number;
+
   isRead?: boolean; // 読了済みフラグ
   readAt?: string; // 読了日時 (ISO timestamp)
   readCount?: number; // 読了回数

@@ -12,10 +12,11 @@ import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
 import {
   Zap, Volume2, Search, Trash2, ShieldCheck, Filter, BarChart3, Globe,
-  ChevronDown, ChevronUp, Calendar, BookOpen, PenTool, Sparkles
+  ChevronDown, ChevronUp, Calendar, BookOpen, PenTool, Sparkles, Headphones, Activity
 } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
+import { calculateLabAnalytics } from '../services/listeningLabService';
 
 interface MasteryDashboardViewProps {
   onNavigateToCreate?: () => void;
@@ -294,6 +295,32 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
   // 3. 連続学習ストリーク（日数）
   const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
+
+  // 5. 初見リスニング & チャンク処理キャパシティ集計
+  const labAnalytics = useMemo(() => calculateLabAnalytics(), []);
+
+  const storyListeningStats = useMemo(() => {
+    const storyList = stories || [];
+    const listenedStories = storyList.filter(s => s.listeningStatus === 'completed' && s.listeningMetrics);
+    const totalListened = listenedStories.length;
+    let totalChunks = 0;
+    let totalLatencyMs = 0;
+
+    listenedStories.forEach(s => {
+      if (s.listeningMetrics) {
+        totalChunks += s.listeningMetrics.totalChunks || 0;
+        totalLatencyMs += (s.listeningMetrics.avgChunkLatencyMs || 0) * (s.listeningMetrics.totalChunks || 1);
+      }
+    });
+
+    const avgChunkLatencyMs = totalChunks > 0 ? Math.round(totalLatencyMs / totalChunks) : 0;
+    return {
+      totalListened,
+      totalChunks,
+      avgChunkLatencyMs,
+      listenedStories,
+    };
+  }, [stories]);
 
   // 4. センテンス武器庫のステータス集計
   const { masteredCardsCount, learningCardsCount, wordCardsCount, patternCardsCount } = useMemo(() => {
@@ -594,6 +621,114 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                 ))}
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* 3. 🎧 初見リスニング・キャパシティ ＆ チャンク処理速度 */}
+      <div className="bg-slate-900/90 border border-indigo-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+              <Headphones className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>初見リスニング ＆ チャンク処理キャパシティ</span>
+                <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono">
+                  Listening Bandwidth
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                1チャンク（意味の塊）を頭の中で瞬時に情景へ圧縮し、音を消去する脳の処理速度
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Listening Summary KPIs */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">初見聴取ストーリー</span>
+            <div className="text-2xl font-black text-indigo-300 font-mono">
+              {storyListeningStats.totalListened} <span className="text-xs font-normal text-slate-400">本</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">総圧縮チャンク数</span>
+            <div className="text-2xl font-black text-cyan-300 font-mono">
+              {storyListeningStats.totalChunks + (labAnalytics.totalQuestions * 3)} <span className="text-xs font-normal text-slate-400">塊</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">平均チャンク圧縮速度</span>
+            <div className="text-2xl font-black text-emerald-400 font-mono">
+              {storyListeningStats.avgChunkLatencyMs > 0
+                ? `${(storyListeningStats.avgChunkLatencyMs / 1000).toFixed(2)}s`
+                : '0.40s'}
+              <span className="text-[10px] font-normal text-slate-400 ml-1">/ 塊</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">ラボ測定セッション</span>
+            <div className="text-2xl font-black text-purple-300 font-mono">
+              {labAnalytics.totalSessions} <span className="text-xs font-normal text-slate-400">回</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Bandwidth Matrix Grid from Lab */}
+        {labAnalytics.totalQuestions > 0 && (
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-300 font-bold">
+              <span className="flex items-center gap-1.5">
+                <Activity className="w-4 h-4 text-cyan-400" />
+                <span>リスニング・キャパシティ行列（語数 × WPM）</span>
+              </span>
+              <span className="text-[11px] text-slate-500 font-normal">
+                快適: 90%+ / 成長負荷: 70-89% / パンク: &lt;70%
+              </span>
+            </div>
+
+            <div className="overflow-x-auto pb-1">
+              <table className="w-full text-center text-[11px] border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400">
+                    <th className="p-1.5 text-left font-bold">語数 ＼ 速度</th>
+                    {[60, 80, 100, 120, 150, 180, 200].map(wpm => (
+                      <th key={wpm} className="p-1 font-mono font-bold">{wpm} WPM</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono">
+                  {[4, 6, 8, 12, 16, 20].map(wc => (
+                    <tr key={wc}>
+                      <td className="p-1.5 text-left font-bold text-slate-300 whitespace-nowrap">{wc} 語</td>
+                      {[60, 80, 100, 120, 150, 180, 200].map(wpm => {
+                        const cell = labAnalytics.matrix[wc]?.[wpm];
+                        const cellClass = !cell || cell.attempts === 0
+                          ? 'bg-slate-900/40 text-slate-600 border-slate-850'
+                          : cell.avgScore >= 90
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40 font-bold'
+                          : cell.avgScore >= 70
+                          ? 'bg-amber-950/80 text-amber-300 border-amber-500/40 font-bold'
+                          : 'bg-red-950/80 text-red-300 border-red-500/40 font-bold';
+                        return (
+                          <td key={wpm} className="p-1">
+                            <div className={`p-1.5 rounded-lg border text-center ${cellClass}`}>
+                              {cell && cell.attempts > 0 ? `${cell.avgScore}%` : '-'}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
