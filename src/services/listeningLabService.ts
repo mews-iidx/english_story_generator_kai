@@ -47,71 +47,217 @@ const SITUATION_SEEDS = [
   '☕ カフェ・リラックス（お気に入りの席、本を読みながら休憩、テラス席での雑談）',
 ];
 
+// Protected multi-word collocations & catenatives (never split inside these)
+const PROTECTED_PATTERNS: RegExp[] = [
+  // Catenative / Semi-modals + to
+  /\b(?:want|wants|wanted|going|have|has|had|need|needs|needed|try|tries|tried|like|likes|liked|plan|plans|planned|used|ought|able|decided|decides|decide|hope|hopes|hoped|love|loves|loved|start|starts|started|begin|begins|began|prefer|prefers|preferred|wish|wishes|wished|learn|learns|learned|forget|forgets|forgot|remember|remembers|remembered|afford|affords|afforded|expect|expects|expected|manage|manages|managed|refuse|refuses|refused|seem|seems|seemed|appear|appears|appeared|continue|continues|continued)\s+to\b/gi,
+  /\bwould\s+like\s+to\b/gi,
+  /\bin\s+order\s+to\b/gi,
+  /\bso\s+as\s+to\b/gi,
+  // Phrasal verbs / Verb + preposition collocations
+  /\b(?:talk|talks|talked|talking)\s+(?:about|to|with)\b/gi,
+  /\b(?:speak|speaks|spoke|speaking)\s+(?:to|with|about)\b/gi,
+  /\b(?:look|looks|looked|looking)\s+(?:at|for|after|forward\s+to|into|up\s+to|down\s+on)\b/gi,
+  /\b(?:listen|listens|listened|listening)\s+to\b/gi,
+  /\b(?:wait|waits|waited|waiting)\s+for\b/gi,
+  /\b(?:depend|depends|depended|depending)\s+on\b/gi,
+  /\b(?:rely|relies|relied|relying)\s+on\b/gi,
+  /\b(?:think|thinks|thought|thinking)\s+(?:about|of)\b/gi,
+  /\b(?:worry|worries|worried|worrying)\s+about\b/gi,
+  /\b(?:care|cares|cared|caring)\s+(?:about|for)\b/gi,
+  /\b(?:agree|agrees|agreed|agreeing)\s+with\b/gi,
+  /\b(?:belong|belongs|belonged|belonging)\s+to\b/gi,
+  /\b(?:pay|pays|paid|paying)\s+for\b/gi,
+  /\b(?:ask|asks|asked|asking)\s+(?:for|about)\b/gi,
+  /\b(?:search|searches|searched|searching)\s+for\b/gi,
+  /\b(?:work|works|worked|working)\s+(?:on|with|for|at)\b/gi,
+  /\b(?:focus|focuses|focused|focusing)\s+on\b/gi,
+  /\b(?:deal|deals|dealt|dealing)\s+with\b/gi,
+  /\b(?:believe|believes|believed|believing)\s+in\b/gi,
+  /\b(?:give|gives|gave|giving)\s+up\b/gi,
+  /\b(?:take|takes|took|taking)\s+care\s+of\b/gi,
+  /\b(?:run|runs|ran|running)\s+out\s+of\b/gi,
+  // Fixed idiomatic connectors
+  /\bas\s+well\s+as\b/gi,
+  /\bin\s+front\s+of\b/gi,
+  /\bat\s+the\s+same\s+time\b/gi,
+  /\bby\s+the\s+way\b/gi,
+  /\bas\s+soon\s+as\b/gi,
+  /\bon\s+the\s+other\s+hand\b/gi,
+  /\bfor\s+example\b/gi,
+  /\bsuch\s+as\b/gi,
+  /\baccording\s+to\b/gi,
+  /\ba\s+lot\s+of\b/gi,
+  /\blots\s+of\b/gi,
+  /\ba\s+bit\s+of\b/gi,
+];
+
+const CLAUSE_CONNECTORS = new Set([
+  'because', 'although', 'even though', 'though', 'since', 'while', 'whereas',
+  'if', 'unless', 'whether',
+  'when', 'whenever', 'after', 'before', 'until', 'as soon as',
+  'that', 'which', 'who', 'whom', 'whose', 'where',
+  'and', 'but', 'so', 'yet', 'or'
+]);
+
+/**
+ * 英語音声学・TESOL標準の「Thought Group（思考の塊）」ルールに基づき英文を自然に分割
+ */
 export function splitIntoSmartChunks(sentenceEn: string, translationJa: string = ''): LabChunk[] {
   const cleanEn = sentenceEn.trim().replace(/[.?!]+$/, '');
+  if (!cleanEn) return [];
+
   const words = cleanEn.split(/\s+/).filter(Boolean);
 
-  if (words.length <= 4) {
+  // 短文（8語以下）は分断せず1つの完結したThought Groupとして保持
+  if (words.length <= 8) {
     return [
       {
         text: cleanEn,
         translationJa: translationJa || cleanEn,
-        boundaryReason: '主部＋動詞・文の基本骨格（1チャンクで完結）',
+        boundaryReason: '基本の骨格（1つの完結したThought Group）',
       },
     ];
   }
 
-  // Common boundary triggers: prepositions, conjunctions, to-infinitive, relatives, WH-words
-  const boundaryKeywords = new Set([
-    'to', 'for', 'in', 'on', 'at', 'with', 'about', 'from', 'by', 'after', 'before', 'during',
-    'because', 'and', 'but', 'so', 'although', 'when', 'while', 'if', 'that', 'which', 'who'
-  ]);
-
-  const chunks: { words: string[]; reason: string }[] = [];
-  let currentGroup: string[] = [];
-
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const lowerWord = word.toLowerCase().replace(/[^a-z]/g, '');
-
-    // Check if we should split before this word
-    if (i > 2 && boundaryKeywords.has(lowerWord) && currentGroup.length >= 2) {
-      chunks.push({
-        words: currentGroup,
-        reason: chunks.length === 0 ? '主部＋動詞（文の基本骨格・誰がどうした）' : '意味のまとまり',
-      });
-      currentGroup = [word];
-    } else {
-      currentGroup.push(word);
+  // 1. 保護対象のイディオム・定型句スパン（want to, look forward to 等）を特定
+  const protectedSpans: { start: number; end: number }[] = [];
+  for (const pattern of PROTECTED_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(cleanEn)) !== null) {
+      protectedSpans.push({ start: match.index, end: match.index + match[0].length });
     }
   }
 
-  if (currentGroup.length > 0) {
-    chunks.push({
-      words: currentGroup,
-      reason: chunks.length === 0 ? '主部＋動詞（文の基本骨格）' : '修飾・付加情報（いつ・どこで・なぜ）',
-    });
+  const isCharIndexProtected = (charIdx: number) => {
+    return protectedSpans.some(span => charIdx >= span.start && charIdx <= span.end);
+  };
+
+  // 単語の位置をインデックス化
+  const wordSpans: { word: string; start: number; end: number }[] = [];
+  let curr = 0;
+  for (const w of words) {
+    const idx = cleanEn.indexOf(w, curr);
+    if (idx !== -1) {
+      wordSpans.push({ word: w, start: idx, end: idx + w.length });
+      curr = idx + w.length;
+    } else {
+      wordSpans.push({ word: w, start: curr, end: curr + w.length });
+      curr += w.length + 1;
+    }
   }
 
-  // Refine boundary reasons
-  return chunks.map((c, idx) => {
-    const text = c.words.join(' ');
-    const firstWord = c.words[0]?.toLowerCase().replace(/[^a-z]/g, '') || '';
-    let reason = '主部＋動詞（誰がどうした・情報の基本骨格）';
+  const splitIndices = new Set<number>();
 
+  // Pass 1: 句読点（カンマ `,`、セミコロン `;`、ダッシュ等）での自然な境界
+  for (let i = 0; i < words.length - 1; i++) {
+    const w = words[i];
+    if (/[,;:\-—]$/.test(w)) {
+      if (i >= 2 && words.length - (i + 1) >= 2) {
+        splitIndices.add(i + 1);
+      }
+    }
+  }
+
+  // Pass 2: 節の接続詞（because, when, although, that, which 等）
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    const cleanW = w.replace(/[^a-zA-Z]/g, '').toLowerCase();
+
+    let twoWord = '';
+    if (i + 1 < words.length) {
+      twoWord = cleanW + ' ' + words[i + 1].replace(/[^a-zA-Z]/g, '').toLowerCase();
+    }
+
+    const isConnector = CLAUSE_CONNECTORS.has(cleanW) || CLAUSE_CONNECTORS.has(twoWord);
+    if (isConnector) {
+      const wStart = wordSpans[i]?.start ?? 0;
+      if (!isCharIndexProtected(wStart)) {
+        const sortedSoFar = Array.from(splitIndices).filter(idx => idx <= i);
+        const prevSplit = sortedSoFar.length > 0 ? Math.max(...sortedSoFar) : 0;
+        const wordsInCurrent = i - prevSplit;
+        const wordsRemaining = words.length - i;
+        if (wordsInCurrent >= 3 && wordsRemaining >= 3) {
+          splitIndices.add(i);
+        }
+      }
+    }
+  }
+
+  // Pass 3: 前置詞（非常に長いセグメント >= 8語 が残っている場合のみ補助分割）
+  const sortedSplits = Array.from(splitIndices).sort((a, b) => a - b);
+  const allSplits = [0, ...sortedSplits, words.length];
+  const prepositions = new Set(['in', 'at', 'on', 'with', 'for', 'from', 'by', 'during', 'under', 'near']);
+
+  for (let idxRange = 0; idxRange < allSplits.length - 1; idxRange++) {
+    const startW = allSplits[idxRange];
+    const endW = allSplits[idxRange + 1];
+    const segmentLen = endW - startW;
+
+    if (segmentLen >= 8) {
+      for (let i = startW + 3; i <= endW - 3; i++) {
+        const cleanW = words[i].replace(/[^a-zA-Z]/g, '').toLowerCase();
+        if (prepositions.has(cleanW)) {
+          const wStart = wordSpans[i]?.start ?? 0;
+          if (!isCharIndexProtected(wStart)) {
+            splitIndices.add(i);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 最終的なチャンクの構築
+  const finalSortedSplits = Array.from(splitIndices).sort((a, b) => a - b);
+  const rawChunks: string[] = [];
+  let prevIdx = 0;
+
+  for (const splitIdx of finalSortedSplits) {
+    const chunkWords = words.slice(prevIdx, splitIdx);
+    if (chunkWords.length > 0) {
+      rawChunks.push(chunkWords.join(' '));
+    }
+    prevIdx = splitIdx;
+  }
+
+  const remainingWords = words.slice(prevIdx);
+  if (remainingWords.length > 0) {
+    rawChunks.push(remainingWords.join(' '));
+  }
+
+  // 極端に短いチャンク（3語未満）を前方に統合
+  const mergedChunks: string[] = [];
+  for (const c of rawChunks) {
+    const cWords = c.split(/\s+/).filter(Boolean);
+    if (cWords.length < 3 && mergedChunks.length > 0) {
+      mergedChunks[mergedChunks.length - 1] = mergedChunks[mergedChunks.length - 1] + ' ' + c;
+    } else {
+      mergedChunks.push(c);
+    }
+  }
+
+  return mergedChunks.map((c, idx) => {
+    const firstWord = c.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '') || '';
+    let reason = '主部＋動詞・骨格（Thought Group）';
     if (idx > 0) {
-      if (firstWord === 'to') reason = 'to不定詞（目的・次の動作の追加）';
-      else if (['in', 'on', 'at', 'from', 'by'].includes(firstWord)) reason = `前置詞「${firstWord}」（場所・手段の追加）`;
-      else if (['with', 'about', 'for'].includes(firstWord)) reason = `前置詞「${firstWord}」（対象・目的の追加）`;
-      else if (['because', 'since', 'so'].includes(firstWord)) reason = '接続詞（理由・結果の展開）';
-      else if (['when', 'while', 'after', 'before'].includes(firstWord)) reason = '接続詞（時間・タイミングの追加）';
-      else if (['that', 'which', 'who'].includes(firstWord)) reason = '関係代名詞（直前の名詞への説明追加）';
-      else reason = '修飾句・付加情報（時・場所・様態の追加）';
+      if (['because', 'since', 'so', 'although', 'though'].includes(firstWord)) {
+        reason = '理由・譲歩節（Thought Group）';
+      } else if (['when', 'while', 'after', 'before', 'until'].includes(firstWord)) {
+        reason = '時間・タイミング節（Thought Group）';
+      } else if (['that', 'which', 'who', 'where'].includes(firstWord)) {
+        reason = '関係節・補足（Thought Group）';
+      } else if (['in', 'at', 'on', 'with', 'for', 'from', 'by', 'under'].includes(firstWord)) {
+        reason = '前置詞句・付加情報（Thought Group）';
+      } else {
+        reason = '展開・修飾句（Thought Group）';
+      }
     }
 
     return {
-      text,
-      translationJa: idx === 0 ? (translationJa.slice(0, 15) || text) : '…',
+      text: c,
+      translationJa: idx === 0 ? (translationJa.slice(0, 20) || c) : '…',
       boundaryReason: reason,
     };
   });
