@@ -28,6 +28,7 @@ export interface StoryListeningMetrics {
   totalChunks: number;
   avgChunkLatencyMs: number;
   totalSentenceLatencyMs: number;
+  effectiveListeningWpm?: number; // 実効リスニングWPM (語数 / 所要時間 * 60)
   firstPassRate?: number; // 一発パス率 (0 - 100%)
   totalRetries?: number;
   bottleneckCount?: number;

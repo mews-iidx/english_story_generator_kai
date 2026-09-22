@@ -15,8 +15,8 @@ import {
   Volume2,
   AlertTriangle,
   Flame,
-  Clock,
-  Gauge
+  Gauge,
+  Zap
 } from 'lucide-react';
 import { Story, StoryListeningMetrics, StoryListeningUnitLog } from '../types/story';
 import { splitIntoSmartChunks } from '../services/listeningLabService';
@@ -75,6 +75,13 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
   // Refs for tracking timestamps
   const unitStartTimeRef = useRef<number>(0);
+
+  // Story word count
+  const storyWordCount = useMemo(() => {
+    if (story.actualWordCount && story.actualWordCount > 0) return story.actualWordCount;
+    if (story.storyContent) return story.storyContent.split(/\s+/).filter(Boolean).length;
+    return story.targetWordCount || 300;
+  }, [story.actualWordCount, story.storyContent, story.targetWordCount]);
 
   // 4. Breakdown story into units (Sentence units or Chunk units)
   const units: ListeningUnit[] = useMemo(() => {
@@ -299,6 +306,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
         firstPassRate: 100,
         totalRetries: 0,
         avgLatencySec: 0,
+        effectiveListeningWpm: 0,
         bottlenecks: [],
       };
     }
@@ -312,6 +320,9 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     const totalLatencyMs = unitLogs.reduce((acc, log) => acc + log.elapsedMs, 0);
     const avgLatencySec = (totalLatencyMs / totalUnits / 1000).toFixed(1);
 
+    const totalSec = Math.max(1, totalLatencyMs / 1000);
+    const effectiveListeningWpm = Math.round((storyWordCount / totalSec) * 60);
+
     // Bottlenecks: Units that took >= 1 retry OR where English was revealed
     const bottlenecks = unitLogs.filter(
       log => log.retryCount >= 1 || log.revealedEnglish
@@ -321,9 +332,10 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       firstPassRate,
       totalRetries,
       avgLatencySec,
+      effectiveListeningWpm,
       bottlenecks,
     };
-  }, [unitLogs]);
+  }, [unitLogs, storyWordCount]);
 
   // Finish and open reader
   const handleFinishAndOpenReader = () => {
@@ -335,6 +347,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       totalChunks: units.length,
       avgChunkLatencyMs: avgLatencyMs,
       totalSentenceLatencyMs: totalLatencyMs,
+      effectiveListeningWpm: metricsData.effectiveListeningWpm,
       firstPassRate: metricsData.firstPassRate,
       totalRetries: metricsData.totalRetries,
       bottleneckCount: metricsData.bottlenecks.length,
@@ -518,8 +531,8 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               🎉 初見リスニング完走！
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              全 {units.length} {streamMode === 'sentence' ? '文' : 'チャンク'} のリスニングを完了しました。
-              あなたの聴覚バンド幅の測定結果です。
+              全 {units.length} {streamMode === 'sentence' ? '文' : 'チャンク'}（{storyWordCount} 語）のリスニングを完了しました。
+              あなたの聴覚実効バンド幅の測定結果です。
             </p>
           </div>
 
@@ -544,14 +557,14 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
               <span className="text-[11px] text-slate-400 font-bold flex items-center justify-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-sky-400" />
-                平均突破時間
+                <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                実効リスニングWPM
               </span>
-              <div className="text-2xl sm:text-3xl font-black text-sky-300 font-mono">
-                {metricsData.avgLatencySec}
-                <span className="text-xs font-normal text-slate-400 ml-1">秒</span>
+              <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
+                {metricsData.effectiveListeningWpm}
+                <span className="text-xs font-normal text-slate-400 ml-1">wpm</span>
               </div>
-              <span className="text-[10px] text-slate-500">理解までの秒数</span>
+              <span className="text-[10px] text-slate-500">平均 {metricsData.avgLatencySec}秒/{streamMode === 'sentence' ? '文' : '塊'}</span>
             </div>
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">

@@ -11,8 +11,9 @@ import { VocabItem } from '../types/vocab';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
 import {
-  Zap, Volume2, Search, Trash2, ShieldCheck, Filter, BarChart3, Globe,
-  ChevronDown, ChevronUp, Calendar, BookOpen, PenTool, Sparkles, Headphones, Activity
+  Zap, Volume2, Search, Trash2, ShieldCheck, BarChart3, Globe,
+  ChevronDown, ChevronUp, BookOpen, PenTool, Sparkles, Headphones, Activity,
+  Flame, AlertTriangle
 } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
@@ -32,23 +33,7 @@ interface MasteryDashboardViewProps {
 
 type SavedStockTab = 'cards' | 'errors';
 type CardFilterType = 'all' | 'word' | 'pattern' | 'mastered' | 'learning';
-type TimeScale = 'daily' | 'weekly' | 'monthly';
 export type CefrProgressMode = 'comprehension' | 'assembly';
-
-interface TrendPoint {
-  label: string; // e.g. "9/14", "第36週", "9月"
-  wordsRead: number;
-  wpm: number;
-  // 理解 (Comprehension)
-  compMasteredPct: number;
-  compLearningPct: number;
-  compUnseenPct: number;
-  // 組立 (Assembly)
-  assemMasteredPct: number;
-  assemLearningPct: number;
-  assemUnseenPct: number;
-  dateKey: string;
-}
 
 function formatDateKey(d: Date): string {
   const y = d.getFullYear();
@@ -89,126 +74,6 @@ function computeDailyStreak(snapshots: DailySnapshot[]): number {
   return streak;
 }
 
-function extractProgressMetrics(snap: DailySnapshot) {
-  const summaries = [snap.a1Progress, snap.a2Progress, snap.b1Progress, snap.b2Progress].filter(Boolean);
-  if (summaries.length === 0) {
-    return {
-      compMasteredPct: 0,
-      compLearningPct: 0,
-      compUnseenPct: 100,
-      assemMasteredPct: 0,
-      assemLearningPct: 0,
-      assemUnseenPct: 100,
-    };
-  }
-
-  const compMastered = summaries.reduce((acc, s) => acc + (s.patternMastered || 0) + (s.vocabMastered || 0), 0);
-  const compLearning = summaries.reduce((acc, s) => acc + (s.patternExposed || 0) + (s.patternLapsed || 0) + (s.vocabExposed || 0) + (s.vocabLapsed || 0), 0);
-  const compUnseen = summaries.reduce((acc, s) => acc + (s.patternUnseen || 0) + (s.vocabUnseen || 0), 0);
-  const compTotal = compMastered + compLearning + compUnseen || 1;
-
-  const assemMastered = summaries.reduce((acc, s) => acc + (s.patternAssemblyMastered || 0) + (s.vocabAssemblyMastered || 0), 0);
-  const assemTotal = compTotal;
-  const assemMasteredPct = Math.round((assemMastered / assemTotal) * 100);
-  const assemLearningPct = Math.min(100 - assemMasteredPct, Math.round((compLearning / assemTotal) * 100));
-  const assemUnseenPct = Math.max(0, 100 - assemMasteredPct - assemLearningPct);
-
-  return {
-    compMasteredPct: Math.round((compMastered / compTotal) * 100),
-    compLearningPct: Math.round((compLearning / compTotal) * 100),
-    compUnseenPct: Math.max(0, 100 - Math.round((compMastered / compTotal) * 100) - Math.round((compLearning / compTotal) * 100)),
-    assemMasteredPct,
-    assemLearningPct,
-    assemUnseenPct,
-  };
-}
-
-// 日・週・月ごとのトレンド集計ロジック
-function aggregateSnapshots(snapshots: DailySnapshot[], scale: TimeScale): TrendPoint[] {
-  if (!snapshots || snapshots.length === 0) return [];
-
-  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
-
-  if (scale === 'daily') {
-    return sorted.slice(-14).map(s => {
-      const parts = s.date.split('-');
-      const label = `${parseInt(parts[1], 10)}/${parseInt(parts[2], 10)}`;
-      const metrics = extractProgressMetrics(s);
-      return {
-        label,
-        wordsRead: s.wordsRead || 0,
-        wpm: s.averageWpm || 0,
-        ...metrics,
-        dateKey: s.date,
-      };
-    });
-  }
-
-  if (scale === 'weekly') {
-    const weekMap: Record<string, { label: string; words: number; wpms: number[]; latestSnap: DailySnapshot }> = {};
-    
-    sorted.forEach(s => {
-      const d = new Date(s.date);
-      const startOfYear = new Date(d.getFullYear(), 0, 1);
-      const weekNum = Math.ceil((((d.getTime() - startOfYear.getTime()) / 86400000) + startOfYear.getDay() + 1) / 7);
-      const key = `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
-      const label = `W${weekNum}`;
-
-      if (!weekMap[key]) {
-        weekMap[key] = { label, words: 0, wpms: [], latestSnap: s };
-      }
-      weekMap[key].words += s.wordsRead || 0;
-      if (s.averageWpm && s.averageWpm > 0) weekMap[key].wpms.push(s.averageWpm);
-      weekMap[key].latestSnap = s;
-    });
-
-    return Object.keys(weekMap).sort().slice(-8).map(key => {
-      const item = weekMap[key];
-      const avgWpm = item.wpms.length > 0 ? Math.round(item.wpms.reduce((a, b) => a + b, 0) / item.wpms.length) : 0;
-      const metrics = extractProgressMetrics(item.latestSnap);
-      return {
-        label: item.label,
-        wordsRead: item.words,
-        wpm: avgWpm,
-        ...metrics,
-        dateKey: key,
-      };
-    });
-  }
-
-  if (scale === 'monthly') {
-    const monthMap: Record<string, { label: string; words: number; wpms: number[]; latestSnap: DailySnapshot }> = {};
-    
-    sorted.forEach(s => {
-      const key = s.date.substring(0, 7);
-      const parts = key.split('-');
-      const label = `${parseInt(parts[1], 10)}月`;
-
-      if (!monthMap[key]) {
-        monthMap[key] = { label, words: 0, wpms: [], latestSnap: s };
-      }
-      monthMap[key].words += s.wordsRead || 0;
-      if (s.averageWpm && s.averageWpm > 0) monthMap[key].wpms.push(s.averageWpm);
-      monthMap[key].latestSnap = s;
-    });
-
-    return Object.keys(monthMap).sort().slice(-6).map(key => {
-      const item = monthMap[key];
-      const avgWpm = item.wpms.length > 0 ? Math.round(item.wpms.reduce((a, b) => a + b, 0) / item.wpms.length) : 0;
-      const metrics = extractProgressMetrics(item.latestSnap);
-      return {
-        label: item.label,
-        wordsRead: item.words,
-        wpm: avgWpm,
-        ...metrics,
-        dateKey: key,
-      };
-    });
-  }
-
-  return [];
-}
-
 export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   savedVocabs = [],
   expressionErrors = [],
@@ -216,58 +81,30 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   onDeleteVocab,
   onDeleteExpressionError,
 }) => {
-  // マイトロフィー（武器庫）のタブ & フィルター
-  const [savedTab, setSavedTab] = useState<SavedStockTab>('cards');
+  const [activeTab, setActiveTab] = useState<SavedStockTab>('cards');
   const [cardFilter, setCardFilter] = useState<CardFilterType>('all');
   const [searchQuery, setSearchQuery] = useState('');
-
-  // リアルCEFR進捗マップの展開状態 & タイムスケール（日/週/月） & 理解/組立小タブ
-  const [isReadingLogsExpanded, setIsReadingLogsExpanded] = useState(false);
-  const [timeScale, setTimeScale] = useState<TimeScale>('daily');
-  const [cefrMode, setCefrMode] = useState<CefrProgressMode>('comprehension');
-
-  // 日次スナップショット & 読了ログの取得
-  const [dailySnapshots, setDailySnapshots] = useState<DailySnapshot[]>(() => loadDailySnapshots());
+  const [progressMode, setProgressMode] = useState<CefrProgressMode>('comprehension');
+  const [isReadingLogOpen, setIsReadingLogOpen] = useState<boolean>(false);
   const [readingLogs, setReadingLogs] = useState<ReadingSessionLog[]>(() => loadReadingSessionLogs());
 
-  const handleDeleteReadingLog = (logId: string) => {
-    const { logs, snapshots } = deleteReadingSessionLog(logId);
-    setReadingLogs(logs);
-    setDailySnapshots(snapshots);
-  };
+  // 日次スナップショット & CEFRリアル進捗
+  const dailySnapshots = useMemo(() => loadDailySnapshots(), [readingLogs]);
+  const allCefrProgress = useMemo(() => computeAllLevelProgress(), [savedVocabs]);
 
-  const allCefrProgress = useMemo(() => computeAllLevelProgress(), []);
+  // 1. 厳格な総読了語数 ＆ 読破ストーリー数（読了フラグ isRead === true のもののみ計上）
+  const completedStories = useMemo(() => {
+    return (stories || []).filter(st => st.isRead === true || (st.readCount && st.readCount > 0));
+  }, [stories]);
 
-  // 全レベルの平均制覇率（理解 ＆ 組立）
-  const overallAvgCompPct = useMemo(() => {
-    return Math.round(
-      (allCefrProgress.A1.overallPct +
-       allCefrProgress.A2.overallPct +
-       allCefrProgress.B1.overallPct +
-       allCefrProgress.B2.overallPct) / 4
-    );
-  }, [allCefrProgress]);
-
-  const overallAvgAssemPct = useMemo(() => {
-    return Math.round(
-      ((allCefrProgress.A1.overallAssemblyPct || 0) +
-       (allCefrProgress.A2.overallAssemblyPct || 0) +
-       (allCefrProgress.B1.overallAssemblyPct || 0) +
-       (allCefrProgress.B2.overallAssemblyPct || 0)) / 4
-    );
-  }, [allCefrProgress]);
-
-  // 1. 総読了語数の集計（青天井）
   const totalWordsRead = useMemo(() => {
     const fromSnapshots = dailySnapshots.reduce((acc, s) => acc + (s.wordsRead || 0), 0);
     if (fromSnapshots > 0) return fromSnapshots;
-    return stories.reduce((acc, st) => {
-      if (st.actualWordCount && st.actualWordCount > 0) return acc + st.actualWordCount;
-      const text = st.storyContent || '';
-      const words = text.split(/\s+/).filter(Boolean).length;
-      return acc + words;
+    return completedStories.reduce((acc, st) => {
+      const count = st.actualWordCount || st.targetWordCount || (st.storyContent ? st.storyContent.split(/\s+/).filter(Boolean).length : 0);
+      return acc + count * (st.readCount || 1);
     }, 0);
-  }, [dailySnapshots, stories]);
+  }, [dailySnapshots, completedStories]);
 
   // 2. 平均読書スピード（WPM）の集計
   const { averageWpm, wpmTier } = useMemo(() => {
@@ -296,33 +133,74 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   // 3. 連続学習ストリーク（日数）
   const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
 
-  // 5. 初見リスニング & チャンク処理キャパシティ集計
+  // 4. 初見リスニング & 実効バンド幅・ボトルネック集計
   const labAnalytics = useMemo(() => calculateLabAnalytics(), []);
 
   const storyListeningStats = useMemo(() => {
     const storyList = stories || [];
-    const listenedStories = storyList.filter(s => s.listeningStatus === 'completed' && s.listeningMetrics);
-    const totalListened = listenedStories.length;
+    const completedListeningStories = storyList.filter(s => s.listeningStatus === 'completed' && s.listeningMetrics);
+    const totalListened = completedListeningStories.length;
+    
     let totalChunks = 0;
     let totalLatencyMs = 0;
+    let sumFirstPassRates = 0;
+    let sumEffectiveWpms = 0;
+    let validWpmCount = 0;
+    const allBottlenecks: {
+      storyTitle: string;
+      unitIdx: number;
+      textEn: string;
+      translationJa: string;
+      retryCount: number;
+      revealedEnglish: boolean;
+      elapsedMs: number;
+    }[] = [];
 
-    listenedStories.forEach(s => {
-      if (s.listeningMetrics) {
-        totalChunks += s.listeningMetrics.totalChunks || 0;
-        totalLatencyMs += (s.listeningMetrics.avgChunkLatencyMs || 0) * (s.listeningMetrics.totalChunks || 1);
+    completedListeningStories.forEach(s => {
+      const m = s.listeningMetrics!;
+      totalChunks += m.totalChunks || 0;
+      totalLatencyMs += (m.avgChunkLatencyMs || 0) * (m.totalChunks || 1);
+      
+      if (typeof m.firstPassRate === 'number') {
+        sumFirstPassRates += m.firstPassRate;
+      }
+      if (m.effectiveListeningWpm && m.effectiveListeningWpm > 0) {
+        sumEffectiveWpms += m.effectiveListeningWpm;
+        validWpmCount++;
+      }
+      if (m.unitLogs) {
+        m.unitLogs
+          .filter(l => l.retryCount >= 1 || l.revealedEnglish)
+          .forEach(l => {
+            allBottlenecks.push({
+              storyTitle: s.title,
+              unitIdx: l.unitIdx,
+              textEn: l.textEn,
+              translationJa: l.translationJa,
+              retryCount: l.retryCount,
+              revealedEnglish: l.revealedEnglish,
+              elapsedMs: l.elapsedMs,
+            });
+          });
       }
     });
 
     const avgChunkLatencyMs = totalChunks > 0 ? Math.round(totalLatencyMs / totalChunks) : 0;
+    const avgFirstPassRate = totalListened > 0 ? Math.round(sumFirstPassRates / totalListened) : 100;
+    const avgEffectiveListeningWpm = validWpmCount > 0 ? Math.round(sumEffectiveWpms / validWpmCount) : 0;
+
     return {
       totalListened,
       totalChunks,
       avgChunkLatencyMs,
-      listenedStories,
+      avgFirstPassRate,
+      avgEffectiveListeningWpm,
+      allBottlenecks,
+      listenedStories: completedListeningStories,
     };
   }, [stories]);
 
-  // 4. センテンス武器庫のステータス集計
+  // 5. センテンス武器庫のステータス集計
   const { masteredCardsCount, learningCardsCount, wordCardsCount, patternCardsCount } = useMemo(() => {
     let mastered = 0;
     let learning = 0;
@@ -346,7 +224,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     };
   }, [savedVocabs]);
 
-  // 5. 直近7日間の日次データ
+  // 6. 直近7日間の日次データ
   const last7DaysData = useMemo(() => {
     const result: { date: string; displayDate: string; words: number; wpm: number; isToday: boolean }[] = [];
     const todayStr = getTodayDateString();
@@ -372,17 +250,19 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     return Math.max(...last7DaysData.map(d => d.words), 200);
   }, [last7DaysData]);
 
-  // 6. 日・週・月ごとのトレンドデータ
-  const trendData = useMemo(() => {
-    return aggregateSnapshots(dailySnapshots, timeScale);
-  }, [dailySnapshots, timeScale]);
+  // 7. 読了ログ削除ハンドラー
+  const handleDeleteReadingLog = (logId: string) => {
+    if (confirm('この読了ログを削除しますか？（日次統計が自動再計算されます）')) {
+      const res = deleteReadingSessionLog(logId);
+      setReadingLogs(res.logs);
+    }
+  };
 
-  // 7. 1センテンス Ankiカードのフィルタリング & 検索
+  // 8. 1センテンス Ankiカードのフィルタリング & 検索
   const filteredCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
     return savedVocabs.filter(v => {
-      // フィルター判定
       const isMastered = (v.intervalDays && v.intervalDays >= 21) || (v.repetitionCount && v.repetitionCount >= 4);
       const isPattern = v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0);
 
@@ -391,7 +271,6 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       if (cardFilter === 'word' && isPattern) return false;
       if (cardFilter === 'pattern' && !isPattern) return false;
 
-      // 検索ワード判定
       if (!q) return true;
       const targetText = [
         v.phrase,
@@ -408,14 +287,14 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     });
   }, [savedVocabs, cardFilter, searchQuery]);
 
-  // 8. 偽英語・発話カルテのフィルタリング
+  // 9. 偽英語・発話カルテのフィルタリング
   const filteredErrors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return expressionErrors.filter(e => {
       if (!q) return true;
       return (
         e.userUtterance.toLowerCase().includes(q) ||
-                e.naturalExpression.toLowerCase().includes(q) ||
+        e.naturalExpression.toLowerCase().includes(q) ||
         e.explanation.toLowerCase().includes(q) ||
         e.corePattern.toLowerCase().includes(q)
       );
@@ -426,7 +305,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
       {/* 1. TOP SUMMARY CARDS (4-GRID) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Card 1: 総読了語数 */}
+        {/* Card 1: 厳格な総読了語数 */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="font-semibold">総読了語数</span>
@@ -438,166 +317,159 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             </span>
             <span className="text-xs font-bold text-cyan-400">語</span>
           </div>
-          <p className="text-[11px] text-slate-400">
-            多読ストック: {stories.length} 冊読破
+          <p className="text-[11px] text-slate-400 truncate">
+            読了: {completedStories.length} 冊 / 全 {stories.length} 冊
           </p>
         </div>
 
-        {/* Card 2: 読書スピード (WPM) */}
+        {/* Card 2: 実効情報処理バンド幅 (WPM) */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">読書速度 (WPM)</span>
+            <span className="font-semibold">実効バンド幅 (WPM)</span>
             <Zap className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="flex items-baseline space-x-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {averageWpm > 0 ? averageWpm : '--'}
-            </span>
-            <span className="text-xs font-bold text-amber-400">wpm</span>
+          <div className="flex items-baseline space-x-3">
+            <div>
+              <span className="text-[10px] text-slate-400 block">📖 読書</span>
+              <span className="text-xl sm:text-2xl font-black text-amber-300 font-mono">
+                {averageWpm > 0 ? averageWpm : '-'}
+              </span>
+            </div>
+            <div className="text-slate-600 font-light">|</div>
+            <div>
+              <span className="text-[10px] text-slate-400 block">🎧 聴覚</span>
+              <span className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
+                {storyListeningStats.avgEffectiveListeningWpm > 0 ? storyListeningStats.avgEffectiveListeningWpm : '-'}
+              </span>
+            </div>
           </div>
-          <p className={`text-[11px] font-bold ${wpmTier.color}`}>
+          <p className="text-[11px] text-slate-400 truncate">
             {wpmTier.label}
           </p>
         </div>
 
-        {/* Card 3: 連続学習ストリーク */}
+        {/* Card 3: 聴覚一発パス率 */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">連続学習日数</span>
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span className="font-semibold">聴覚一発パス率</span>
+            <Flame className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="flex items-baseline space-x-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {streakDays}
+            <span className={`text-2xl sm:text-3xl font-black font-mono ${
+              storyListeningStats.totalListened > 0
+                ? storyListeningStats.avgFirstPassRate >= 80
+                  ? 'text-emerald-400'
+                  : storyListeningStats.avgFirstPassRate >= 50
+                  ? 'text-cyan-400'
+                  : 'text-amber-400'
+                : 'text-slate-400'
+            }`}>
+              {storyListeningStats.totalListened > 0 ? `${storyListeningStats.avgFirstPassRate}%` : '未測定'}
             </span>
-            <span className="text-xs font-bold text-emerald-400">日連続</span>
           </div>
-          <p className="text-[11px] text-slate-400">
-            習慣化が英語脳を構築します
+          <p className="text-[11px] text-slate-400 truncate">
+            0リトライ・即時圧縮
           </p>
         </div>
 
-        {/* Card 4: マイ武器庫 (Ankiカード) */}
+        {/* Card 4: 連続学習ストリーク */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">Ankiカード装備数</span>
+            <span className="font-semibold">学習ストリーク</span>
             <Sparkles className="w-4 h-4 text-purple-400" />
           </div>
           <div className="flex items-baseline space-x-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {savedVocabs.length}
+            <span className="text-2xl sm:text-3xl font-black text-purple-300 tracking-tight font-mono">
+              {streakDays}
             </span>
-            <span className="text-xs font-bold text-purple-400">文</span>
+            <span className="text-xs font-bold text-purple-400">日連続</span>
           </div>
-          <p className="text-[11px] text-slate-400">
-            定着: <strong className="text-emerald-400 font-bold">{masteredCardsCount}</strong> / 修行中: {learningCardsCount}
+          <p className="text-[11px] text-slate-400 truncate">
+            英語脳コンパイル習慣
           </p>
         </div>
       </div>
 
       {/* 2. 7-DAY ACTIVITY & WPM TREND CHART */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <BarChart3 className="w-4 h-4 text-cyan-400" />
-            <h3 className="text-sm font-bold text-white">
-              直近7日間の読書アクティビティ & 処理速度推移
-            </h3>
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+              <BarChart3 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>直近7日間の学習実績 ＆ WPM推移</span>
+              </h3>
+              <span className="text-[11px] text-slate-400">日次読了語数 ＆ WPM（読了完了時のみ厳格集計）</span>
+            </div>
           </div>
-          <span className="text-[11px] text-slate-400">日次読了語数 ＆ WPM</span>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setIsReadingLogOpen(!isReadingLogOpen)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+            >
+              <span>読了ログ詳細 ({readingLogs.length}件)</span>
+              {isReadingLogOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          </div>
         </div>
 
-        {/* Bar Visualizer */}
-        <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-3">
-          {last7DaysData.map(d => {
-            const heightPercent = d.words > 0 ? Math.max(15, Math.min(100, Math.round((d.words / maxWordsIn7Days) * 100))) : 4;
-
+        {/* 7-Day Bar & Indicator Chart */}
+        <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-2">
+          {last7DaysData.map((d, i) => {
+            const heightPct = Math.min(100, Math.round((d.words / maxWordsIn7Days) * 100));
             return (
-              <div key={d.date} className="flex flex-col items-center space-y-2">
-                <div className="h-5 flex items-center justify-center">
-                  {d.wpm > 0 ? (
-                    <span className="text-[9px] font-extrabold text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-1 rounded">
-                      {d.wpm}wpm
-                    </span>
-                  ) : d.words > 0 ? (
-                    <span className="text-[9px] text-slate-400 font-medium">
-                      {d.words}語
-                    </span>
-                  ) : null}
+              <div key={i} className="flex flex-col items-center space-y-2 group">
+                <div className="text-[10px] font-mono text-slate-400 group-hover:text-cyan-300 transition-colors">
+                  {d.wpm > 0 ? `${d.wpm}w` : '-'}
                 </div>
 
-                <div className="w-full bg-slate-950/80 rounded-xl h-24 sm:h-28 p-1 flex items-end justify-center border border-slate-800/80">
+                <div className="w-full bg-slate-950 h-28 sm:h-32 rounded-2xl p-1 flex flex-col justify-end border border-slate-800/80 relative overflow-hidden">
                   <div
-                    className={`w-full rounded-lg transition-all duration-700 ${
+                    className={`w-full rounded-xl transition-all duration-500 ${
                       d.words > 0
                         ? d.isToday
-                          ? 'bg-gradient-to-t from-cyan-600 via-blue-500 to-indigo-500 shadow-md shadow-cyan-500/20'
-                          : 'bg-gradient-to-t from-slate-700 to-slate-500'
-                        : 'bg-slate-900/50'
+                          ? 'bg-gradient-to-t from-cyan-600 to-indigo-500 shadow-lg shadow-cyan-500/20'
+                          : 'bg-gradient-to-t from-slate-700 to-slate-500 group-hover:from-cyan-700 group-hover:to-indigo-600'
+                        : 'bg-transparent'
                     }`}
-                    style={{ height: `${heightPercent}%` }}
+                    style={{ height: `${d.words > 0 ? Math.max(12, heightPct) : 0}%` }}
                   />
+                  {d.words > 0 && (
+                    <div className="absolute inset-x-0 bottom-1 text-center text-[9px] font-bold font-mono text-white/90">
+                      {d.words}
+                    </div>
+                  )}
                 </div>
 
-                <div className="text-center">
-                  <span className={`text-[10px] font-bold block ${d.isToday ? 'text-cyan-400' : 'text-slate-400'}`}>
-                    {d.displayDate}
-                  </span>
-                  {d.isToday && (
-                    <span className="text-[8px] text-cyan-500 font-extrabold block -mt-0.5">TODAY</span>
-                  )}
+                <div className={`text-[11px] font-medium font-mono ${d.isToday ? 'text-cyan-400 font-bold' : 'text-slate-400'}`}>
+                  {d.displayDate}
                 </div>
               </div>
             );
           })}
         </div>
-      </div>
 
-      {/* 3. 📖 読了セッション履歴 & ログ管理 (折りたたみ) */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4 transition-all">
-        <button
-          onClick={() => setIsReadingLogsExpanded(!isReadingLogsExpanded)}
-          className="w-full flex items-center justify-between text-left group"
-        >
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-xl bg-cyan-950 border border-cyan-500/30 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform">
-              <BookOpen className="w-5 h-5" />
+        {/* Collapsible Reading Session Logs Table */}
+        {isReadingLogOpen && (
+          <div className="mt-4 pt-4 border-t border-slate-800 space-y-3 animate-fadeIn">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>読了ログ（誤タップ等のノイズはここから個別削除できます）</span>
+              <span className="font-mono">最新 {readingLogs.length} 件</span>
             </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="text-sm sm:text-base font-black text-white group-hover:text-cyan-300 transition-colors">
-                  📖 読了セッション履歴 & ログ管理
-                </h3>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold">
-                  {readingLogs.length}件の記録
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                読了したストーリーの日時・語数・WPMログ（誤タップ等のノイズはここから個別削除できます）
-              </p>
-            </div>
-          </div>
 
-          <div className="flex items-center space-x-1.5 text-slate-400 group-hover:text-white transition-colors pl-2">
-            <span className="text-xs font-semibold hidden sm:inline">
-              {isReadingLogsExpanded ? '閉じる' : '履歴を見る'}
-            </span>
-            {isReadingLogsExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </div>
-        </button>
-
-        {isReadingLogsExpanded && (
-          <div className="pt-4 border-t border-slate-800 space-y-3 animate-fadeIn">
             {readingLogs.length === 0 ? (
-              <div className="py-8 text-center text-slate-500 text-xs">
-                まだ読了ログがありません。ストーリーを最後まで読むと自動で記録されます。
+              <div className="text-center py-6 text-xs text-slate-500">
+                まだ読了ログがありません。ストーリーを読了するとここに記録されます。
               </div>
             ) : (
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {readingLogs.map(log => (
                   <div
                     key={log.id}
-                    className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-2xl flex items-center justify-between gap-3 text-xs"
+                    className="flex items-center justify-between p-3 bg-slate-950/80 border border-slate-800/80 rounded-2xl text-xs hover:border-slate-700 transition-colors"
                   >
                     <div className="space-y-1 min-w-0">
                       <div className="font-bold text-white truncate">
@@ -612,7 +484,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
                     <button
                       onClick={() => handleDeleteReadingLog(log.id)}
-                      className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-xl transition-colors shrink-0"
+                      className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-xl transition-colors shrink-0 cursor-pointer"
                       title="この読了記録を削除"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -625,7 +497,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         )}
       </div>
 
-      {/* 3. 🎧 初見リスニング・キャパシティ ＆ チャンク処理速度 */}
+      {/* 3. 🎧 初見リスニング・実効バンド幅 ＆ 要復習ボトルネック */}
       <div className="bg-slate-900/90 border border-indigo-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
           <div className="flex items-center space-x-2.5">
@@ -634,13 +506,13 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>初見リスニング ＆ チャンク処理キャパシティ</span>
+                <span>初見リスニング ＆ 聴覚実効バンド幅</span>
                 <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono">
-                  Listening Bandwidth
+                  Auditory Bandwidth
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                1チャンク（意味の塊）を頭の中で瞬時に情景へ圧縮し、音を消去する脳の処理速度
+                ブラインド反復リスニングにおける0リトライ圧縮率と実効処理速度
               </p>
             </div>
           </div>
@@ -649,36 +521,108 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         {/* Listening Summary KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">初見聴取ストーリー</span>
+            <span className="text-[11px] text-slate-400 font-bold">初見完走ストーリー</span>
             <div className="text-2xl font-black text-indigo-300 font-mono">
               {storyListeningStats.totalListened} <span className="text-xs font-normal text-slate-400">本</span>
             </div>
           </div>
 
           <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">総圧縮チャンク数</span>
+            <span className="text-[11px] text-slate-400 font-bold">実効リスニング速度</span>
             <div className="text-2xl font-black text-cyan-300 font-mono">
-              {storyListeningStats.totalChunks + (labAnalytics.totalQuestions * 3)} <span className="text-xs font-normal text-slate-400">塊</span>
+              {storyListeningStats.avgEffectiveListeningWpm > 0
+                ? `${storyListeningStats.avgEffectiveListeningWpm}`
+                : storyListeningStats.avgChunkLatencyMs > 0
+                ? `${(storyListeningStats.avgChunkLatencyMs / 1000).toFixed(1)}s`
+                : '-'}
+              <span className="text-xs font-normal text-slate-400 ml-1">
+                {storyListeningStats.avgEffectiveListeningWpm > 0 ? 'wpm' : '/ 塊'}
+              </span>
             </div>
           </div>
 
           <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">平均チャンク圧縮速度</span>
+            <span className="text-[11px] text-slate-400 font-bold">平均一発パス率</span>
             <div className="text-2xl font-black text-emerald-400 font-mono">
-              {storyListeningStats.avgChunkLatencyMs > 0
-                ? `${(storyListeningStats.avgChunkLatencyMs / 1000).toFixed(2)}s`
-                : '0.40s'}
-              <span className="text-[10px] font-normal text-slate-400 ml-1">/ 塊</span>
+              {storyListeningStats.totalListened > 0 ? `${storyListeningStats.avgFirstPassRate}%` : '-'}
             </div>
           </div>
 
           <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">ラボ測定セッション</span>
-            <div className="text-2xl font-black text-purple-300 font-mono">
-              {labAnalytics.totalSessions} <span className="text-xs font-normal text-slate-400">回</span>
+            <span className="text-[11px] text-slate-400 font-bold">要復習ボトルネック</span>
+            <div className="text-2xl font-black text-amber-400 font-mono">
+              {storyListeningStats.allBottlenecks.length} <span className="text-xs font-normal text-slate-400">件</span>
             </div>
           </div>
         </div>
+
+        {/* Bottleneck Review Stream */}
+        {storyListeningStats.allBottlenecks.length > 0 ? (
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 sm:p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-amber-400 font-bold text-xs sm:text-sm">
+                <AlertTriangle className="w-4 h-4" />
+                <span>🚨 リスニングで詰まった要復習文（直近ストーリー横断）</span>
+              </div>
+              <span className="text-xs text-slate-400 font-mono">
+                {storyListeningStats.allBottlenecks.length} 件蓄積中
+              </span>
+            </div>
+
+            <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+              {storyListeningStats.allBottlenecks.slice(0, 15).map((item, idx) => (
+                <div
+                  key={idx}
+                  className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5 hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] text-indigo-400 font-bold block mb-0.5">
+                        📖 {item.storyTitle} (文 {item.unitIdx + 1})
+                      </span>
+                      <p className="text-xs sm:text-sm font-bold text-white leading-relaxed font-serif">
+                        {item.textEn}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => speakText(item.textEn, 1.0, 'en-US')}
+                      className="p-1.5 bg-slate-800 hover:bg-slate-750 text-indigo-300 hover:text-white rounded-lg border border-slate-700 transition-all shrink-0 cursor-pointer"
+                      title="音声を再生"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 leading-snug">
+                    {item.translationJa}
+                  </p>
+
+                  <div className="flex items-center gap-2 pt-1 text-[10px]">
+                    {item.retryCount > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
+                        🔄 リトライ {item.retryCount} 回
+                      </span>
+                    )}
+                    {item.revealedEnglish && (
+                      <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                        👁️ 英文確認
+                      </span>
+                    )}
+                    <span className="text-slate-500 font-mono ml-auto">
+                      所要: {(item.elapsedMs / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : storyListeningStats.totalListened > 0 ? (
+          <div className="p-4 bg-emerald-950/40 border border-emerald-500/30 rounded-2xl text-emerald-300 text-xs font-bold flex items-center justify-center gap-2">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <span>完璧です！直近のストーリーはすべて一発で聞き取れています！</span>
+          </div>
+        ) : null}
 
         {/* Bandwidth Matrix Grid from Lab */}
         {labAnalytics.totalQuestions > 0 && (
@@ -752,472 +696,276 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             </div>
           </div>
 
-          {/* Sub-tab Switcher: Comprehension (理解) vs Assembly (組立) */}
-          <div className="flex items-center bg-slate-950 p-1 rounded-2xl border border-slate-800">
+          {/* Mode Switcher: 理解 vs 組立 */}
+          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 self-start sm:self-auto">
             <button
-              onClick={() => setCefrMode('comprehension')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                cefrMode === 'comprehension'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+              onClick={() => setProgressMode('comprehension')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                progressMode === 'comprehension'
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span>📖 理解 ({overallAvgCompPct}%)</span>
+              <span>理解 (インプット)</span>
             </button>
-
             <button
-              onClick={() => setCefrMode('assembly')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                cefrMode === 'assembly'
-                  ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
+              onClick={() => setProgressMode('assembly')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                progressMode === 'assembly'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <PenTool className="w-3.5 h-3.5" />
-              <span>⚙️ 組立 ({overallAvgAssemPct}%)</span>
+              <span>組立 (アウトプット)</span>
             </button>
           </div>
         </div>
 
-        {/* Level Progress Cards (A1, A2, B1, B2) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Level Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {(['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
-            const prog = allCefrProgress[lvl];
-            const levelTitle = {
-              A1: '超初級 (A1)',
-              A2: '初級 (A2)',
-              B1: '中級 (B1)',
-              B2: '中上級 (B2)',
-            }[lvl];
+            const data = allCefrProgress[lvl];
+            const masteredPct = progressMode === 'comprehension' ? data.overallPct : (data.overallAssemblyPct || 0);
+            const totalItems = (data.patternTotal || 0) + (data.vocabTotal || 0);
 
-            if (cefrMode === 'comprehension') {
-              const patternLearning = (prog.patternExposed || 0) + (prog.patternLapsed || 0);
-              const vocabLearning = (prog.vocabExposed || 0) + (prog.vocabLapsed || 0);
-
-              const patternMasteredPct = Math.round(((prog.patternMastered || 0) / (prog.patternTotal || 1)) * 100);
-              const patternLearningPct = Math.round((patternLearning / (prog.patternTotal || 1)) * 100);
-
-              const vocabMasteredPct = Math.round(((prog.vocabMastered || 0) / (prog.vocabTotal || 1)) * 100);
-              const vocabLearningPct = Math.round((vocabLearning / (prog.vocabTotal || 1)) * 100);
-
-              return (
-                <div
-                  key={lvl}
-                  className="p-4 rounded-2xl border bg-slate-950/80 border-slate-800 text-left space-y-3 shadow-md"
-                >
-                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-                    <span className="text-xs font-bold text-slate-200">{levelTitle}</span>
-                    <span className="text-xs font-black text-sky-400">
-                      理解 {Math.round(prog.overallPct)}%
-                    </span>
-                  </div>
-
-                  <div className="space-y-2.5 text-[10px] text-slate-400">
-                    {/* 構文 3-state */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between font-semibold">
-                        <span>💡 構文 ({prog.patternMastered}/{prog.patternTotal})</span>
-                        <span className="text-slate-300">
-                          🟢 {prog.patternMastered} 🟡 {patternLearning} ⚪ {prog.patternUnseen}
-                        </span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex border border-slate-800">
-                        <div
-                          className="h-full bg-emerald-500"
-                          style={{ width: `${patternMasteredPct}%` }}
-                          title={`既知: ${prog.patternMastered}`}
-                        />
-                        <div
-                          className="h-full bg-amber-400"
-                          style={{ width: `${patternLearningPct}%` }}
-                          title={`学習中・Anki中: ${patternLearning}`}
-                        />
-                      </div>
-                    </div>
-
-                    {/* 語彙 3-state */}
-                    <div className="space-y-1 pt-1 border-t border-slate-900">
-                      <div className="flex justify-between font-semibold">
-                        <span>🔤 語彙 ({prog.vocabMastered}/{prog.vocabTotal})</span>
-                        <span className="text-slate-300">
-                          🟢 {prog.vocabMastered} 🟡 {vocabLearning} ⚪ {prog.vocabUnseen}
-                        </span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex border border-slate-800">
-                        <div
-                          className="h-full bg-teal-400"
-                          style={{ width: `${vocabMasteredPct}%` }}
-                          title={`既知: ${prog.vocabMastered}`}
-                        />
-                        <div
-                          className="h-full bg-yellow-400"
-                          style={{ width: `${vocabLearningPct}%` }}
-                          title={`学習中・Anki中: ${vocabLearning}`}
-                        />
-                      </div>
-                    </div>
-                  </div>
+            return (
+              <div
+                key={lvl}
+                className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-3 relative overflow-hidden"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-black text-base text-white px-2.5 py-0.5 rounded-lg bg-slate-900 border border-slate-700">
+                    {lvl}
+                  </span>
+                  <span className="text-xs font-bold text-cyan-400 font-mono">
+                    {masteredPct}% 習得
+                  </span>
                 </div>
-              );
-            } else {
-              // 組立 (Assembly) Mode
-              const patternAssemblyMastered = prog.patternAssemblyMastered || 0;
-              const vocabAssemblyMastered = prog.vocabAssemblyMastered || 0;
 
-              const patternAssemblyPct = prog.patternAssemblyPct || 0;
-              const vocabAssemblyPct = prog.vocabAssemblyPct || 0;
-
-              return (
-                <div
-                  key={lvl}
-                  className="p-4 rounded-2xl border bg-slate-950/80 border-purple-500/20 text-left space-y-3 shadow-md"
-                >
-                  <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
-                    <span className="text-xs font-bold text-purple-200">{levelTitle}</span>
-                    <span className="text-xs font-black text-purple-400">
-                      組立 {Math.round(prog.overallAssemblyPct || 0)}%
-                    </span>
-                  </div>
-
-                  <div className="space-y-2.5 text-[10px] text-slate-400">
-                    {/* 構文 組立 */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between font-semibold">
-                        <span>⚙️ 構文組立 ({patternAssemblyMastered}/{prog.patternTotal})</span>
-                        <span className="text-purple-300 font-bold">{patternAssemblyPct}%</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex border border-slate-800">
-                        <div
-                          className="h-full bg-purple-500"
-                          style={{ width: `${patternAssemblyPct}%` }}
-                          title={`組立マスター: ${patternAssemblyMastered}`}
-                        />
-                      </div>
-                    </div>
-
-                    {/* 語彙 組立 */}
-                    <div className="space-y-1 pt-1 border-t border-slate-900">
-                      <div className="flex justify-between font-semibold">
-                        <span>⚙️ 語彙組立 ({vocabAssemblyMastered}/{prog.vocabTotal})</span>
-                        <span className="text-indigo-300 font-bold">{vocabAssemblyPct}%</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex border border-slate-800">
-                        <div
-                          className="h-full bg-indigo-500"
-                          style={{ width: `${vocabAssemblyPct}%` }}
-                          title={`組立マスター: ${vocabAssemblyMastered}`}
-                        />
-                      </div>
-                    </div>
-                  </div>
+                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden flex">
+                  <div
+                    className="bg-gradient-to-r from-emerald-500 to-cyan-400 h-full transition-all duration-500"
+                    style={{ width: `${masteredPct}%` }}
+                  />
                 </div>
-              );
-            }
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span>対象項目数</span>
+                  <span className="font-mono text-slate-300">{totalItems} 項目</span>
+                </div>
+              </div>
+            );
           })}
-        </div>
-
-        {/* Time Scale Trend Graph (日 / 週 / 月) with 3-State Stacked Bars */}
-        <div className="p-4 sm:p-5 bg-slate-950/60 border border-slate-800 rounded-2xl space-y-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-            <div className="flex items-center space-x-2">
-              <Calendar className="w-4 h-4 text-sky-400" />
-              <span className="text-xs sm:text-sm font-bold text-white">
-                期間別・CEFR{cefrMode === 'comprehension' ? '理解' : '組立'}推移グラフ（🟢既知 🟡学習中 ⚪未知）
-              </span>
-            </div>
-
-            {/* Scale Switcher: Daily / Weekly / Monthly */}
-            <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800 text-[11px] space-x-1">
-              {[
-                { id: 'daily', label: '📅 日次' },
-                { id: 'weekly', label: '📆 週次' },
-                { id: 'monthly', label: '🗓️ 月次' },
-              ].map(s => (
-                <button
-                  key={s.id}
-                  onClick={() => setTimeScale(s.id as TimeScale)}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                    timeScale === s.id
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Trend Chart Stacked Bars */}
-          {trendData.length === 0 ? (
-            <div className="py-8 text-center text-slate-500 text-xs">
-              まだ十分な日次データがありません。ストーリーを読破すると履歴が積み上がります。
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${trendData.length}, minmax(0, 1fr))` }}>
-                {trendData.map((point, idx) => {
-                  const masteredPct = cefrMode === 'comprehension' ? point.compMasteredPct : point.assemMasteredPct;
-                  const learningPct = cefrMode === 'comprehension' ? point.compLearningPct : point.assemLearningPct;
-                  const unseenPct = cefrMode === 'comprehension' ? point.compUnseenPct : point.assemUnseenPct;
-
-                  return (
-                    <div key={idx} className="flex flex-col items-center space-y-1.5">
-                      <span className="text-[9px] font-black text-sky-300">
-                        {masteredPct}%
-                      </span>
-
-                      {/* 3-State Stacked Vertical Bar */}
-                      <div className="w-full bg-slate-900 rounded-lg h-24 p-0.5 flex flex-col justify-end border border-slate-800 overflow-hidden">
-                        {/* ⚪ 未知 */}
-                        <div
-                          className="w-full bg-slate-800/80 transition-all duration-500"
-                          style={{ height: `${unseenPct}%` }}
-                          title={`未知: ${unseenPct}%`}
-                        />
-                        {/* 🟡 学習中 */}
-                        <div
-                          className={`w-full ${cefrMode === 'comprehension' ? 'bg-amber-400' : 'bg-indigo-400'} transition-all duration-500`}
-                          style={{ height: `${learningPct}%` }}
-                          title={`学習中: ${learningPct}%`}
-                        />
-                        {/* 🟢 既知 */}
-                        <div
-                          className={`w-full ${cefrMode === 'comprehension' ? 'bg-emerald-500' : 'bg-purple-500'} transition-all duration-500`}
-                          style={{ height: `${masteredPct}%` }}
-                          title={`既知: ${masteredPct}%`}
-                        />
-                      </div>
-
-                      <span className="text-[9px] font-bold text-slate-400 block truncate max-w-[40px]">
-                        {point.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Legend */}
-              <div className="flex items-center justify-center space-x-4 text-[11px] text-slate-400 pt-1">
-                <div className="flex items-center space-x-1.5">
-                  <span className={`w-2.5 h-2.5 rounded-sm ${cefrMode === 'comprehension' ? 'bg-emerald-500' : 'bg-purple-500'}`} />
-                  <span>🟢 既知 (Mastered)</span>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <span className={`w-2.5 h-2.5 rounded-sm ${cefrMode === 'comprehension' ? 'bg-amber-400' : 'bg-indigo-400'}`} />
-                  <span>🟡 学習中 (In Progress)</span>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-slate-800" />
-                  <span>⚪ 未知 (Unseen)</span>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* 5. センテンス武器庫 & 発話カルテ (MY WEAPONRY) */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl space-y-6">
-        {/* Header & Sub-Tab Switcher */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
-          <div>
-            <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <span>マイ武器庫 ＆ 発話カルテ</span>
-            </h3>
-            <p className="text-xs text-slate-400">
-              多読・英会話・ドリルで獲得した1センテンスAnkiカードと発話ミス改善ログ
-            </p>
+      {/* 5. センテンス武器庫 (Ankiカード一覧) ＆ 偽英語・発話カルテ */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white">
+                センテンス武器庫 ＆ 発話カルテ
+              </h3>
+              <p className="text-xs text-slate-400">
+                ストーリーから抽出・蓄積されたAnkiカードと発話修正ログ
+              </p>
+            </div>
           </div>
 
-          <div className="flex items-center bg-slate-950 p-1 rounded-2xl border border-slate-800">
+          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800">
             <button
-              onClick={() => setSavedTab('cards')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                savedTab === 'cards'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+              onClick={() => setActiveTab('cards')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'cards'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Zap className="w-3.5 h-3.5" />
-              <span>Ankiカード ({savedVocabs.length})</span>
+              Ankiカード ({savedVocabs.length})
             </button>
-
             <button
-              onClick={() => setSavedTab('errors')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                savedTab === 'errors'
-                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+              onClick={() => setActiveTab('errors')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'errors'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>発話カルテ ({expressionErrors.length})</span>
+              発話カルテ ({expressionErrors.length})
             </button>
           </div>
         </div>
 
-        {/* Search Bar */}
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="キーワードで武器庫を検索..."
-            className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-2xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-200 placeholder-slate-500 outline-none transition-colors"
-          />
-        </div>
+        {/* Search & Filter Controls */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="単語・構文・例文を検索..."
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+            />
+          </div>
 
-        {/* TAB 1: 1センテンス Ankiカード一覧 */}
-        {savedTab === 'cards' && (
-          <div className="space-y-4">
-            {/* Filter Buttons */}
-            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 text-xs">
-              <span className="text-slate-500 flex items-center gap-1 mr-1 text-[11px]">
-                <Filter className="w-3.5 h-3.5" /> 絞込:
-              </span>
-              {[
-                { id: 'all', label: `すべて (${savedVocabs.length})` },
-                { id: 'learning', label: `🟡 修行中 (${learningCardsCount})` },
-                { id: 'mastered', label: `🟢 定着 (${masteredCardsCount})` },
-                { id: 'word', label: `🔤 単語 (${wordCardsCount})` },
-                { id: 'pattern', label: `💡 構文 (${patternCardsCount})` },
-              ].map(f => (
+          {activeTab === 'cards' && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(['all', 'pattern', 'word', 'mastered', 'learning'] as CardFilterType[]).map(f => (
                 <button
-                  key={f.id}
-                  onClick={() => setCardFilter(f.id as CardFilterType)}
-                  className={`px-3 py-1 rounded-xl text-[11px] font-bold transition-all ${
-                    cardFilter === f.id
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                  key={f}
+                  onClick={() => setCardFilter(f)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    cardFilter === f
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
                   }`}
                 >
-                  {f.label}
+                  {f === 'all' && 'すべて'}
+                  {f === 'pattern' && `構文 (${patternCardsCount})`}
+                  {f === 'word' && `単語 (${wordCardsCount})`}
+                  {f === 'mastered' && `マスター済 (${masteredCardsCount})`}
+                  {f === 'learning' && `学習中 (${learningCardsCount})`}
                 </button>
               ))}
             </div>
+          )}
+        </div>
 
-            {filteredCards.length === 0 ? (
-              <div className="py-16 text-center text-slate-500 text-xs">
-                条件に一致するAnkiカードはありません。
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {filteredCards.map(c => {
-                  const isMature = (c.intervalDays && c.intervalDays >= 21) || (c.repetitionCount && c.repetitionCount >= 4);
-
-                  return (
-                    <div
-                      key={c.id}
-                      className="p-4 bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-2xl space-y-2.5 transition-all text-xs"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            isMature
-                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                              : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                          }`}>
-                            {isMature ? '🟢 既知' : '🟡 修行中'}
+        {/* Content List */}
+        {activeTab === 'cards' ? (
+          filteredCards.length === 0 ? (
+            <div className="text-center py-10 text-xs text-slate-500">
+              該当するカードが見つかりませんでした。
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {filteredCards.map(card => {
+                const isMastered = (card.intervalDays && card.intervalDays >= 21) || (card.repetitionCount && card.repetitionCount >= 4);
+                return (
+                  <div
+                    key={card.id}
+                    className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-2xl space-y-2 hover:border-slate-700 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-white">
+                            {card.phrase || card.focusWord}
                           </span>
-                          <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-bold">
-                            {c.cardDirection === 'ja_to_en' ? '✍️ 作文' : '📖 読解'}
+                          <span className="text-xs text-slate-400">
+                            {card.meaning || card.focusMeaning}
                           </span>
                         </div>
+                        {card.sentence && (
+                          <p className="text-xs text-slate-300 font-serif mt-1">
+                            {card.sentence}
+                          </p>
+                        )}
+                        {card.translation && (
+                          <p className="text-[11px] text-slate-500">
+                            {card.translation}
+                          </p>
+                        )}
+                      </div>
 
-                        <div className="flex items-center space-x-1">
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => speakText(card.sentence || card.phrase || card.focusWord || '', 1.0, 'en-US')}
+                          className="p-1.5 bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-white rounded-lg border border-slate-800 transition-colors cursor-pointer"
+                          title="発音を再生"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                        {onDeleteVocab && (
                           <button
-                            onClick={() => speakText(c.sentence || c.phrase)}
-                            className="p-1.5 text-slate-400 hover:text-sky-300 rounded-lg"
-                            title="発音再生"
+                            type="button"
+                            onClick={() => onDeleteVocab(card.id)}
+                            className="p-1.5 bg-slate-900 hover:bg-rose-950 text-slate-500 hover:text-rose-400 rounded-lg border border-slate-800 transition-colors cursor-pointer"
+                            title="カードを削除"
                           >
-                            <Volume2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                          {onDeleteVocab && (
-                            <button
-                              onClick={() => onDeleteVocab(c.id)}
-                              className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg"
-                              title="カード削除"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
+                        )}
                       </div>
+                    </div>
 
-                      <div className="font-bold text-white text-sm">
-                        {c.sentence || c.phrase}
-                      </div>
-
-                      <div className="text-slate-300 text-xs">
-                        {c.translation || c.meaning}
-                      </div>
-
-                      {c.corePatterns && c.corePatterns.length > 0 && (
-                        <div className="pt-1 flex flex-wrap gap-1">
-                          {c.corePatterns.map((cp, idx) => (
-                            <span key={idx} className="text-[10px] px-2 py-0.5 rounded bg-purple-950/80 border border-purple-500/30 text-purple-300">
-                              💡 {cp.patternName}: {cp.formula}
-                            </span>
-                          ))}
-                        </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        isMastered
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      }`}>
+                        {isMastered ? 'マスター済み' : '学習中'}
+                      </span>
+                      {card.level && (
+                        <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[10px] font-mono">
+                          {card.level}
+                        </span>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
+                  </div>
+                );
+              })}
+            </div>
+          )
+        ) : (
+          filteredErrors.length === 0 ? (
+            <div className="text-center py-10 text-xs text-slate-500">
+              まだ発話カルテのログがありません。AI英会話やドリルを行うと自動記録されます。
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {filteredErrors.map(err => (
+                <div
+                  key={err.id}
+                  className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-2xl space-y-2 hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="text-xs text-rose-300 font-mono">
+                        ❌ あなたの発話: "{err.userUtterance}"
+                      </div>
+                      <div className="text-xs font-bold text-emerald-300 font-mono">
+                        ✨ 自然な表現: "{err.naturalExpression}"
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        💡 {err.explanation}
+                      </p>
+                    </div>
 
-        {/* TAB 2: 偽英語・発話カルテ */}
-        {savedTab === 'errors' && (
-          <div className="space-y-3">
-            {filteredErrors.length === 0 ? (
-              <div className="py-16 text-center text-slate-500 text-xs">
-                カルテに記録された発話エラーはありません。
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {filteredErrors.map(e => (
-                  <div
-                    key={e.id}
-                    className="p-4 bg-slate-950/70 border border-rose-500/20 rounded-2xl space-y-2 text-xs"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
-                        ⚠️ 発話改善ログ
-                      </span>
+                    <div className="flex items-center space-x-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => speakText(err.naturalExpression, 1.0, 'en-US')}
+                        className="p-1.5 bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-white rounded-lg border border-slate-800 transition-colors cursor-pointer"
+                        title="発音を再生"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                      </button>
                       {onDeleteExpressionError && (
                         <button
-                          onClick={() => onDeleteExpressionError(e.id)}
-                          className="p-1 text-slate-500 hover:text-rose-400 rounded-lg"
-                          title="カルテ削除"
+                          type="button"
+                          onClick={() => onDeleteExpressionError(err.id)}
+                          className="p-1.5 bg-slate-900 hover:bg-rose-950 text-slate-500 hover:text-rose-400 rounded-lg border border-slate-800 transition-colors cursor-pointer"
+                          title="ログを削除"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
-
-                    <div className="space-y-1">
-                      <div className="text-rose-300/90">
-                        <span className="font-bold">あなたの発話:</span> {e.userUtterance}
-                      </div>
-                      <div className="text-emerald-300 font-bold">
-                        <span>✨ 洗練表現:</span> {e.naturalExpression}
-                      </div>
-                      <div className="text-slate-400 text-[11px]">
-                        💡 {e.explanation}
-                      </div>
-                    </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                </div>
+              ))}
+            </div>
+          )
         )}
       </div>
     </div>
