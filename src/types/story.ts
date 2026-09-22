@@ -14,10 +14,24 @@ export interface TargetEmbedding {
   focusPoint?: string; // e.g. "〜すぎて…できない"
 }
 
+export interface StoryListeningUnitLog {
+  unitIdx: number;
+  textEn: string;
+  translationJa: string;
+  retryCount: number;
+  elapsedMs: number;
+  revealedEnglish: boolean;
+  revealedJapanese: boolean;
+}
+
 export interface StoryListeningMetrics {
   totalChunks: number;
   avgChunkLatencyMs: number;
   totalSentenceLatencyMs: number;
+  firstPassRate?: number; // 一発パス率 (0 - 100%)
+  totalRetries?: number;
+  bottleneckCount?: number;
+  unitLogs?: StoryListeningUnitLog[];
   completedAt: string;
 }
 
