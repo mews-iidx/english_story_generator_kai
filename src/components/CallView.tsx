@@ -168,7 +168,7 @@ export const CallView: React.FC<CallViewProps> = ({
   const [customPrompt, setCustomPrompt] = useState('');
   const [isCreatingPersona, setIsCreatingPersona] = useState(false);
 
-  // ===================== 振り返り・武器化キュー State =====================
+  // ===================== 振り返り・Anki登録キュー State =====================
   const [selectedReviewSessionId, setSelectedReviewSessionId] = useState<string | null>(null);
   const [reviewTab, setReviewTab] = useState<'arsenal' | 'qa' | 'transcript'>('arsenal');
   const [reviewQueueFilter, setReviewQueueFilter] = useState<'pending' | 'all'>('pending');
@@ -1588,7 +1588,7 @@ export const CallView: React.FC<CallViewProps> = ({
           </div>
         )}
 
-        {/* ==================== 📝 振り返り・武器化キュー (Review & Arsenal Queue) ==================== */}
+        {/* ==================== 📝 振り返り・Anki登録キュー (Review & Arsenal Queue) ==================== */}
         <div className="bg-gradient-to-r from-slate-900/95 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
@@ -1597,7 +1597,7 @@ export const CallView: React.FC<CallViewProps> = ({
               </div>
               <div>
                 <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                  <span>振り返り・武器化キュー</span>
+                  <span>振り返り・Anki登録キュー</span>
                   {pendingSessions.length > 0 && (
                     <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold border border-amber-500/40 animate-pulse">
                       {pendingSessions.length} 件の振り返り待ち
@@ -2019,12 +2019,12 @@ export const CallView: React.FC<CallViewProps> = ({
                         {isEquipped ? (
                           <>
                             <Check className="w-3.5 h-3.5" />
-                            <span>武器化完了</span>
+                            <span>Anki登録完了</span>
                           </>
                         ) : (
                           <>
                             <Swords className="w-3.5 h-3.5" />
-                            <span>⚔️ この表現を武器化（Anki登録）</span>
+                            <span>🃏 この表現をAnki登録</span>
                           </>
                         )}
                       </button>
@@ -2530,7 +2530,7 @@ export const CallView: React.FC<CallViewProps> = ({
             }`}
           >
             <Swords className="w-4 h-4 text-cyan-300" />
-            <span>⚔️ 武器化 ＆ 発話カルテ</span>
+            <span>🃏 Anki登録</span>
             <span className="px-1.5 py-0.2 rounded-full bg-black/20 text-[10px]">
               {vocabs.length + errors.length}
             </span>
@@ -2568,7 +2568,7 @@ export const CallView: React.FC<CallViewProps> = ({
           </button>
         </div>
 
-        {/* ==================== TAB 1: ⚔️ 武器化 ＆ 発話カルテ ==================== */}
+        {/* ==================== TAB 1: 🃏 Anki登録 ==================== */}
         {reviewTab === 'arsenal' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Batch Action Bar */}
@@ -2591,7 +2591,7 @@ export const CallView: React.FC<CallViewProps> = ({
                   className="flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-600/30 transition-all active:scale-95"
                 >
                   <Swords className="w-3.5 h-3.5" />
-                  <span>⚡ すべて一括武器化 ({unaddedVocabCount})</span>
+                  <span>⚡ すべて一括Anki登録 ({unaddedVocabCount})</span>
                 </button>
 
                 {errors.length > 0 && onSaveExpressionError && (
@@ -2623,7 +2623,7 @@ export const CallView: React.FC<CallViewProps> = ({
                 <div>
                   <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
                     <BookMarked className="w-4 h-4 text-cyan-400" />
-                    1. 武器化フレーズ（Anki忘却曲線で自動復習）
+                    1. 抽出フレーズ（Anki忘却曲線で自動復習）
                   </h4>
                   <p className="text-[11px] text-slate-400 mt-0.5">
                     会話で使われた実用的な単語・定型表現です。Ankiへ登録すると次回の復習デッキに並びます。
@@ -2748,12 +2748,12 @@ export const CallView: React.FC<CallViewProps> = ({
                           {isSaved ? (
                             <>
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>武器化済</span>
+                              <span>登録済</span>
                             </>
                           ) : (
                             <>
                               <Plus className="w-3.5 h-3.5" />
-                              <span>⚔️ 武器化 (Anki)</span>
+                              <span>🃏 Anki登録</span>
                             </>
                           )}
                         </button>
@@ -2770,7 +2770,7 @@ export const CallView: React.FC<CallViewProps> = ({
                 <div>
                   <h4 className="text-sm sm:text-base font-bold text-amber-300 flex items-center gap-2">
                     <Swords className="w-4 h-4 text-amber-400" />
-                    2. 添削表現のAnki武器化（言えなかった表現を忘却曲線で習得）
+                    2. 添削表現（言えなかった表現をAnkiで復習）
                   </h4>
                   <p className="text-[11px] text-slate-300 mt-0.5">
                     不自然だった英語や文法ミスを、自然なネイティブ表現としてAnkiへ登録できます。
@@ -2870,12 +2870,12 @@ export const CallView: React.FC<CallViewProps> = ({
                             {isSaved ? (
                               <>
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>武器化済</span>
+                                <span>登録済</span>
                               </>
                             ) : (
                               <>
                                 <Swords className="w-3.5 h-3.5" />
-                                <span>⚔️ この表現を武器化（Anki登録）</span>
+                                <span>🃏 この表現をAnki登録</span>
                               </>
                             )}
                           </button>

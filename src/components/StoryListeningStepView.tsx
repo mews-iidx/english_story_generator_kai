@@ -152,7 +152,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     };
   }, [stopAudio]);
 
-  // Play unit audio with natural linking
+  // Play unit audio with natural linking & MediaSession sync
   const playUnitAudio = useCallback((unit: ListeningUnit, isRetry: boolean = false) => {
     if (!unit || !unit.text) return;
 
@@ -163,10 +163,27 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       setCurrentRetryCount(prev => prev + 1);
     }
 
+    // MediaSession API: スマホのロック画面・イヤホン操作のメタデータ更新
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: `[文 ${unit.unitIdx + 1}/${units.length}] ${unit.text}`,
+          artist: story.title,
+          album: `CompileEng - ${story.cefrLevel || 'A2'} 初見リスニング`,
+        });
+        navigator.mediaSession.playbackState = 'playing';
+      } catch (e) {
+        console.warn('MediaSession metadata error:', e);
+      }
+    }
+
     speakText(unit.text, speechRate, 'en-US', () => {
       setIsPlaying(false);
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
     });
-  }, [speechRate, stopAudio]);
+  }, [speechRate, stopAudio, units.length, story.title, story.cefrLevel]);
 
   // Start listening flow from unit 0
   const handleStartListening = () => {
@@ -231,6 +248,11 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       // Completed all units
       stopAudio();
       setStepStatus('all_completed');
+      // 全文読了時の自動日本語音声アナウンス
+      speakText(`全${units.length}文の読み終わりです。お疲れ様でした！`, 1.0, 'ja-JP');
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'none';
+      }
     }
   }, [currentUnit, currentIndex, currentRetryCount, revealedEnglish, revealedJapanese, unitLogs, units, blindMode, playUnitAudio, stopAudio]);
 
@@ -336,6 +358,40 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [stepStatus, handleRateAndAdvance, handleAdvanceDefault, handleRetry, handlePrevious, blindMode]);
+
+
+  // MediaSession API: イヤホン・ロック画面操作（Play=リピート, Next=次へ, Prev=戻る）
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || stepStatus !== 'listening') return;
+
+    try {
+      navigator.mediaSession.setActionHandler('play', () => {
+        handleRetry();
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        stopAudio();
+      });
+      navigator.mediaSession.setActionHandler('nexttrack', () => {
+        handleAdvanceDefault();
+      });
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+        handlePrevious();
+      });
+    } catch (e) {
+      console.warn('MediaSession action handler error:', e);
+    }
+
+    return () => {
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.setActionHandler('play', null);
+          navigator.mediaSession.setActionHandler('pause', null);
+          navigator.mediaSession.setActionHandler('nexttrack', null);
+          navigator.mediaSession.setActionHandler('previoustrack', null);
+        } catch (_) {}
+      }
+    };
+  }, [stepStatus, handleRetry, stopAudio, handleAdvanceDefault, handlePrevious]);
 
   // Benchmark Metrics Computation
   const metricsData = useMemo(() => {

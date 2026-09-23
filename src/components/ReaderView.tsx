@@ -3,10 +3,12 @@ import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import { Story, TargetEmbedding } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, EyeOff, ChevronLeft, ChevronRight, BookmarkPlus, Film, Sparkles, Plus, Palette } from 'lucide-react';
+import {
+  Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft,
+  Headphones, BookOpen, Pause, Play, Square, Eye, EyeOff, Film, Palette
+} from 'lucide-react';
 
 import { speakText, stopSpeech } from '../utils/speech';
-import { translateWithGoogleFree } from '../services/translate';
 import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence, recordStoryListeningCompleted } from '../services/storage';
 import { StoryListeningStepView } from './StoryListeningStepView';
 import { getCandidateLemmas } from '../utils/storyVocabExtractor';
@@ -41,15 +43,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   currentStory,
   allStories = [],
   vocabs,
-  difficultSentences = [],
   onWordOrPhraseTap,
   selectedPhrase,
   onClearSelection,
-  onSaveDifficultSentence,
-  onUpdateSentenceReason,
   onRecordStoryRead,
   onSelectStory,
-  onQueueNextEpisode,
   onBackToBookshelf,
 }) => {
   // 2-Stage Story Lifecycle: 初見チャンクリスニング ➔ いつものリーダー
@@ -61,25 +59,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setIsListeningStage(currentStory.listeningStatus !== 'completed');
   }, [currentStory.id, currentStory.listeningStatus]);
 
-  const [viewMode, setViewMode] = useState<'read' | 'listen'>('read');
-  const [listeningStyle, setListeningStyle] = useState<'step_by_step' | 'continuous'>('step_by_step');
   const [speechRate, setSpeechRate] = useState<number>(0.95);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-
-  // 一文ずつリスニングモードの状態
-  const [currentSentenceIdx, setCurrentSentenceIdx] = useState(0);
-  const [showSentenceEnglish, setShowSentenceEnglish] = useState(false);
-  const [showSentenceTranslation, setShowSentenceTranslation] = useState(false);
-  const [sentenceTranslationText, setSentenceTranslationText] = useState('');
-  const [isTranslatingSentence, setIsTranslatingSentence] = useState(false);
 
   const [showTranslation, setShowTranslation] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [startTime] = useState<number>(Date.now());
-  const [calculatedWpm, setCalculatedWpm] = useState<number | null>(null);
-  // 読了時パッシブ同期モーダル用
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
-
   const [pendingWpm, setPendingWpm] = useState<number>(150);
 
   // 全ランクのマスター状態（習得済み・要復習）を取得
@@ -119,15 +105,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const lemmas = getCandidateLemmas(lower);
 
     for (const lemma of lemmas) {
-      // 1. 要復習 / 単語帳に保存中（習得中）
       if (savedVocabSet.has(lemma) || masteryState.vocabs[lemma]?.status === 'lapsed') {
         return 'lapsed';
       }
-      // 2. 習得済み (mastered)
       if (masteryState.vocabs[lemma]?.status === 'mastered') {
         return 'mastered';
       }
-      // 3. 今回の出題ターゲット語彙
       if (targetVocabSet.has(lemma)) {
         return 'target';
       }
@@ -135,20 +118,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return 'unseen';
   }, [savedVocabSet, masteryState.vocabs, targetVocabSet]);
 
-  // 今回の読書セッションでマークされた「訳せなかった文」の理由編集用
-  const [sessionSentenceReasons, setSessionSentenceReasons] = useState<Record<string, { category: DifficultyReasonCategory; note: string }>>({});
-
-  // 今回のセッションで「要復習」とマークされたターゲットID
   const lapsedTargetIdsRef = useRef<Set<string>>(new Set());
   const sessionLookedUpTokensRef = useRef<Set<string>>(new Set());
 
-  // 出題ターゲット（構文・出題単語）の可視化切り替え（デフォルトOFF）
-    // 初見リスニング理解度カラーの可視化切り替え（デフォルトON）
+  // 初見リスニング理解度カラーの可視化切り替え（デフォルトON）
   const [showComprehensionHighlights, setShowComprehensionHighlights] = useState<boolean>(() => {
     const saved = localStorage.getItem('reader_show_comprehension');
     return saved !== null ? saved === 'true' : true;
   });
 
+  // 出題ターゲット（構文・出題単語）の可視化切り替え（デフォルトOFF）
   const [showTargetHighlights, setShowTargetHighlights] = useState<boolean>(() => {
     return localStorage.getItem('reader_show_targets') === 'true';
   });
@@ -165,10 +144,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setSelectionRange(null);
     stopSpeech();
     setIsPlayingAudio(false);
-    setCurrentSentenceIdx(0);
-    setShowSentenceEnglish(false);
-    setShowSentenceTranslation(false);
-    setSentenceTranslationText('');
     lapsedTargetIdsRef.current.clear();
     sessionLookedUpTokensRef.current.clear();
   }, [currentStory.id]);
@@ -209,7 +184,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
   }, [currentStory.storyContent]);
 
-  // 一文ごとのリスト（一文リスニング用 & 理解度カラーマッピング用）
+  // 一文ごとのリスト（理解度カラーマッピング用）
   const sentenceList = useMemo(() => {
     const result: { id: number; text: string; pIdx: number; charStart: number; charEnd: number }[] = [];
     let counter = 0;
@@ -233,77 +208,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     return result;
   }, [paragraphs]);
-
-  const currentSentence = sentenceList[currentSentenceIdx];
-
-  // 一文再生ハンドラー
-  const handlePlaySentence = useCallback((index: number) => {
-    const target = sentenceList[index];
-    if (!target) return;
-
-    stopSpeech();
-    setIsPlayingAudio(true);
-    speakText(target.text, speechRate, 'en-US', () => {
-      setIsPlayingAudio(false);
-    });
-  }, [sentenceList, speechRate]);
-
-  // 一文モードで次の文に進む
-  const handleNextSentence = () => {
-    if (currentSentenceIdx + 1 < sentenceList.length) {
-      const nextIdx = currentSentenceIdx + 1;
-      setCurrentSentenceIdx(nextIdx);
-      setShowSentenceEnglish(false);
-      setShowSentenceTranslation(false);
-      setSentenceTranslationText('');
-      handlePlaySentence(nextIdx);
-    }
-  };
-
-  // 一文モードで前の文に戻る
-  const handlePrevSentence = () => {
-    if (currentSentenceIdx > 0) {
-      const prevIdx = currentSentenceIdx - 1;
-      setCurrentSentenceIdx(prevIdx);
-      setShowSentenceEnglish(false);
-      setShowSentenceTranslation(false);
-      setSentenceTranslationText('');
-      handlePlaySentence(prevIdx);
-    }
-  };
-
-  // 一文モードの日本語訳取得＆表示
-  const handleFetchSentenceTranslation = async () => {
-    if (!currentSentence) return;
-    if (showSentenceTranslation) {
-      setShowSentenceTranslation(false);
-      return;
-    }
-
-    if (sentenceTranslationText) {
-      setShowSentenceTranslation(true);
-      return;
-    }
-
-    setIsTranslatingSentence(true);
-    try {
-      const res = await translateWithGoogleFree(currentSentence.text);
-      setSentenceTranslationText(res.translatedText);
-      setShowSentenceTranslation(true);
-    } catch (e) {
-      setSentenceTranslationText('（翻訳取得失敗）');
-      setShowSentenceTranslation(true);
-    } finally {
-      setIsTranslatingSentence(false);
-    }
-  };
-
-  // 一文モードで「訳せなかった文」として保存
-  const handleBookmarkCurrentSentence = () => {
-    if (!currentSentence || !onSaveDifficultSentence) return;
-    onSaveDifficultSentence(currentSentence.text, sentenceTranslationText || '要確認', '');
-    alert('📌 訳せなかった文リストに保存しました！');
-  };
 
   const paragraphSegments = useMemo(() => {
     return paragraphs.map((para, pIdx) => {
@@ -376,7 +280,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         }
       });
 
-      // ターゲット構文パターンのマッチング
       const patternMatches: { start: number; end: number; embedding: TargetEmbedding }[] = [];
       const targetEmbeddings = currentStory.targetEmbeddings || [];
       targetEmbeddings.forEach(emb => {
@@ -401,7 +304,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     });
   }, [paragraphs, currentStory, vocabs]);
 
-  // 音声再生・停止（通しモード）
+  // 音声再生・停止
   const handleToggleAudio = () => {
     if (isPlayingAudio) {
       stopSpeech();
@@ -468,8 +371,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     const phrase = selectedTokens.join('').replace(/\s+/g, ' ').trim();
     if (phrase) {
-      // ターゲット構文・単語の判定
-      // 選択位置と重なる patternMatches を優先
       const startSeg = para.segments.find(s => s.wIdx === range.startWIdx && s.isWord);
       const endSeg = para.segments.find(s => s.wIdx === range.endWIdx && s.isWord);
       
@@ -504,7 +405,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const durationMinutes = Math.max(0.2, (Date.now() - startTime) / 60000);
     const wordCount = currentStory.actualWordCount || currentStory.targetWordCount || 700;
     const wpm = Math.round(wordCount / durationMinutes);
-    setCalculatedWpm(wpm);
     setPendingWpm(wpm);
 
     // 読書量とWPMを記録
@@ -514,7 +414,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       onRecordStoryRead(currentStory.id, wpm);
     }
 
-    // ★ 全文CEFRスキャン＆マスターDB自動同期タスクをバックグラウンドキューへ投入
     try {
       enqueueMasteryScanTask({
         sourceType: 'story',
@@ -539,18 +438,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       s => s.seriesId === currentStory.seriesId && s.episodeIndex === (currentStory.episodeIndex || 0) + 1
     );
   }, [currentStory, allStories]);
-
-  // 今回のストーリーで記録された「訳せなかった文」
-  const sessionDifficultSentences = useMemo(() => {
-    return difficultSentences.filter(s => s.sourceStoryId === currentStory.id);
-  }, [difficultSentences, currentStory.id]);
-
-  const handleSetSentenceReason = (sentenceId: string, category: DifficultyReasonCategory, note: string) => {
-    setSessionSentenceReasons(prev => ({ ...prev, [sentenceId]: { category, note } }));
-    if (onUpdateSentenceReason) {
-      onUpdateSentenceReason(sentenceId, category, note);
-    }
-  };
 
   const getContentTypeBadge = () => {
     if (currentStory.contentType === 'podcast') {
@@ -585,58 +472,30 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       <div className="flex items-center justify-between flex-wrap gap-2.5">
         <button
           onClick={onBackToBookshelf}
-          className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-xl text-xs font-semibold transition-all group"
+          className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-xl text-xs font-semibold transition-all group cursor-pointer"
         >
           <ArrowLeft className="w-3.5 h-3.5 text-cyan-400 group-hover:-translate-x-0.5 transition-transform" />
           <span>本棚に戻る</span>
         </button>
 
-        {/* Replay Listening Stage & View Mode Toggle */}
-        <div className="flex items-center gap-2">
+        {/* Unified Mode Switcher: 読むモード vs リスニングモード */}
+        <div className="flex items-center bg-slate-900 p-1 rounded-2xl border border-slate-800">
           <button
-            onClick={() => setIsListeningStage(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-indigo-200 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-all shadow-sm"
-            title="第1段階：初見チャンクリスニングを再体験"
-          >
-            <Headphones className="w-3.5 h-3.5 text-indigo-400" />
-            <span>🎧 初見リスニング</span>
-          </button>
-
-          <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => {
-              setViewMode('read');
-              stopSpeech();
-              setIsPlayingAudio(false);
-            }}
-            className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-              viewMode === 'read'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
+            type="button"
+            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-sm transition-all"
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>読むモード</span>
+            <span>📖 精読モード</span>
           </button>
           <button
-            onClick={() => {
-              setViewMode('listen');
-              stopSpeech();
-              setIsPlayingAudio(false);
-              if (listeningStyle === 'step_by_step') {
-                handlePlaySentence(currentSentenceIdx);
-              }
-            }}
-            className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-              viewMode === 'listen'
-                ? 'bg-purple-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
+            type="button"
+            onClick={() => setIsListeningStage(true)}
+            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-indigo-300 hover:bg-slate-850 transition-all cursor-pointer"
+            title="初見リスニング（耳トレ・4段階理解度メモ）へ切り替え"
           >
-            <Headphones className="w-3.5 h-3.5" />
-            <span>🎧 聴くモード</span>
+            <Headphones className="w-3.5 h-3.5 text-indigo-400" />
+            <span>🎧 リスニング特訓</span>
           </button>
-        </div>
         </div>
 
         <div className="flex items-center space-x-2 text-xs">
@@ -655,62 +514,28 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
       {/* 2. Audio Playback & Speed Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-xl flex items-center justify-between flex-wrap gap-3">
-        {viewMode === 'listen' ? (
-          <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={handleToggleAudio}
+            className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              isPlayingAudio
+                ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 animate-pulse'
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20'
+            }`}
+          >
+            {isPlayingAudio ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+            <span>{isPlayingAudio ? '一時停止' : '全文音声再生'}</span>
+          </button>
+          {isPlayingAudio && (
             <button
-              onClick={() => {
-                setListeningStyle('step_by_step');
-                stopSpeech();
-                setIsPlayingAudio(false);
-                handlePlaySentence(currentSentenceIdx);
-              }}
-              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg font-bold transition-all ${
-                listeningStyle === 'step_by_step'
-                  ? 'bg-purple-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              onClick={handleStopAudio}
+              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              title="停止"
             >
-              <span>一文ずつ</span>
+              <Square className="w-3.5 h-3.5" />
             </button>
-            <button
-              onClick={() => {
-                setListeningStyle('continuous');
-                stopSpeech();
-                setIsPlayingAudio(false);
-              }}
-              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg font-bold transition-all ${
-                listeningStyle === 'continuous'
-                  ? 'bg-purple-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <span>通し聴き</span>
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleToggleAudio}
-              className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                isPlayingAudio
-                  ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 animate-pulse'
-                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20'
-              }`}
-            >
-              {isPlayingAudio ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{isPlayingAudio ? '一時停止' : '全文音声再生'}</span>
-            </button>
-            {isPlayingAudio && (
-              <button
-                onClick={handleStopAudio}
-                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
-                title="停止"
-              >
-                <Square className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="flex items-center space-x-2 text-xs">
           <span className="text-slate-400 font-semibold">再生速度:</span>
@@ -718,7 +543,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <button
               key={rate}
               onClick={() => setSpeechRate(rate)}
-              className={`px-2 py-1 rounded-lg font-bold transition-colors ${
+              className={`px-2 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
                 speechRate === rate
                   ? 'bg-blue-600/30 text-sky-400 border border-blue-500/40'
                   : 'text-slate-400 hover:text-slate-200'
@@ -839,174 +664,95 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </div>
 
         {/* Story Body */}
-        {viewMode === 'read' ? (
-          <div className="space-y-4 text-base sm:text-lg leading-relaxed text-slate-200">
-            {paragraphSegments.map((para) => (
-              <p key={para.pIdx} className="leading-relaxed font-normal">
-                {para.segments.map((seg, sIdx) => {
-                  if (!seg.isWord) {
-                    return <span key={sIdx}>{seg.text}</span>;
-                  }
+        <div className="space-y-4 text-base sm:text-lg leading-relaxed text-slate-200">
+          {paragraphSegments.map((para) => (
+            <p key={para.pIdx} className="leading-relaxed font-normal">
+              {para.segments.map((seg, sIdx) => {
+                if (!seg.isWord) {
+                  return <span key={sIdx}>{seg.text}</span>;
+                }
 
-                  const isSelected = selectionRange &&
-                    selectionRange.pIdx === para.pIdx &&
-                    seg.wIdx >= selectionRange.startWIdx &&
-                    seg.wIdx <= selectionRange.endWIdx;
+                const isSelected = selectionRange &&
+                  selectionRange.pIdx === para.pIdx &&
+                  seg.wIdx >= selectionRange.startWIdx &&
+                  seg.wIdx <= selectionRange.endWIdx;
 
-                  let wordStyle = 'text-slate-200 hover:text-sky-300 hover:underline';
+                let wordStyle = 'text-slate-200 hover:text-sky-300 hover:underline';
 
-                  if (isSelected) {
-                    wordStyle = 'bg-blue-600 text-white';
-                  } else {
-                    const isPattern = showTargetHighlights && para.patternMatches.some(m =>
+                if (isSelected) {
+                  wordStyle = 'bg-blue-600 text-white';
+                } else {
+                  const isPattern = showTargetHighlights && para.patternMatches.some(m =>
+                    (seg.charStart >= m.start && seg.charStart < m.end) ||
+                    (seg.charEnd > m.start && seg.charEnd <= m.end)
+                  );
+
+                  const lowerClean = seg.cleanWord.toLowerCase();
+                  const isTargetMatch = showTargetHighlights && (
+                    targetVocabSet.has(lowerClean) ||
+                    getCandidateLemmas(lowerClean).some(l => targetVocabSet.has(l)) ||
+                    para.targetMatches.some(m =>
                       (seg.charStart >= m.start && seg.charStart < m.end) ||
                       (seg.charEnd > m.start && seg.charEnd <= m.end)
-                    );
+                    )
+                  );
 
-                    const lowerClean = seg.cleanWord.toLowerCase();
-                    const isTargetMatch = showTargetHighlights && (
-                      targetVocabSet.has(lowerClean) ||
-                      getCandidateLemmas(lowerClean).some(l => targetVocabSet.has(l)) ||
-                      para.targetMatches.some(m =>
-                        (seg.charStart >= m.start && seg.charStart < m.end) ||
-                        (seg.charEnd > m.start && seg.charEnd <= m.end)
-                      )
-                    );
+                  const status = getWordStatus(seg.cleanWord);
 
-                    const status = getWordStatus(seg.cleanWord);
+                  // 理解度カラーの判定
+                  const sentenceOfSeg = sentenceList.find(s => s.pIdx === para.pIdx && seg.charStart >= s.charStart && seg.charStart < s.charEnd);
+                  const sentenceRating = sentenceOfSeg
+                    ? (currentStory.sentenceRatings?.[sentenceOfSeg.id]?.rating || currentStory.listeningMetrics?.sentenceRatings?.[sentenceOfSeg.id]?.rating)
+                    : undefined;
 
-                    // 理解度カラーの判定
-                    const sentenceOfSeg = sentenceList.find(s => s.pIdx === para.pIdx && seg.charStart >= s.charStart && seg.charStart < s.charEnd);
-                    const sentenceRating = sentenceOfSeg
-                      ? (currentStory.sentenceRatings?.[sentenceOfSeg.id]?.rating || currentStory.listeningMetrics?.sentenceRatings?.[sentenceOfSeg.id]?.rating)
-                      : undefined;
-
-                    let comprehensionBase = '';
-                    if (showComprehensionHighlights && sentenceRating) {
-                      if (sentenceRating === 1) {
-                        comprehensionBase = 'bg-rose-950/40 text-rose-100 border-b-2 border-rose-500/80 ';
-                      } else if (sentenceRating === 2) {
-                        comprehensionBase = 'bg-amber-950/40 text-amber-100 border-b-2 border-amber-400/80 ';
-                      } else if (sentenceRating === 3) {
-                        comprehensionBase = 'bg-sky-950/30 text-sky-100 border-b border-sky-400/60 ';
-                      } else if (sentenceRating === 4) {
-                        comprehensionBase = 'bg-emerald-950/20 text-emerald-100 ';
-                      }
+                  let comprehensionBase = '';
+                  if (showComprehensionHighlights && sentenceRating) {
+                    if (sentenceRating === 1) {
+                      comprehensionBase = 'bg-rose-950/40 text-rose-100 border-b-2 border-rose-500/80 ';
+                    } else if (sentenceRating === 2) {
+                      comprehensionBase = 'bg-amber-950/40 text-amber-100 border-b-2 border-amber-400/80 ';
+                    } else if (sentenceRating === 3) {
+                      comprehensionBase = 'bg-sky-950/30 text-sky-100 border-b border-sky-400/60 ';
+                    } else if (sentenceRating === 4) {
+                      comprehensionBase = 'bg-emerald-950/20 text-emerald-100 ';
                     }
-
-                    if (isPattern) {
-                      // 💡 出題構文（パープル系背景・波線）
-                      wordStyle = `${comprehensionBase}bg-purple-950/70 text-purple-200 underline decoration-purple-400 decoration-2 underline-offset-4 font-semibold hover:bg-purple-900/90 hover:text-purple-100 rounded px-0.5`;
-                    } else if (isTargetMatch) {
-                      // 🔵 出題ターゲット単語（可視化ON時は最優先でスカイブルー強調！）
-                      wordStyle = `${comprehensionBase}text-sky-300 underline decoration-sky-400/90 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/50 font-medium rounded px-0.5`;
-                    } else if (status === 'lapsed') {
-                      // 🟡 習得中 / 要復習（単語帳に登録中・Anki学習中）
-                      wordStyle = `${comprehensionBase}text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10`;
-                    } else if (comprehensionBase) {
-                      wordStyle = `${comprehensionBase}hover:text-sky-300`;
-                    }
-                    // 既知・習得済み(mastered)単語は読書を邪魔しないよう通常テキストスタイルを維持
                   }
 
-                  return (
-                    <span
-                      key={sIdx}
-                      data-word="true"
-                      onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
-                      className={`inline cursor-pointer px-0 py-0 transition-colors ${wordStyle}`}
-                    >
-                      {seg.text}
-                    </span>
-                  );
-                })}
-              </p>
-            ))}
-          </div>
-        ) : (
-          /* Listening Step-by-Step UI */
-          <div className="py-6 space-y-6 text-center">
-            <div className="p-6 bg-slate-950/80 border border-purple-500/30 rounded-3xl space-y-4">
-              <div className="text-xs text-purple-400 font-bold">
-                一文リスニング [{currentSentenceIdx + 1} / {sentenceList.length}]
-              </div>
+                  if (isPattern) {
+                    // 💡 出題構文（パープル系背景・波線）
+                    wordStyle = `${comprehensionBase}bg-purple-950/70 text-purple-200 underline decoration-purple-400 decoration-2 underline-offset-4 font-semibold hover:bg-purple-900/90 hover:text-purple-100 rounded px-0.5`;
+                  } else if (isTargetMatch) {
+                    // 🔵 出題ターゲット単語（可視化ON時は最優先でスカイブルー強調！）
+                    wordStyle = `${comprehensionBase}text-sky-300 underline decoration-sky-400/90 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/50 font-medium rounded px-0.5`;
+                  } else if (status === 'lapsed') {
+                    // 🟡 習得中 / 要復習（単語帳に登録中・Anki学習中）
+                    wordStyle = `${comprehensionBase}text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10`;
+                  } else if (comprehensionBase) {
+                    wordStyle = `${comprehensionBase}hover:text-sky-300`;
+                  }
+                }
 
-              <div className="min-h-[70px] flex items-center justify-center">
-                {showSentenceEnglish ? (
-                  <p className="text-lg sm:text-xl font-bold text-white leading-relaxed animate-fadeIn">
-                    {currentSentence?.text}
-                  </p>
-                ) : (
-                  <button
-                    onClick={() => setShowSentenceEnglish(true)}
-                    className="flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-semibold transition-all"
+                return (
+                  <span
+                    key={sIdx}
+                    data-word="true"
+                    onClick={(e) => handleWordClick(para.pIdx, seg.wIdx, para.fullParaText, e)}
+                    className={`inline cursor-pointer px-0 py-0 transition-colors ${wordStyle}`}
                   >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>英文を表示</span>
-                  </button>
-                )}
-              </div>
-
-              {showSentenceTranslation && (
-                <p className="text-sm font-semibold text-slate-300 animate-fadeIn">
-                  {sentenceTranslationText}
-                </p>
-              )}
-
-              <div className="flex items-center justify-center space-x-3 pt-2">
-                <button
-                  onClick={() => handlePlaySentence(currentSentenceIdx)}
-                  className="flex items-center space-x-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-600/25 transition-all"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>もう一度聴く</span>
-                </button>
-
-                <button
-                  onClick={handleFetchSentenceTranslation}
-                  disabled={isTranslatingSentence}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-semibold transition-colors"
-                >
-                  {isTranslatingSentence ? '訳を取得中...' : showSentenceTranslation ? '訳を隠す' : '日本語訳'}
-                </button>
-
-                <button
-                  onClick={handleBookmarkCurrentSentence}
-                  className="p-2 text-indigo-400 hover:bg-indigo-950/60 rounded-xl border border-indigo-500/30 transition-colors"
-                  title="訳せなかった文として保存"
-                >
-                  <BookmarkPlus className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <button
-                onClick={handlePrevSentence}
-                disabled={currentSentenceIdx === 0}
-                className="flex items-center space-x-1 px-4 py-2 bg-slate-800 disabled:opacity-30 text-slate-200 rounded-xl text-xs font-semibold"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                <span>前の文</span>
-              </button>
-              <button
-                onClick={handleNextSentence}
-                disabled={currentSentenceIdx + 1 >= sentenceList.length}
-                className="flex items-center space-x-1 px-4 py-2 bg-purple-600 disabled:opacity-30 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-600/25"
-              >
-                <span>次の文</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
+                    {seg.text}
+                  </span>
+                );
+              })}
+            </p>
+          ))}
+        </div>
 
         {/* Bottom Actions: Finish & Translations */}
         <div className="pt-4 border-t border-slate-800/80 space-y-4">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <button
               onClick={handleFinishStory}
-              className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+              className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
                 isFinished
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                   : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600'
@@ -1018,13 +764,26 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
             <button
               onClick={() => setShowTranslation(!showTranslation)}
-              className="w-full sm:w-auto flex items-center justify-center space-x-1.5 px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-all"
+              className="w-full sm:w-auto flex items-center justify-center space-x-1.5 px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-all cursor-pointer"
             >
               <Languages className="w-4 h-4" />
               <span>{showTranslation ? '日本語訳を隠す' : '全文日本語訳を表示'}</span>
               {showTranslation ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
           </div>
+
+          {/* Full Japanese Translation */}
+          {showTranslation && (
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-3 animate-fadeIn">
+              <div className="flex items-center space-x-2 text-xs font-bold text-slate-400">
+                <Languages className="w-4 h-4 text-cyan-400" />
+                <span>全文日本語訳</span>
+              </div>
+              <div className="space-y-3 text-sm sm:text-base leading-relaxed text-slate-300 whitespace-pre-line">
+                {currentStory.japaneseTranslation || '（日本語訳データがありません）'}
+              </div>
+            </div>
+          )}
 
           {/* Trilogy Next Episode Banner */}
           {isFinished && nextEpisode && (
@@ -1040,114 +799,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </div>
               <button
                 onClick={() => onSelectStory?.(nextEpisode)}
-                className="flex items-center space-x-1 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30 transition-all flex-shrink-0"
+                className="flex items-center space-x-1 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30 transition-all flex-shrink-0 cursor-pointer"
               >
                 <span>第 {nextEpisode.episodeIndex} 話を読む</span>
-                <ChevronRight className="w-4 h-4" />
               </button>
-            </div>
-          )}
-
-          {/* Next Episode Queue Generator Button */}
-          {isFinished && !nextEpisode && onQueueNextEpisode && (
-            <div className="p-4 bg-gradient-to-r from-purple-950/60 to-indigo-950/60 border border-purple-500/30 rounded-2xl flex items-center justify-between gap-3 animate-fadeIn">
-              <div>
-                <div className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                  <span>続きのエピソードを生成</span>
-                </div>
-                <div className="text-xs text-slate-300 pt-0.5">
-                  この話の登場人物やあらすじを引き継いだ次話をキューに追加
-                </div>
-              </div>
-              <button
-                onClick={() => onQueueNextEpisode(currentStory)}
-                className="flex items-center space-x-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-purple-600/30 transition-all flex-shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>次話をキューに追加</span>
-              </button>
-            </div>
-          )}
-
-          {/* WPM & Speed Stat Banner */}
-          {isFinished && calculatedWpm && (
-            <div className="p-3.5 bg-blue-950/60 border border-blue-500/30 rounded-2xl flex items-center justify-between text-xs animate-fadeIn">
-              <div className="flex items-center space-x-2">
-                <Gauge className="w-4 h-4 text-cyan-400" />
-                <span className="text-slate-300">
-                  今回の読書スピード: <strong className="text-white text-sm">{calculatedWpm} WPM</strong>
-                </span>
-              </div>
-              <span className="text-[11px] text-cyan-300 font-medium">
-                {calculatedWpm >= 130 ? '🔥 リアルタイムコンパイル達成！' : '💡 頭から読む意識でスピードUP！'}
-              </span>
-            </div>
-          )}
-
-          {/* 読了時：訳せなかった文の理由記録カード */}
-          {isFinished && sessionDifficultSentences.length > 0 && (
-            <div className="p-4 bg-slate-950/90 border border-indigo-500/30 rounded-2xl space-y-3 animate-fadeIn">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-indigo-400 flex items-center gap-1.5">
-                  <BookmarkCheck className="w-3.5 h-3.5 text-indigo-400" />
-                  今回「訳せなかった」文の理由を記録（自己分析用）
-                </span>
-                <span className="text-[11px] text-slate-400">
-                  {sessionDifficultSentences.length} 件
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {sessionDifficultSentences.map((item) => {
-                  const currentReason = sessionSentenceReasons[item.id] || {
-                    category: item.reasonCategory || 'word',
-                    note: item.reasonNote || '',
-                  };
-
-                  const categories: { id: DifficultyReasonCategory; label: string }[] = [
-                    { id: 'word', label: '🔤 単語・熟語' },
-                    { id: 'modifier', label: '⛓️ 修飾関係・文構造' },
-                    { id: 'grammar', label: '📚 文法・構文' },
-                    { id: 'other', label: '💭 ニュアンス・その他' },
-                  ];
-
-                  return (
-                    <div key={item.id} className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl space-y-2 text-xs">
-                      <div className="text-slate-200 font-medium">
-                        "{item.sentence}"
-                      </div>
-                      <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-                        {categories.map(c => (
-                          <button
-                            key={c.id}
-                            onClick={() => handleSetSentenceReason(item.id, c.id, currentReason.note)}
-                            className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
-                              currentReason.category === c.id
-                                ? 'bg-indigo-600 text-white'
-                                : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                            }`}
-                          >
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 全文日本語訳 */}
-          {showTranslation && (
-            <div className="p-4 sm:p-5 bg-slate-950/90 border border-slate-800 rounded-2xl space-y-3 animate-fadeIn text-slate-300 text-sm sm:text-base leading-relaxed">
-              <h4 className="text-xs font-bold text-sky-400 uppercase tracking-wider">
-                【日本語全訳】
-              </h4>
-              {currentStory.japaneseTranslation.split('\n\n').map((paraJa, idx) => (
-                <p key={idx}>{paraJa}</p>
-              ))}
             </div>
           )}
         </div>
@@ -1164,11 +819,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           }}
         />
       )}
-      {/* 4. Bottom Return Bar: 画面下部からスムーズに本棚へ戻る */}
+
+      {/* 4. Bottom Return Bar */}
       <div className="flex items-center justify-between pt-1 pb-6 px-1">
         <button
           onClick={onBackToBookshelf}
-          className="flex items-center space-x-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-semibold transition-all group"
+          className="flex items-center space-x-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-semibold transition-all group cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4 text-cyan-400 group-hover:-translate-x-0.5 transition-transform" />
           <span>本棚に戻る</span>

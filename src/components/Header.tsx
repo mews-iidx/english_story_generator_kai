@@ -37,10 +37,9 @@ export const Header: React.FC<HeaderProps> = ({
   generatingTheme,
   isCallActive = false,
 }) => {
-  const tabs: TabItem[] = [
+  const tabs: (TabItem & { isMaintenance?: boolean })[] = [
     { id: 'bookshelf', label: '物語', icon: BookOpen },
-    { id: 'drill', label: 'ドリル', icon: Zap },
-    // { id: 'listening_lab', label: 'ラボ', icon: FlaskConical }, // 一時コメントアウト（後で復活可能）
+    { id: 'drill', label: 'ドリル (メンテ中)', icon: Zap, isMaintenance: true },
     { id: 'quiz', label: 'Anki', icon: PlusCircle, badge: dueCount > 0 ? dueCount : undefined },
     { id: 'mastery', label: '分析', icon: Target },
     { id: 'call', label: '英会話', icon: Phone },
@@ -51,6 +50,10 @@ export const Header: React.FC<HeaderProps> = ({
   const handleTabClick = (tabId: NavTab) => {
     if (isCallActive && tabId !== 'call') {
       alert('⚠️ 通話・特訓セッション中です。画面上の終了ボタンを押してから他のメニューへ移動してください。');
+      return;
+    }
+    if (tabId === 'drill') {
+      alert('🛠️ ドリル機能は現在リニューアル・メンテ中です！Ankiや瞬間ラリー英会話をご活用ください。');
       return;
     }
     setActiveTab(tabId);
@@ -91,7 +94,9 @@ export const Header: React.FC<HeaderProps> = ({
                   key={tab.id}
                   onClick={() => handleTabClick(tab.id)}
                   className={`relative flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                    isActive
+                    tab.isMaintenance
+                      ? 'opacity-40 text-slate-500 hover:text-slate-400 cursor-not-allowed'
+                      : isActive
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
                       : isCallActive && isCallTab
                       ? 'bg-rose-950/60 border border-rose-500/40 text-rose-300 animate-pulse'
@@ -177,7 +182,9 @@ export const Header: React.FC<HeaderProps> = ({
               key={tab.id}
               onClick={() => handleTabClick(tab.id)}
               className={`relative flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all flex-1 ${
-                isActive
+                tab.isMaintenance
+                  ? 'opacity-35 text-slate-500'
+                  : isActive
                   ? 'text-blue-400 font-bold'
                   : isCallActive && isCallTab
                   ? 'text-rose-400 font-bold animate-pulse'

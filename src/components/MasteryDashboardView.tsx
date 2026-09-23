@@ -10,13 +10,12 @@ import { VocabItem } from '../types/vocab';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
 import {
-  Zap, Volume2, Search, Trash2, ShieldCheck, BarChart3, Globe,
-  ChevronDown, ChevronUp, BookOpen, PenTool, Sparkles, Headphones, Activity,
-  Flame, AlertTriangle, Calendar, TrendingUp
+  Zap, Volume2, BarChart3, Globe,
+  ChevronDown, ChevronUp, BookOpen, PenTool, Sparkles, Headphones,
+  Flame, AlertTriangle, Calendar, TrendingUp, Trash2
 } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
-import { calculateLabAnalytics } from '../services/listeningLabService';
 
 interface MasteryDashboardViewProps {
   onNavigateToCreate?: () => void;
@@ -30,8 +29,6 @@ interface MasteryDashboardViewProps {
   onDeleteExpressionError?: (errorId: string) => void;
 }
 
-type SavedStockTab = 'cards' | 'errors';
-type CardFilterType = 'all' | 'reading_en_ja' | 'speaking_ja_en' | 'word' | 'pattern' | 'mastered' | 'learning';
 export type CefrProgressMode = 'comprehension' | 'assembly';
 export type CefrTimelineView = 'realtime' | 'daily' | 'monthly';
 
@@ -76,14 +73,8 @@ function computeDailyStreak(snapshots: DailySnapshot[]): number {
 
 export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   savedVocabs = [],
-  expressionErrors = [],
   stories = [],
-  onDeleteVocab,
-  onDeleteExpressionError,
 }) => {
-  const [activeTab, setActiveTab] = useState<SavedStockTab>('cards');
-  const [cardFilter, setCardFilter] = useState<CardFilterType>('all');
-  const [searchQuery, setSearchQuery] = useState('');
   const [progressMode, setProgressMode] = useState<CefrProgressMode>('comprehension');
   const [timelineView, setTimelineView] = useState<CefrTimelineView>('realtime');
   const [isReadingLogOpen, setIsReadingLogOpen] = useState<boolean>(false);
@@ -102,7 +93,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     const fromSnapshots = dailySnapshots.reduce((acc, s) => acc + (s.wordsRead || 0), 0);
     if (fromSnapshots > 0) return fromSnapshots;
     return completedStories.reduce((acc, st) => {
-      const count = st.actualWordCount || st.targetWordCount || (st.storyContent ? st.storyContent.split(/\s+/).filter(Boolean).length : 0);
+      const count = st.actualWordCount || st.targetWordCount || (st.storyContent ? st.storyContent.split(/\\s+/).filter(Boolean).length : 0);
       return acc + count * (st.readCount || 1);
     }, 0);
   }, [dailySnapshots, completedStories]);
@@ -135,8 +126,6 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
 
   // 4. 初見リスニング & 実効バンド幅・ボトルネック集計
-  const labAnalytics = useMemo(() => calculateLabAnalytics(), []);
-
   const storyListeningStats = useMemo(() => {
     const storyList = stories || [];
     const completedListeningStories = storyList.filter(s => s.listeningStatus === 'completed' && s.listeningMetrics);
@@ -201,48 +190,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     };
   }, [stories]);
 
-  // 5. センテンス武器庫のステータス集計（英日・読解ストック vs 日英・発話武器）
-  const {
-    masteredCardsCount,
-    learningCardsCount,
-    wordCardsCount,
-    patternCardsCount,
-    readingCardsCount,
-    weaponCardsCount,
-  } = useMemo(() => {
-    let mastered = 0;
-    let learning = 0;
-    let words = 0;
-    let patterns = 0;
-    let reading = 0;
-    let weapons = 0;
-
-    savedVocabs.forEach(v => {
-      const isMastered = (v.intervalDays && v.intervalDays >= 21) || (v.repetitionCount && v.repetitionCount >= 4);
-      if (isMastered) mastered++;
-      else learning++;
-
-      if (v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0)) patterns++;
-      else words++;
-
-      if (v.cardDirection === 'ja_to_en') {
-        weapons++;
-      } else {
-        reading++;
-      }
-    });
-
-    return {
-      masteredCardsCount: mastered,
-      learningCardsCount: learning,
-      wordCardsCount: words,
-      patternCardsCount: patterns,
-      readingCardsCount: reading,
-      weaponCardsCount: weapons,
-    };
-  }, [savedVocabs]);
-
-  // 6. 直近7日間の日次データ
+  // 5. 直近7日間の日次データ
   const last7DaysData = useMemo(() => {
     const result: { date: string; displayDate: string; words: number; wpm: number; isToday: boolean }[] = [];
     const todayStr = getTodayDateString();
@@ -268,10 +216,10 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     return Math.max(...last7DaysData.map(d => d.words), 200);
   }, [last7DaysData]);
 
-  // 7. CEFR日次・月次積み上げ推移データ
+  // 6. CEFR日次・月次積み上げ推移データ
   const cefrDailyBreakdowns = useMemo(() => {
     const sorted = [...dailySnapshots].sort((a, b) => a.date.localeCompare(b.date));
-    const recent = sorted.slice(-10); // recent 10 recorded days
+    const recent = sorted.slice(-10);
     return recent.map(snap => {
       const a1 = snap.a1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 100, patternMastered: 0, patternLapsed: 0, patternUnseen: 20 };
       const a2 = snap.a2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 150, patternMastered: 0, patternLapsed: 0, patternUnseen: 30 };
@@ -297,7 +245,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
       return {
         date: snap.date,
-        displayDate: snap.date.slice(5), // MM-DD
+        displayDate: snap.date.slice(5),
         totalMastered,
         totalLearning,
         totalUnseen,
@@ -313,7 +261,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   const cefrMonthlyBreakdowns = useMemo(() => {
     const monthGroups: Record<string, DailySnapshot[]> = {};
     dailySnapshots.forEach(s => {
-      const monthKey = s.date.slice(0, 7); // YYYY-MM
+      const monthKey = s.date.slice(0, 7);
       if (!monthGroups[monthKey]) monthGroups[monthKey] = [];
       monthGroups[monthKey].push(s);
     });
@@ -364,52 +312,8 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     }
   };
 
-  // 8. センテンス武器庫のフィルタリング
-  const filteredCards = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return savedVocabs.filter(v => {
-      // 検索一致
-      const matchQuery =
-        !q ||
-        (v.phrase && v.phrase.toLowerCase().includes(q)) ||
-        (v.focusWord && v.focusWord.toLowerCase().includes(q)) ||
-        (v.meaning && v.meaning.toLowerCase().includes(q)) ||
-        (v.sentence && v.sentence.toLowerCase().includes(q)) ||
-        (v.translation && v.translation.toLowerCase().includes(q));
-
-      if (!matchQuery) return false;
-
-      // フィルタ一致
-      if (cardFilter === 'all') return true;
-      if (cardFilter === 'reading_en_ja') return v.cardDirection === 'en_to_ja' || !v.cardDirection;
-      if (cardFilter === 'speaking_ja_en') return v.cardDirection === 'ja_to_en';
-      if (cardFilter === 'word') return v.focusType !== 'pattern' && (!v.corePatterns || v.corePatterns.length === 0);
-      if (cardFilter === 'pattern') return v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0);
-      
-      const isMastered = (v.intervalDays && v.intervalDays >= 21) || (v.repetitionCount && v.repetitionCount >= 4);
-      if (cardFilter === 'mastered') return isMastered;
-      if (cardFilter === 'learning') return !isMastered;
-
-      return true;
-    });
-  }, [savedVocabs, cardFilter, searchQuery]);
-
-  // 9. 偽英語・発話カルテのフィルタリング
-  const filteredErrors = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return expressionErrors.filter(e => {
-      if (!q) return true;
-      return (
-        e.userUtterance.toLowerCase().includes(q) ||
-        e.naturalExpression.toLowerCase().includes(q) ||
-        e.explanation.toLowerCase().includes(q) ||
-        e.corePattern.toLowerCase().includes(q)
-      );
-    });
-  }, [expressionErrors, searchQuery]);
-
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 pb-20 animate-fadeIn">
       {/* 1. TOP SUMMARY CARDS (4-GRID) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Card 1: 厳格な総読了語数 */}
@@ -730,58 +634,6 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             <span>完璧です！直近のストーリーはすべて一発で聞き取れています！</span>
           </div>
         ) : null}
-
-        {/* Bandwidth Matrix Grid from Lab */}
-        {labAnalytics.totalQuestions > 0 && (
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between text-xs text-slate-300 font-bold">
-              <span className="flex items-center gap-1.5">
-                <Activity className="w-4 h-4 text-cyan-400" />
-                <span>リスニング・キャパシティ行列（語数 × WPM）</span>
-              </span>
-              <span className="text-[11px] text-slate-500 font-normal">
-                快適: 90%+ / 成長負荷: 70-89% / パンク: &lt;70%
-              </span>
-            </div>
-
-            <div className="overflow-x-auto pb-1">
-              <table className="w-full text-center text-[11px] border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400">
-                    <th className="p-1.5 text-left font-bold">語数 ＼ 速度</th>
-                    {[60, 80, 100, 120, 150, 180, 200].map(wpm => (
-                      <th key={wpm} className="p-1 font-mono font-bold">{wpm} WPM</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 font-mono">
-                  {[4, 6, 8, 12, 16, 20].map(wc => (
-                    <tr key={wc}>
-                      <td className="p-1.5 text-left font-bold text-slate-300 whitespace-nowrap">{wc} 語</td>
-                      {[60, 80, 100, 120, 150, 180, 200].map(wpm => {
-                        const cell = labAnalytics.matrix[wc]?.[wpm];
-                        const cellClass = !cell || cell.attempts === 0
-                          ? 'bg-slate-900/40 text-slate-600 border-slate-850'
-                          : cell.avgScore >= 90
-                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40 font-bold'
-                          : cell.avgScore >= 70
-                          ? 'bg-amber-950/80 text-amber-300 border-amber-500/40 font-bold'
-                          : 'bg-red-950/80 text-red-300 border-red-500/40 font-bold';
-                        return (
-                          <td key={wpm} className="p-1">
-                            <div className={`p-1.5 rounded-lg border text-center ${cellClass}`}>
-                              {cell && cell.attempts > 0 ? `${cell.avgScore}%` : '-'}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 4. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) ＆ 積み上げ分布推移 */}
@@ -1053,233 +905,6 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
               </div>
             )}
           </div>
-        )}
-      </div>
-
-      {/* 5. センテンス武器庫 (Ankiカード一覧) ＆ 偽英語・発話カルテ */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base sm:text-lg font-bold text-white">
-                センテンス武器庫 ＆ 発話カルテ
-              </h3>
-              <p className="text-xs text-slate-400">
-                読解ストック（英日） ＆ 会話発話武器（日英）のAnkiカード管理
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800">
-            <button
-              onClick={() => setActiveTab('cards')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'cards'
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Ankiカード ({savedVocabs.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('errors')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'errors'
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              発話カルテ ({expressionErrors.length})
-            </button>
-          </div>
-        </div>
-
-        {/* Search & Filter Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="単語・構文・例文を検索..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
-            />
-          </div>
-
-          {activeTab === 'cards' && (
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {(
-                [
-                  { id: 'all', label: `すべて (${savedVocabs.length})` },
-                  { id: 'reading_en_ja', label: `📖 読解 (英日: ${readingCardsCount})` },
-                  { id: 'speaking_ja_en', label: `⚔️ 発話武器 (日英: ${weaponCardsCount})` },
-                  { id: 'pattern', label: `💡 構文 (${patternCardsCount})` },
-                  { id: 'word', label: `🔤 単語 (${wordCardsCount})` },
-                  { id: 'mastered', label: `🟢 マスター済 (${masteredCardsCount})` },
-                  { id: 'learning', label: `🟡 学習中 (${learningCardsCount})` },
-                ] as { id: CardFilterType; label: string }[]
-              ).map(f => (
-                <button
-                  key={f.id}
-                  onClick={() => setCardFilter(f.id)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    cardFilter === f.id
-                      ? 'bg-purple-600 text-white shadow-sm'
-                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Content List */}
-        {activeTab === 'cards' ? (
-          filteredCards.length === 0 ? (
-            <div className="text-center py-10 text-xs text-slate-500">
-              該当するカードが見つかりませんでした。
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-              {filteredCards.map(card => {
-                const isMastered = (card.intervalDays && card.intervalDays >= 21) || (card.repetitionCount && card.repetitionCount >= 4);
-                const isWeaponJaToEn = card.cardDirection === 'ja_to_en';
-
-                return (
-                  <div
-                    key={card.id}
-                    className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-2xl space-y-2 hover:border-slate-700 transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-sm text-white">
-                            {card.phrase || card.focusWord}
-                          </span>
-                          <span className="text-xs text-slate-400">
-                            {card.meaning || card.focusMeaning}
-                          </span>
-                        </div>
-                        {card.sentence && (
-                          <p className="text-xs text-slate-300 font-serif mt-1">
-                            {card.sentence}
-                          </p>
-                        )}
-                        {card.translation && (
-                          <p className="text-[11px] text-slate-500">
-                            {card.translation}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="flex items-center space-x-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => speakText(card.sentence || card.phrase || card.focusWord || '', 1.0, 'en-US')}
-                          className="p-1.5 bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-white rounded-lg border border-slate-800 transition-colors cursor-pointer"
-                          title="発音を再生"
-                        >
-                          <Volume2 className="w-3.5 h-3.5" />
-                        </button>
-                        {onDeleteVocab && (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteVocab(card.id)}
-                            className="p-1.5 bg-slate-900 hover:bg-rose-950 text-slate-500 hover:text-rose-400 rounded-lg border border-slate-800 transition-colors cursor-pointer"
-                            title="カードを削除"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 pt-1 flex-wrap">
-                      {/* Direction Tag */}
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        isWeaponJaToEn
-                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                          : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                      }`}>
-                        {isWeaponJaToEn ? '⚔️ 発話武器 (日英)' : '📖 読解ストック (英日)'}
-                      </span>
-
-                      {/* Mastery Tag */}
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        isMastered
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                      }`}>
-                        {isMastered ? 'マスター済み' : '学習中'}
-                      </span>
-
-                      {card.level && (
-                        <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[10px] font-mono">
-                          {card.level}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )
-        ) : (
-          filteredErrors.length === 0 ? (
-            <div className="text-center py-10 text-xs text-slate-500">
-              まだ発話カルテのログがありません。AI英会話やドリルを行うと自動記録されます。
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-              {filteredErrors.map(err => (
-                <div
-                  key={err.id}
-                  className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-2xl space-y-2 hover:border-slate-700 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-1">
-                      <div className="text-xs text-rose-300 font-mono">
-                        ❌ あなたの発話: "{err.userUtterance}"
-                      </div>
-                      <div className="text-xs font-bold text-emerald-300 font-mono">
-                        ✨ 自然な表現: "{err.naturalExpression}"
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        💡 {err.explanation}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center space-x-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => speakText(err.naturalExpression, 1.0, 'en-US')}
-                        className="p-1.5 bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-white rounded-lg border border-slate-800 transition-colors cursor-pointer"
-                        title="発音を再生"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                      </button>
-                      {onDeleteExpressionError && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteExpressionError(err.id)}
-                          className="p-1.5 bg-slate-900 hover:bg-rose-950 text-slate-500 hover:text-rose-400 rounded-lg border border-slate-800 transition-colors cursor-pointer"
-                          title="ログを削除"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
         )}
       </div>
     </div>
