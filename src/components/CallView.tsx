@@ -146,6 +146,8 @@ export const CallView: React.FC<CallViewProps> = ({
   const [isRallyLoading, setIsRallyLoading] = useState(false);
   const [equippedFeedbackIds, setEquippedFeedbackIds] = useState<Set<string>>(new Set());
   const [activePersona, setActivePersona] = useState<Persona | null>(null);
+  const [isRallySessionActive, setIsRallySessionActive] = useState(false);
+  const [callTextInput, setCallTextInput] = useState('');
 
   // 通話状態
   const [connectionState, setConnectionState] = useState<CallConnectionState>('idle');
@@ -190,7 +192,7 @@ export const CallView: React.FC<CallViewProps> = ({
   const [isAddingCustomVocab, setIsAddingCustomVocab] = useState(false);
   const [customVocabForm, setCustomVocabForm] = useState({ phrase: '', meaning: '', context: '', note: '' });
 
-  const [currentSessionType, setCurrentSessionType] = useState<'voice' | 'chat'>('voice');
+  const [currentSessionType, setCurrentSessionType] = useState<'voice' | 'chat' | 'rally'>('voice');
 
   const liveSessionRef = useRef<GeminiLiveSession | null>(null);
   const timerRef = useRef<number | null>(null);
@@ -264,7 +266,8 @@ export const CallView: React.FC<CallViewProps> = ({
 
     const selectedPersona = persona !== undefined ? persona : activePersona;
     setActivePersona(selectedPersona || null);
-    setCurrentSessionType('voice');
+    setIsRallySessionActive(isRallyMode);
+    setCurrentSessionType(isRallyMode ? 'rally' : 'voice');
     setViewState('call');
     setConnectionState('connecting');
     setErrorMessage(null);
@@ -428,6 +431,28 @@ export const CallView: React.FC<CallViewProps> = ({
     ]);
   };
 
+  const handleSendCallTextMessage = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const text = callTextInput.trim();
+    if (!text) return;
+
+    // Live API WebSocketへテキスト送信
+    if (liveSessionRef.current) {
+      liveSessionRef.current.sendTextMessage(text);
+    }
+
+    // ローカルメッセージ履歴に即時反映
+    const userMsg: CallMessage = {
+      id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+      role: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+    setCallMessages((prev) => [...prev, userMsg]);
+    setCallTextInput('');
+    LiveLogger.log('USER_TEXT_PROMPT', `Sent in-call text prompt: "${text}"`, { text });
+  };
+
   const handleSendChatMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim() || isSendingChat || !apiKey) return;
@@ -540,15 +565,20 @@ export const CallView: React.FC<CallViewProps> = ({
     }
 
     const sessionId = 'session_' + Date.now();
-    const sessionTitle = persona ? `👫 ${persona.name} との英会話` : '🎙️ フリー英会話セッション';
+    const isRally = isRallySessionActive || sessionType === 'rally';
+    const sessionTitle = isRally
+      ? `⚡ 瞬間ラリー特訓 (${selectedRallyTopic})`
+      : persona
+      ? `👫 ${persona.name} との英会話`
+      : '🎙️ フリー英会話セッション';
 
     // 初期セッションレコードを即時保存 (ステータス: analyzing)
     const initialSession: CallSession = {
       id: sessionId,
       personaId: persona?.id,
-      personaName: persona?.name || 'フリー会話',
-      personaEmoji: persona?.avatarEmoji || '🎙️',
-      sessionType,
+      personaName: isRally ? `瞬間ラリー (${selectedRallyTopic})` : persona?.name || 'フリー会話',
+      personaEmoji: isRally ? '⚡' : persona?.avatarEmoji || '🎙️',
+      sessionType: isRally ? 'rally' : sessionType,
       title: sessionTitle,
       startedAt: new Date(Date.now() - duration * 1000).toISOString(),
       endedAt: new Date().toISOString(),
@@ -1396,50 +1426,46 @@ export const CallView: React.FC<CallViewProps> = ({
               </div>
             </div>
 
-            {/* Launch Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Option 1: Fast Text Chat Rally */}
-              <div className="bg-slate-900/90 border border-slate-800 hover:border-amber-500/40 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xl group transition-all">
-                <div className="space-y-2">
-                  <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
-                    <MessageSquare className="w-6 h-6" />
+            {/* Streamlined Voice-First Rally Launch Bar */}
+            <div className="bg-gradient-to-br from-slate-900 via-slate-900/95 to-amber-950/30 border border-amber-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <h4 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                      <span>即答スパーリングを開始</span>
+                      <span className="text-xs font-semibold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 rounded-full">
+                        {selectedRallyTopic}
+                      </span>
+                    </h4>
                   </div>
-                  <h4 className="text-base font-bold text-white">高速テキスト・チャットラリー</h4>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    スマホやキーボードで高速タイピング。AIが即座に2段階添削と次の質問を返します。
+                  <p className="text-xs text-slate-400">
+                    AIが短文でテンポよく問いかけます。英語で即答してスパーリングを繋げましょう（声が出せない時は会話中にテキスト入力も可能）。
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleStartRally()}
-                  className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 rounded-2xl text-xs sm:text-sm font-extrabold shadow-lg shadow-amber-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-                >
-                  <Zap className="w-4 h-4" />
-                  <span>「{selectedRallyTopic}」で特訓開始</span>
-                </button>
-              </div>
+                <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                  {/* Primary Voice Action */}
+                  <button
+                    type="button"
+                    onClick={() => handleStartCall(null, true, selectedRallyTopic)}
+                    className="flex-1 sm:flex-none px-6 py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 rounded-2xl text-xs sm:text-sm font-extrabold shadow-lg shadow-amber-500/25 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                  >
+                    <Phone className="w-4 h-4" />
+                    <span>音声会話で特訓開始</span>
+                  </button>
 
-              {/* Option 2: Live Voice Sparring */}
-              <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xl group transition-all">
-                <div className="space-y-2">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
-                    <Phone className="w-6 h-6" />
-                  </div>
-                  <h4 className="text-base font-bold text-white">リアルタイム音声ラリー通話</h4>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    Gemini Liveの超低遅延音声でネイティブと口頭即答スパーリング。耳と口を限界まで鍛えます。
-                  </p>
+                  {/* Secondary Text Option */}
+                  <button
+                    type="button"
+                    onClick={() => handleStartRally()}
+                    className="px-3.5 py-3.5 bg-slate-800/90 hover:bg-slate-800 text-slate-300 hover:text-amber-300 border border-slate-700/80 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                    title="声を出せない環境ではテキストチャット形式で特訓"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    <span className="hidden md:inline">テキストで特訓</span>
+                  </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleStartCall(null, true, selectedRallyTopic)}
-                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs sm:text-sm font-extrabold shadow-lg shadow-emerald-600/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-                >
-                  <Phone className="w-4 h-4" />
-                  <span>音声通話でスパーリング開始</span>
-                </button>
               </div>
             </div>
           </div>
@@ -1560,22 +1586,22 @@ export const CallView: React.FC<CallViewProps> = ({
                         <span>通話回数: {persona.totalConversations}回</span>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleStartChat(persona)}
-                          className="py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5"
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          <span>チャット</span>
-                        </button>
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() => handleStartCall(persona)}
-                          className="py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-600/20 transition-all flex items-center justify-center space-x-1.5"
+                          className="flex-1 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-600/20 transition-all flex items-center justify-center space-x-1.5"
                         >
                           <Phone className="w-3.5 h-3.5" />
-                          <span>音声通話</span>
+                          <span>通話を開始</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStartChat(persona)}
+                          className="p-2.5 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-cyan-300 border border-slate-700/60 rounded-xl text-xs font-bold transition-all flex items-center justify-center"
+                          title="テキストチャットで話す"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -1915,14 +1941,26 @@ export const CallView: React.FC<CallViewProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleEndRally}
-            className="flex items-center space-x-1 px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold shadow-md shadow-red-600/20 transition-all"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>特訓終了 ＆ 振り返り</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleStartCall(null, true, selectedRallyTopic)}
+              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 rounded-xl text-xs font-bold shadow-md shadow-amber-500/20 transition-all"
+              title="音声会話に切り替え"
+            >
+              <Phone className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">音声会話へ</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleEndRally}
+              className="flex items-center space-x-1 px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold shadow-md shadow-red-600/20 transition-all"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>特訓終了</span>
+            </button>
+          </div>
         </div>
 
         {/* Rally Messages Stream */}
@@ -2249,25 +2287,44 @@ export const CallView: React.FC<CallViewProps> = ({
   // =============================================================
   if (viewState === 'call') {
     const persona = activePersona;
+    const isRally = isRallySessionActive || currentSessionType === 'rally';
 
     return (
-      <div className="max-w-2xl mx-auto space-y-6 animate-fadeIn pb-12">
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center text-center space-y-6 relative overflow-hidden">
+      <div className="max-w-2xl mx-auto space-y-5 animate-fadeIn pb-12">
+        <div className={`bg-slate-900/90 border rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center text-center space-y-5 relative overflow-hidden ${
+          isRally ? 'border-amber-500/30' : 'border-slate-800'
+        }`}>
           {/* Header Info */}
           <div className="space-y-1">
-            <span className="text-xs px-3 py-1 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-semibold inline-block">
+            <span className={`text-xs px-3 py-1 rounded-full font-semibold inline-block border ${
+              isRally
+                ? 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+                : 'bg-cyan-950 text-cyan-400 border-cyan-800/60'
+            }`}>
               {connectionState === 'connected'
-                ? `通話中 • ${formatDuration(callDuration)}`
+                ? `${isRally ? '⚡ ラリー特訓中' : '通話中'} • ${formatDuration(callDuration)}`
                 : connectionState === 'connecting'
                 ? '接続中...'
                 : '待機中'}
             </span>
-            <h3 className="text-xl sm:text-2xl font-bold text-white">
-              {persona?.name || 'フリー英会話'}
+            <h3 className="text-xl sm:text-2xl font-bold text-white flex items-center justify-center gap-2">
+              {isRally ? (
+                <>
+                  <span>⚡ 瞬間ラリー特訓</span>
+                  <span className="text-sm font-normal text-amber-300">({selectedRallyTopic})</span>
+                </>
+              ) : (
+                <span>{persona?.name || 'フリー英会話'}</span>
+              )}
             </h3>
-            {persona && (
+            {persona && !isRally && (
               <p className="text-xs text-slate-400">
                 {persona.nationality} • {persona.occupation}
+              </p>
+            )}
+            {isRally && (
+              <p className="text-xs text-slate-400">
+                AIの質問に即答しよう！声が出せない時は下のテキスト入力も使えます。
               </p>
             )}
           </div>
@@ -2304,21 +2361,47 @@ export const CallView: React.FC<CallViewProps> = ({
                 </p>
               ) : currentAssistantText ? (
                 <p className="text-cyan-300 animate-fadeIn">
-                  <span className="text-cyan-500 font-semibold mr-1.5">{persona?.name || 'AI'}:</span>
+                  <span className="text-cyan-500 font-semibold mr-1.5">{isRally ? 'Coach' : persona?.name || 'AI'}:</span>
                   {currentAssistantText}
                 </p>
               ) : callMessages.length > 0 ? (
                 <p className="text-slate-300">
                   <span className="text-slate-500 mr-2">
-                    {callMessages[callMessages.length - 1].role === 'user' ? 'You:' : `${persona?.name || 'AI'}:`}
+                    {callMessages[callMessages.length - 1].role === 'user' ? 'You:' : `${isRally ? 'Coach' : persona?.name || 'AI'}:`}
                   </span>
                   {callMessages[callMessages.length - 1].text}
                 </p>
               ) : (
-                <p className="text-slate-500 italic">声を発すると自動でリアルタイム認識されます...</p>
+                <p className="text-slate-500 italic">声を発するか、下のテキスト入力から即答できます...</p>
               )}
             </div>
           )}
+
+          {/* In-Call Text Fallback Input (for quiet environments / auxiliary texting) */}
+          <form
+            onSubmit={handleSendCallTextMessage}
+            className="w-full bg-slate-950/90 border border-slate-800/90 rounded-2xl p-2 flex items-center gap-2 shadow-inner"
+          >
+            <input
+              type="text"
+              value={callTextInput}
+              onChange={(e) => setCallTextInput(e.target.value)}
+              placeholder="声を出せない時は、ここに入力して送信（Enter）..."
+              className="flex-1 bg-transparent px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!callTextInput.trim()}
+              className={`p-2.5 rounded-xl transition-all shadow-md flex-shrink-0 disabled:opacity-30 ${
+                isRally
+                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20'
+                  : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-600/20'
+              }`}
+              title="テキストで返答"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
 
           {/* Push to talk button if active */}
           {isPushToTalk && (
