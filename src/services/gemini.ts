@@ -1,3 +1,29 @@
+/**
+ * 例文・発話ログからターゲット表現を含む「独立した1文のみ」を抽出（後続の質問や相づちをカット）
+ */
+export function isolateTargetSentence(fullText: string, targetPhrase: string): string {
+  if (!fullText) return '';
+  const cleanFull = fullText.replace(/\r\n/g, '\n').trim();
+  const cleanPhrase = (targetPhrase || '').trim();
+
+  const sentences = cleanFull
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (sentences.length <= 1) {
+    return cleanFull;
+  }
+
+  const lowerPhrase = cleanPhrase.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+  const matched = sentences.find(s => {
+    const lowerSent = s.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+    return lowerSent.includes(lowerPhrase) || lowerPhrase.includes(lowerSent);
+  });
+
+  return matched || sentences[0] || cleanFull;
+}
+
 import { ExtractedCorePattern } from '../types/vocab';
 import { Story, ContentType, SeriesType, TargetEmbedding } from '../types/story';
 import { CefrLevel } from '../types/settings';
@@ -798,9 +824,9 @@ ${conversationText}
   },
   "extractedVocabs": [
     {
-      "phrase": "実用的な英語フレーズ・単語",
+      "phrase": "実用的な英語フレーズ・単語（例: Keep at it! や make ends meet）",
       "meaning": "日本語の意味",
-      "contextSentence": "会話中での使われ方・例文",
+      "contextSentence": "会話中での使われ方。必ずターゲット表現が含まれる【独立した1文のみ】を抽出してください。後続の無関係な質問（例: What do you think?等）や相づちは絶対に巻き込まないでください。",
       "nuanceNote": "ネイティブのニュアンスや使われる場面"
     }
   ],
@@ -850,12 +876,15 @@ ${conversationText}
         }));
 
         const vocabs: ExtractedCallVocab[] = [
-          ...(extractedVocabs || []),
+          ...(extractedVocabs || []).map(v => ({
+            ...v,
+            contextSentence: isolateTargetSentence(v.contextSentence || '', v.phrase || ''),
+          })),
           ...((parsed.extractedVocabs || []).map((v: any) => ({
-            phrase: v.phrase || '',
-            meaning: v.meaning || '',
-            contextSentence: v.contextSentence || '',
-            nuanceNote: v.nuanceNote || '',
+            phrase: (v.phrase || '').trim(),
+            meaning: (v.meaning || '').trim(),
+            contextSentence: isolateTargetSentence(v.contextSentence || '', v.phrase || ''),
+            nuanceNote: (v.nuanceNote || '').trim(),
           }))),
         ];
 

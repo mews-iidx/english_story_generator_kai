@@ -299,9 +299,10 @@ export function loadVocabs(): VocabItem[] {
         }
       }
 
-      if (item.sentence && (item.sentence.includes('\n') || item.sentence.includes('. ') || item.sentence.includes('! ') || item.sentence.includes('? '))) {
-        const clean = extractSingleSentence(item.sentence, item.focusWord || item.phrase);
-        if (clean && clean !== item.sentence && clean.length < item.sentence.length) {
+      const rawSent = item.sentence || item.exampleSentence;
+      if (rawSent && (rawSent.includes('\n') || rawSent.includes('. ') || rawSent.includes('! ') || rawSent.includes('? '))) {
+        const clean = extractSingleSentence(rawSent, item.focusWord || item.phrase);
+        if (clean && clean !== rawSent && clean.length < rawSent.length) {
           item.sentence = clean;
           item.exampleSentence = clean;
           itemMod = true;
@@ -408,13 +409,15 @@ export function recordVocabLapse(
       finalMeaning = cefrItem.meaning;
     }
 
+    const cleanCtx = extractSingleSentence(lookup.context_sentence || existing.exampleSentence || '', lookup.phrase);
     updatedItem = {
       ...existing,
       meaning: finalMeaning,
       level: existing.level || determinedLevel,
       partOfSpeech: lookup.part_of_speech || (cefrItem?.partOfSpeech ?? existing.partOfSpeech),
       contextNote: lookup.explanation || existing.contextNote,
-      exampleSentence: lookup.context_sentence || existing.exampleSentence,
+      exampleSentence: cleanCtx,
+      sentence: cleanCtx,
       ...srs,
       sourceStoryId: sourceStoryId || existing.sourceStoryId,
     };
@@ -425,6 +428,7 @@ export function recordVocabLapse(
     if (!meaning && cefrItem?.meaning) {
       meaning = cefrItem.meaning;
     }
+    const cleanCtx = extractSingleSentence(lookup.context_sentence || '', lookup.phrase);
     updatedItem = {
       id: 'voc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
       phrase: lookup.phrase.trim(),
@@ -432,7 +436,8 @@ export function recordVocabLapse(
       level: determinedLevel,
       partOfSpeech: lookup.part_of_speech || (cefrItem?.partOfSpeech ?? 'word/phrase'),
       contextNote: lookup.explanation || '',
-      exampleSentence: lookup.context_sentence || '',
+      exampleSentence: cleanCtx,
+      sentence: cleanCtx,
       ...srs,
       importance: undefined,
       createdAt: new Date().toISOString(),

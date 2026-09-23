@@ -19,6 +19,7 @@ import {
   RallyPartnerFeedback,
   RallySuggestionChip,
   askCallReviewQuestion,
+  isolateTargetSentence,
 } from '../services/gemini';
 import { ErrorCauseCategory } from '../types/expressionError';
 import { speakText } from '../utils/speech';
@@ -951,18 +952,56 @@ export const CallView: React.FC<CallViewProps> = ({
     }
   };
 
-  // ⚡ すべて一括武器化
+  // ⚡ すべて一括武器化（抽出フレーズ ＋ 添削された自然表現をまとめてAnkiへ登録）
   const handleBatchEquipAll = (session: CallSession) => {
     const vocabs = session.reviewAnalysis?.extractedVocabs || session.extractedVocabs || [];
+    const errors = session.reviewAnalysis?.detectedErrors || [];
     let count = 0;
+
+    // 1. 抽出フレーズのAnki登録（1文のみにクレンジング）
     vocabs.forEach((v) => {
       if (v.phrase && !savedVocabPhrases.has(v.phrase.trim().toLowerCase())) {
-        onAddToVocab(v.phrase, v.meaning, v.contextSentence, v.nuanceNote);
+        const cleanContext = isolateTargetSentence(v.contextSentence || '', v.phrase);
+        onAddToVocab(v.phrase.trim(), v.meaning.trim(), cleanContext, v.nuanceNote);
         count++;
       }
     });
+
+    // 2. 添削表現のAnki登録
+    errors.forEach((errItem) => {
+      const naturalPhrase = errItem.naturalExpression.trim();
+      if (naturalPhrase && !savedVocabPhrases.has(naturalPhrase.toLowerCase())) {
+        onAddToVocab(
+          naturalPhrase,
+          errItem.explanation || '添削された自然な英語表現',
+          naturalPhrase,
+          `💡 修正前: "${errItem.userUtterance}" (${errItem.corePattern || '構文'})`
+        );
+        count++;
+      }
+    });
+
+    /* 【将来用コメントアウト保持】
+    if (onSaveExpressionError && errors.length > 0) {
+      errors.forEach((errItem, idx) => {
+        const key = `${errItem.userUtterance}_${errItem.naturalExpression}_${idx}`;
+        if (!savedErrorKeys.has(key)) {
+          onSaveExpressionError({
+            userUtterance: errItem.userUtterance,
+            naturalExpression: errItem.naturalExpression,
+            corePattern: errItem.corePattern,
+            explanation: errItem.explanation,
+            causeCategory: errItem.suggestedCause || 'syntax_order',
+            personaName: session.personaName,
+            sourceSessionId: session.id,
+          });
+        }
+      });
+    }
+    */
+
     playCorrectSound();
-    showToast(`⚡ ${count} 件のフレーズをすべてAnkiに一括武器化しました！`, 'success');
+    showToast(`⚡ ${count} 件のフレーズ・添削表現をすべてAnkiに一括武器化しました！`, 'success');
   };
 
   // 🛡️ すべてカルテに記録
@@ -1969,8 +2008,8 @@ export const CallView: React.FC<CallViewProps> = ({
                           onAddToVocab(
                             phrase,
                             fb.explanation || '瞬間ラリー特訓の洗練表現',
-                            msg.text,
-                            `トピック: ${selectedRallyTopic}`
+                            phrase,
+                            `💡 修正前: "${msg.text}" (トピック: ${selectedRallyTopic})`
                           );
                           setEquippedFeedbackIds((prev) => new Set(prev).add(msg.id + '_fb'));
                           playCorrectSound();
@@ -2654,7 +2693,8 @@ export const CallView: React.FC<CallViewProps> = ({
                           type="button"
                           disabled={isSaved}
                           onClick={() => {
-                            onAddToVocab(vocab.phrase, vocab.meaning, vocab.contextSentence, vocab.nuanceNote);
+                            const cleanContext = isolateTargetSentence(vocab.contextSentence || '', vocab.phrase);
+                            onAddToVocab(vocab.phrase.trim(), vocab.meaning.trim(), cleanContext, vocab.nuanceNote);
                             playCorrectSound();
                             showToast(`⚔️ 『${vocab.phrase}』をAnkiに武器化しました！`, 'success');
                           }}
@@ -2683,16 +2723,16 @@ export const CallView: React.FC<CallViewProps> = ({
               )}
             </div>
 
-            {/* Section B: 📋 発話カルテ（偽英語・構文ミスの添削 ＆ カルテDB保存） */}
+            {/* Section B: ⚔️ 添削表現のAnki武器化（言えなかった表現をAnkiへ直接登録） */}
             {errors.length > 0 && (
               <div className="bg-slate-900/90 border border-amber-500/30 rounded-3xl p-6 space-y-4 shadow-xl">
                 <div>
                   <h4 className="text-sm sm:text-base font-bold text-amber-300 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-amber-400" />
-                    2. 発話カルテ：偽英語・構文ミスの添削 ＆ 本質分析
+                    <Swords className="w-4 h-4 text-amber-400" />
+                    2. 添削表現のAnki武器化（言えなかった表現を忘却曲線で習得）
                   </h4>
                   <p className="text-[11px] text-slate-300 mt-0.5">
-                    カルテに記録すると、<strong>次回のストーリー生成でこの文法・語法パターンを自然に応用した文章</strong>が自動生成されます。
+                    不自然だった英語や文法ミスを、自然なネイティブ表現としてAnkiへ登録できます。
                   </p>
                 </div>
 
@@ -2754,6 +2794,15 @@ export const CallView: React.FC<CallViewProps> = ({
                             type="button"
                             disabled={isSaved}
                             onClick={() => {
+                              const naturalPhrase = errItem.naturalExpression.trim();
+                              onAddToVocab(
+                                naturalPhrase,
+                                errItem.explanation || '添削された自然な英語表現',
+                                naturalPhrase,
+                                `💡 修正前: "${errItem.userUtterance}" (型: ${errItem.corePattern})`
+                              );
+
+                              /* 【将来用コメントアウト保持】
                               if (onSaveExpressionError) {
                                 onSaveExpressionError({
                                   userUtterance: errItem.userUtterance,
@@ -2764,26 +2813,28 @@ export const CallView: React.FC<CallViewProps> = ({
                                   personaName: session.personaName,
                                   sourceSessionId: session.id,
                                 });
-                                setSavedErrorKeys((prev) => new Set(prev).add(errorKey));
-                                playCorrectSound();
-                                showToast('🛡️ カルテに記録しました！次回ストーリーに応用出題されます', 'success');
                               }
+                              */
+
+                              setSavedErrorKeys((prev) => new Set(prev).add(errorKey));
+                              playCorrectSound();
+                              showToast(`⚔️ 『${naturalPhrase}』をAnkiに武器化しました！`, 'success');
                             }}
                             className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                               isSaved
                                 ? 'bg-slate-800 text-slate-500 cursor-default'
-                                : 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/30 active:scale-95'
+                                : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-md shadow-amber-600/30 active:scale-95'
                             }`}
                           >
                             {isSaved ? (
                               <>
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>カルテに記録済</span>
+                                <span>武器化済</span>
                               </>
                             ) : (
                               <>
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>カルテに記録（次回ストーリーで克服）</span>
+                                <Swords className="w-3.5 h-3.5" />
+                                <span>⚔️ この表現を武器化（Anki登録）</span>
                               </>
                             )}
                           </button>
