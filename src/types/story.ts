@@ -22,6 +22,7 @@ export interface StoryListeningUnitLog {
   elapsedMs: number;
   revealedEnglish: boolean;
   revealedJapanese: boolean;
+  rating?: 1 | 2 | 3 | 4; // 1: 🔴要復習, 2: 🟡曖昧, 3: 🔵理解, 4: 🟢即座に理解
 }
 
 export interface StoryListeningMetrics {
@@ -33,6 +34,7 @@ export interface StoryListeningMetrics {
   totalRetries?: number;
   bottleneckCount?: number;
   unitLogs?: StoryListeningUnitLog[];
+  sentenceRatings?: Record<number, { rating: 1 | 2 | 3 | 4; timestamp: string }>;
   completedAt: string;
 }
 
@@ -62,6 +64,7 @@ export interface Story {
   listeningStatus?: 'unstarted' | 'completed';
   listeningCompletedAt?: string;
   listeningMetrics?: StoryListeningMetrics;
+  sentenceRatings?: Record<number, { rating: 1 | 2 | 3 | 4; timestamp: string }>;
   readingStatus?: 'unstarted' | 'completed';
   firstReadWpm?: number;
 

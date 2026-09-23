@@ -11,12 +11,11 @@ import {
   Eye,
   EyeOff,
   Layers,
-  Sparkles,
   Volume2,
   AlertTriangle,
   Flame,
   Gauge,
-  Zap
+  Zap,
 } from 'lucide-react';
 import { Story, StoryListeningMetrics, StoryListeningUnitLog } from '../types/story';
 import { splitIntoSmartChunks } from '../services/listeningLabService';
@@ -72,6 +71,9 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   const [revealedEnglish, setRevealedEnglish] = useState<boolean>(false);
   const [revealedJapanese, setRevealedJapanese] = useState<boolean>(false);
   const [unitLogs, setUnitLogs] = useState<StoryListeningUnitLog[]>([]);
+  const [sentenceRatings, setSentenceRatings] = useState<Record<number, { rating: 1 | 2 | 3 | 4; timestamp: string }>>(() => {
+    return story.sentenceRatings || {};
+  });
 
   // Refs for tracking timestamps
   const unitStartTimeRef = useRef<number>(0);
@@ -187,8 +189,8 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     playUnitAudio(currentUnit, true);
   }, [currentUnit, playUnitAudio]);
 
-  // Advance to next unit or finish
-  const handleAdvance = useCallback(() => {
+  // Advance to next unit with a specific 4-level rating
+  const handleRateAndAdvance = useCallback((rating: 1 | 2 | 3 | 4) => {
     if (!currentUnit) return;
 
     // Record elapsed time and metric log for current unit
@@ -201,10 +203,21 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       elapsedMs: elapsedMs,
       revealedEnglish: revealedEnglish,
       revealedJapanese: revealedJapanese,
+      rating: rating,
     };
 
     const nextLogs = [...unitLogs, log];
     setUnitLogs(nextLogs);
+
+    // Save sentence rating for ReaderView coloring
+    const targetSentenceIdx = currentUnit.sentenceIdx;
+    setSentenceRatings(prev => ({
+      ...prev,
+      [targetSentenceIdx]: {
+        rating: rating,
+        timestamp: new Date().toISOString(),
+      },
+    }));
 
     if (currentIndex + 1 < units.length) {
       const nextIdx = currentIndex + 1;
@@ -220,6 +233,20 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       setStepStatus('all_completed');
     }
   }, [currentUnit, currentIndex, currentRetryCount, revealedEnglish, revealedJapanese, unitLogs, units, blindMode, playUnitAudio, stopAudio]);
+
+  // Default advance (calculate appropriate rating if not explicitly rated)
+  const handleAdvanceDefault = useCallback(() => {
+    if (!currentUnit) return;
+    let defaultRating: 1 | 2 | 3 | 4 = 4;
+    if (revealedJapanese || currentRetryCount >= 3) {
+      defaultRating = 1;
+    } else if (revealedEnglish || currentRetryCount >= 1) {
+      defaultRating = 2;
+    } else {
+      defaultRating = 4;
+    }
+    handleRateAndAdvance(defaultRating);
+  }, [currentUnit, revealedJapanese, currentRetryCount, revealedEnglish, handleRateAndAdvance]);
 
   // Go back to previous unit
   const handlePrevious = useCallback(() => {
@@ -273,9 +300,21 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       }
 
       if (stepStatus === 'listening') {
-        if (e.code === 'Space' || e.code === 'Enter') {
+        if (e.key === '1') {
           e.preventDefault();
-          handleAdvance();
+          handleRateAndAdvance(1);
+        } else if (e.key === '2') {
+          e.preventDefault();
+          handleRateAndAdvance(2);
+        } else if (e.key === '3') {
+          e.preventDefault();
+          handleRateAndAdvance(3);
+        } else if (e.key === '4') {
+          e.preventDefault();
+          handleRateAndAdvance(4);
+        } else if (e.code === 'Space' || e.code === 'Enter') {
+          e.preventDefault();
+          handleAdvanceDefault();
         } else if (e.code === 'KeyR') {
           e.preventDefault();
           handleRetry();
@@ -296,7 +335,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [stepStatus, handleAdvance, handleRetry, handlePrevious, blindMode]);
+  }, [stepStatus, handleRateAndAdvance, handleAdvanceDefault, handleRetry, handlePrevious, blindMode]);
 
   // Benchmark Metrics Computation
   const metricsData = useMemo(() => {
@@ -305,14 +344,14 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       return {
         firstPassRate: 100,
         totalRetries: 0,
-        avgLatencySec: 0,
+        avgLatencySec: '0.0',
         effectiveListeningWpm: 0,
         bottlenecks: [],
       };
     }
 
     const firstPassCount = unitLogs.filter(
-      log => log.retryCount === 0 && !log.revealedEnglish
+      log => log.retryCount === 0 && !log.revealedEnglish && (log.rating === undefined || log.rating >= 3)
     ).length;
     const firstPassRate = Math.round((firstPassCount / totalUnits) * 100);
 
@@ -323,9 +362,9 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     const totalSec = Math.max(1, totalLatencyMs / 1000);
     const effectiveListeningWpm = Math.round((storyWordCount / totalSec) * 60);
 
-    // Bottlenecks: Units that took >= 1 retry OR where English was revealed
+    // Bottlenecks: Units that took >= 1 retry OR where English was revealed OR rated 1 or 2
     const bottlenecks = unitLogs.filter(
-      log => log.retryCount >= 1 || log.revealedEnglish
+      log => log.retryCount >= 1 || log.revealedEnglish || (log.rating !== undefined && log.rating <= 2)
     );
 
     return {
@@ -352,6 +391,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       totalRetries: metricsData.totalRetries,
       bottleneckCount: metricsData.bottlenecks.length,
       unitLogs: unitLogs,
+      sentenceRatings: sentenceRatings,
       completedAt: new Date().toISOString(),
     };
 
@@ -359,7 +399,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-fadeIn">
+    <div className={`max-w-4xl mx-auto space-y-6 animate-fadeIn ${stepStatus === 'listening' ? 'pb-60 sm:pb-52' : 'pb-20'}`}>
       {/* 1. Header Navigation & Stage Indicator */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -388,10 +428,10 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
           <button
             onClick={onSkipToReader}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-850 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-all cursor-pointer"
+            className="flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-all cursor-pointer"
           >
             <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
-            <span>リーダーへ進む (スキップ)</span>
+            <span>リスニングをスキップして精読へ ⏩</span>
           </button>
         </div>
 
@@ -401,7 +441,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             <div className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[10px]">
               1
             </div>
-            <span>初見ブラインド・リスニング（自然なリンキング・即時リトライ）</span>
+            <span>初見ブラインド・リスニング（自然なリンキング・4段階理解度メモ）</span>
           </div>
 
           <div className="text-slate-600 font-mono">────▶</div>
@@ -410,7 +450,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center text-[10px]">
               2
             </div>
-            <span>精読 ＆ Anki送り</span>
+            <span>精読（理解度カラー表示） ＆ Anki送り</span>
           </div>
         </div>
       </div>
@@ -429,7 +469,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
               文字を目で追わず、<strong className="text-cyan-300">自然なリンキング音声</strong>だけを聴いて脳内に情景を立ち上げます。
-              分かるまで何度でもリトライし、分かったら次へ進みましょう！
+              各文を聴いたら <span className="text-emerald-400 font-bold">4段階の理解度</span>（1〜4キー）でサクサク記録して前へ進みましょう！
             </p>
           </div>
 
@@ -552,214 +592,148 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               }`}>
                 {metricsData.firstPassRate}%
               </div>
-              <span className="text-[10px] text-slate-500">0リトライ・文字非表示</span>
+              <span className="text-[10px] text-slate-500">0リトライ・英文未見</span>
             </div>
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
               <span className="text-[11px] text-slate-400 font-bold flex items-center justify-center gap-1">
                 <Zap className="w-3.5 h-3.5 text-cyan-400" />
-                実効リスニングWPM
+                聴覚実効WPM
               </span>
               <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
                 {metricsData.effectiveListeningWpm}
-                <span className="text-xs font-normal text-slate-400 ml-1">wpm</span>
               </div>
-              <span className="text-[10px] text-slate-500">平均 {metricsData.avgLatencySec}秒/{streamMode === 'sentence' ? '文' : '塊'}</span>
+              <span className="text-[10px] text-slate-500">総処理速度</span>
             </div>
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
               <span className="text-[11px] text-slate-400 font-bold flex items-center justify-center gap-1">
-                <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
-                総リトライ
+                <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
+                リトライ回数
               </span>
-              <div className="text-2xl sm:text-3xl font-black text-purple-300 font-mono">
-                {metricsData.totalRetries}
-                <span className="text-xs font-normal text-slate-400 ml-1">回</span>
+              <div className="text-2xl sm:text-3xl font-black text-indigo-300 font-mono">
+                {metricsData.totalRetries} <span className="text-xs font-normal text-slate-400">回</span>
               </div>
-              <span className="text-[10px] text-slate-500">聞き直し合計</span>
+              <span className="text-[10px] text-slate-500">平均 {metricsData.avgLatencySec}s / 塊</span>
             </div>
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
               <span className="text-[11px] text-slate-400 font-bold flex items-center justify-center gap-1">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                要復習文
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                要復習ボトルネック
               </span>
-              <div className="text-2xl sm:text-3xl font-black text-amber-400 font-mono">
-                {metricsData.bottlenecks.length}
-                <span className="text-xs font-normal text-slate-400 ml-1">件</span>
+              <div className="text-2xl sm:text-3xl font-black text-rose-400 font-mono">
+                {metricsData.bottlenecks.length} <span className="text-xs font-normal text-slate-400">件</span>
               </div>
-              <span className="text-[10px] text-slate-500">リトライor英文確認</span>
+              <span className="text-[10px] text-slate-500">リトライ・英文確認・低理解度</span>
             </div>
           </div>
 
-          {/* Bottleneck Review Section */}
-          {metricsData.bottlenecks.length > 0 ? (
-            <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-5 text-left max-w-2xl mx-auto space-y-3">
+          {/* Bottleneck breakdown list */}
+          {metricsData.bottlenecks.length > 0 && (
+            <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 sm:p-5 max-w-2xl mx-auto space-y-3 text-left">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2 text-amber-400 font-bold text-xs sm:text-sm">
+                <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4" />
-                  <span>聞き取りで詰まったボトルネック（精読でのAnki登録推奨）</span>
-                </div>
-                <span className="text-xs text-slate-400 font-mono">
-                  {metricsData.bottlenecks.length} / {units.length} 件
+                  精読で重点チェックすべきボトルネック
+                </span>
+                <span className="text-[11px] text-slate-500 font-mono">
+                  {metricsData.bottlenecks.length} 件
                 </span>
               </div>
 
-              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                 {metricsData.bottlenecks.map((item, idx) => (
                   <div
                     key={idx}
-                    className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5 hover:border-slate-700 transition-colors"
+                    className="p-3 bg-slate-900 border border-slate-850 rounded-xl space-y-1 text-xs"
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <p className="text-xs sm:text-sm font-bold text-white leading-relaxed font-serif">
+                      <p className="font-bold text-white font-serif leading-relaxed">
                         {item.textEn}
                       </p>
                       <button
                         type="button"
-                        onClick={() => speakText(item.textEn, speechRate, 'en-US')}
-                        className="p-1.5 bg-slate-800 hover:bg-slate-750 text-indigo-300 hover:text-white rounded-lg border border-slate-700 transition-all shrink-0 cursor-pointer"
+                        onClick={() => speakText(item.textEn, 1.0, 'en-US')}
+                        className="p-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-lg transition-colors shrink-0 cursor-pointer"
                         title="音声を再生"
                       >
                         <Volume2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
-
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      {item.translationJa}
-                    </p>
-
-                    <div className="flex items-center gap-2 pt-1">
+                    {item.translationJa && (
+                      <p className="text-[11px] text-slate-400">
+                        {item.translationJa}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-2 pt-0.5 text-[10px]">
                       {item.retryCount > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono">
-                          🔄 リトライ {item.retryCount} 回
+                        <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">
+                          🔄 {item.retryCount} 回リトライ
                         </span>
                       )}
                       {item.revealedEnglish && (
-                        <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px]">
+                        <span className="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300">
                           👁️ 英文確認
                         </span>
                       )}
-                      <span className="text-[10px] text-slate-500 font-mono ml-auto">
-                        所要: {(item.elapsedMs / 1000).toFixed(1)}s
-                      </span>
+                      {item.rating && (
+                        <span className={`px-1.5 py-0.5 rounded font-mono ${
+                          item.rating === 1 ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'
+                        }`}>
+                          ★ 理解度: {item.rating}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-          ) : (
-            <div className="p-4 bg-emerald-950/40 border border-emerald-500/30 rounded-2xl max-w-md mx-auto text-emerald-300 text-xs font-bold flex items-center justify-center gap-2">
-              <Sparkles className="w-4 h-4 text-emerald-400" />
-              <span>パーフェクト！すべての文を一発で聞き取れました！</span>
-            </div>
           )}
 
-          {/* Transition CTA */}
+          {/* Action CTA: Move to Reader */}
           <div className="pt-2">
             <button
               onClick={handleFinishAndOpenReader}
-              className="flex items-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-base sm:text-lg font-black shadow-xl shadow-indigo-600/30 transition-all mx-auto active:scale-95 cursor-pointer"
+              className="flex items-center space-x-2 px-8 py-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-2xl text-base sm:text-lg font-black shadow-xl shadow-emerald-600/30 transition-all mx-auto active:scale-95 cursor-pointer"
             >
               <BookOpen className="w-5 h-5" />
-              <span>📖 リーダーを開いて精読 ＆ Anki送りへ進む ▶</span>
+              <span>第2段階：精読（理解度カラー確認 ＆ Anki送り）へ進む 🚀</span>
             </button>
           </div>
         </div>
       ) : (
-        /* 4. Active Listening Stepper Card */
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl space-y-6">
-          {/* Top Control Bar: Mode, Blind Toggle, Rate & Progress */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-            {/* Stream Mode Switcher */}
-            <div className="flex items-center p-1 bg-slate-950 rounded-xl border border-slate-800">
-              <button
-                type="button"
-                onClick={() => handleSwitchMode('sentence')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  streamMode === 'sentence'
-                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                1文流し
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSwitchMode('chunk')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  streamMode === 'chunk'
-                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Thought Group
-              </button>
-            </div>
-
-            {/* Blind Mode & Speed Pill */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleToggleBlindMode}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                  blindMode
-                    ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 hover:bg-indigo-500/30'
-                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750'
-                }`}
-                title="英文表示の切り替え"
-              >
-                {blindMode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                <span>{blindMode ? 'ブラインド中 (音のみ)' : '英文表示中'}</span>
-              </button>
-
-              <div className="flex items-center bg-slate-950 px-2 py-1 rounded-xl border border-slate-800 gap-1">
-                <Gauge className="w-3 h-3 text-amber-400" />
-                <select
-                  value={speechRate}
-                  onChange={e => setSpeechRate(parseFloat(e.target.value))}
-                  className="bg-transparent text-xs font-bold text-slate-300 focus:outline-none cursor-pointer"
-                >
-                  {SPEECH_RATES.map(rate => (
-                    <option key={rate.value} value={rate.value} className="bg-slate-900 text-white">
-                      {rate.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Unit Progress Tracker */}
-          <div className="space-y-2">
+        /* 4. Active Listening Stream Player */
+        <div className="space-y-6">
+          {/* Unit Progress Bar */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-white font-mono">
-                  {streamMode === 'sentence' ? `文 ${currentIndex + 1} / ${units.length}` : `Chunk ${currentIndex + 1} / ${units.length}`}
+              <span className="font-bold text-slate-300 flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-mono font-bold">
+                  {streamMode === 'sentence' ? '文' : 'チャンク'} {currentIndex + 1} / {units.length}
                 </span>
-                {streamMode === 'chunk' && currentUnit?.boundaryReason && (
-                  <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-mono">
-                    {currentUnit.boundaryReason}
+                {currentUnit?.boundaryReason && (
+                  <span className="text-[11px] text-slate-400 hidden sm:inline">
+                    ({currentUnit.boundaryReason})
                   </span>
                 )}
-              </div>
+              </span>
 
               <div className="flex items-center space-x-2">
                 {currentRetryCount > 0 && (
-                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-mono font-bold animate-pulse">
-                    🔄 リトライ {currentRetryCount} 回目
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold font-mono animate-pulse">
+                    リトライ {currentRetryCount} 回目
                   </span>
                 )}
-                <span className="text-slate-400 font-mono">
+                <span className="text-[11px] text-slate-400 font-mono">
                   {Math.round(((currentIndex + 1) / units.length) * 100)}%
                 </span>
               </div>
             </div>
 
-            {/* Progress Bar */}
-            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
               <div
-                className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full transition-all duration-300"
+                className="bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-400 h-full transition-all duration-300"
                 style={{ width: `${((currentIndex + 1) / units.length) * 100}%` }}
               />
             </div>
@@ -803,7 +777,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                 ) : (
                   <>
                     <Headphones className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>聞き取れましたか？（リトライ または 次へ）</span>
+                    <span>理解度を選んで次へ進んでください（1〜4キー）</span>
                   </>
                 )}
               </span>
@@ -869,62 +843,139 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             </div>
           </div>
 
-          {/* Action Control Buttons */}
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-            {/* Primary Advance Button */}
-            <button
-              type="button"
-              onClick={handleAdvance}
-              className="flex items-center space-x-2 px-7 py-3.5 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 cursor-pointer"
-            >
-              <SkipForward className="w-4 h-4" />
-              <span>
-                {currentIndex + 1 < units.length
-                  ? `⏭️ 分かった・次へ ▶ (Space / Enter)`
-                  : '🎉 全文完了！サマリーへ 🚀'}
-              </span>
-            </button>
-
-            {/* Retry Button */}
-            <button
-              type="button"
-              onClick={handleRetry}
-              className="flex items-center space-x-1.5 px-4 py-3.5 bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white rounded-2xl text-xs font-bold border border-slate-700 transition-all cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-              <span>もう一度聴く (R)</span>
-            </button>
-
-            {/* Peek English Button */}
-            <button
-              type="button"
-              onClick={() => setRevealedEnglish(prev => !prev)}
-              className="flex items-center space-x-1.5 px-3.5 py-3.5 bg-slate-850 hover:bg-slate-800 text-slate-300 hover:text-white rounded-2xl text-xs font-bold border border-slate-700 transition-all cursor-pointer"
-            >
-              {revealedEnglish ? (
-                <>
-                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
-                  <span>英文を隠す</span>
-                </>
-              ) : (
-                <>
-                  <Eye className="w-3.5 h-3.5 text-sky-400" />
-                  <span>英文を見る (V)</span>
-                </>
-              )}
-            </button>
-
-            {/* Back Button */}
-            {currentIndex > 0 && (
+          {/* Fixed Sticky Bottom Dock for Controls & 4-Level Ratings */}
+          <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3 sm:p-4 pb-safe space-y-2.5 max-w-4xl mx-auto">
+            {/* Top row: 4-Level Comprehension Rating Buttons */}
+            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+              {/* Rating 1: 🔴 */}
               <button
                 type="button"
-                onClick={handlePrevious}
-                className="flex items-center space-x-1 px-3 py-3.5 bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-slate-200 rounded-2xl text-xs font-medium border border-slate-800 transition-all cursor-pointer"
-                title="1つ戻る (←キー)"
+                onClick={() => handleRateAndAdvance(1)}
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-600/40 hover:border-rose-500 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                title="1キー: 全く聞き取れず・要復習"
               >
-                <span>⏮️ 戻る</span>
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 inline-block group-hover:animate-ping" />
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-rose-900/80 rounded border border-rose-700/60 font-bold">1</span>
+                </div>
+                <span className="text-[10px] sm:text-xs font-black truncate">聞き取れず</span>
               </button>
-            )}
+
+              {/* Rating 2: 🟡 */}
+              <button
+                type="button"
+                onClick={() => handleRateAndAdvance(2)}
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-amber-950/70 hover:bg-amber-900 text-amber-300 hover:text-white border border-amber-600/40 hover:border-amber-500 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                title="2キー: 曖昧・要リトライ"
+              >
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-amber-900/80 rounded border border-amber-700/60 font-bold">2</span>
+                </div>
+                <span className="text-[10px] sm:text-xs font-black truncate">曖昧</span>
+              </button>
+
+              {/* Rating 3: 🔵 */}
+              <button
+                type="button"
+                onClick={() => handleRateAndAdvance(3)}
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-sky-950/70 hover:bg-sky-900 text-sky-300 hover:text-white border border-sky-600/40 hover:border-sky-500 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                title="3キー: 理解できた"
+              >
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-sky-400 inline-block" />
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-sky-900/80 rounded border border-sky-700/60 font-bold">3</span>
+                </div>
+                <span className="text-[10px] sm:text-xs font-black truncate">理解できた</span>
+              </button>
+
+              {/* Rating 4: 🟢 */}
+              <button
+                type="button"
+                onClick={() => handleRateAndAdvance(4)}
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 hover:text-white border border-emerald-500/50 hover:border-emerald-400 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                title="4キー: 即座に情景が浮かんだ"
+              >
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-emerald-900/80 rounded border border-emerald-600/60 font-bold">4</span>
+                </div>
+                <span className="text-[10px] sm:text-xs font-black truncate">即座に理解</span>
+              </button>
+            </div>
+
+            {/* Bottom row: Controls & Default Next button */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                {/* Back Button */}
+                {currentIndex > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePrevious}
+                    className="p-2 sm:px-3 sm:py-2 bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-medium border border-slate-800 transition-all cursor-pointer shrink-0"
+                    title="1つ戻る (←キー)"
+                  >
+                    <span>⏮️</span>
+                  </button>
+                )}
+
+                {/* Retry Button */}
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  className="flex items-center space-x-1 px-3 py-2 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition-all cursor-pointer shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden sm:inline">もう一度聴く (R)</span>
+                  <span className="sm:hidden">再聴 (R)</span>
+                </button>
+
+                {/* Peek English Button */}
+                <button
+                  type="button"
+                  onClick={() => setRevealedEnglish(prev => !prev)}
+                  className="flex items-center space-x-1 px-2.5 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition-all cursor-pointer shrink-0"
+                >
+                  {revealedEnglish ? (
+                    <>
+                      <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                      <span className="hidden sm:inline">隠す</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-3.5 h-3.5 text-sky-400" />
+                      <span className="hidden sm:inline">英文 (V)</span>
+                      <span className="sm:hidden">文 (V)</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Peek Japanese Button */}
+                <button
+                  type="button"
+                  onClick={() => setRevealedJapanese(prev => !prev)}
+                  className="flex items-center space-x-1 px-2.5 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition-all cursor-pointer shrink-0"
+                >
+                  <span className="text-[11px] text-amber-400">💡</span>
+                  <span className="hidden sm:inline">{revealedJapanese ? '訳を隠す' : '和訳 (J)'}</span>
+                  <span className="sm:hidden">訳</span>
+                </button>
+              </div>
+
+              {/* Primary Advance Button */}
+              <button
+                type="button"
+                onClick={handleAdvanceDefault}
+                className="flex items-center space-x-1.5 px-4 sm:px-6 py-2.5 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 cursor-pointer ml-auto shrink-0"
+              >
+                <SkipForward className="w-3.5 h-3.5" />
+                <span>
+                  {currentIndex + 1 < units.length
+                    ? '次へ (Space)'
+                    : 'サマリーへ 🚀'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       )}

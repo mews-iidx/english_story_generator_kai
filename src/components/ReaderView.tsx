@@ -3,7 +3,7 @@ import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import { Story, TargetEmbedding } from '../types/story';
 import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, EyeOff, ChevronLeft, ChevronRight, BookmarkPlus, Film, Sparkles, Plus } from 'lucide-react';
+import { Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft, Headphones, BookOpen, Pause, Play, Square, Gauge, BookmarkCheck, RotateCcw, Eye, EyeOff, ChevronLeft, ChevronRight, BookmarkPlus, Film, Sparkles, Plus, Palette } from 'lucide-react';
 
 import { speakText, stopSpeech } from '../utils/speech';
 import { translateWithGoogleFree } from '../services/translate';
@@ -143,6 +143,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const sessionLookedUpTokensRef = useRef<Set<string>>(new Set());
 
   // 出題ターゲット（構文・出題単語）の可視化切り替え（デフォルトOFF）
+    // 初見リスニング理解度カラーの可視化切り替え（デフォルトON）
+  const [showComprehensionHighlights, setShowComprehensionHighlights] = useState<boolean>(() => {
+    const saved = localStorage.getItem('reader_show_comprehension');
+    return saved !== null ? saved === 'true' : true;
+  });
+
   const [showTargetHighlights, setShowTargetHighlights] = useState<boolean>(() => {
     return localStorage.getItem('reader_show_targets') === 'true';
   });
@@ -203,23 +209,26 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
   }, [currentStory.storyContent]);
 
-  // 一文ごとのリスト（一文リスニング用）
+  // 一文ごとのリスト（一文リスニング用 & 理解度カラーマッピング用）
   const sentenceList = useMemo(() => {
-    const result: { id: number; text: string; pIdx: number }[] = [];
+    const result: { id: number; text: string; pIdx: number; charStart: number; charEnd: number }[] = [];
     let counter = 0;
 
     paragraphs.forEach((p, pIdx) => {
-      const rawSentences = p.match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [p];
-      rawSentences.forEach((raw) => {
-        const trimmed = raw.trim();
+      const regex = /[^.!?]+[.!?]+["']?|[^.!?]+$/g;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(p)) !== null) {
+        const trimmed = match[0].trim();
         if (trimmed.length > 0) {
           result.push({
             id: counter++,
             text: trimmed,
             pIdx,
+            charStart: match.index,
+            charEnd: regex.lastIndex,
           });
         }
-      });
+      }
     });
 
     return result;
@@ -741,53 +750,91 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </p>
           )}
 
-          {/* Highlight Legend & Target Visibility Toggle */}
-          <div className="flex items-center justify-between flex-wrap gap-2 pt-1 text-[11px] text-slate-400 border-t border-slate-800/60">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-slate-500 font-medium">ハイライト:</span>
-              <span className="flex items-center space-x-1 text-amber-300 font-medium">
-                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
-                <span>習得中 / 要復習</span>
-              </span>
+          {/* Highlight Legend & Comprehension / Target Visibility Toggles */}
+          <div className="flex items-center justify-between flex-wrap gap-2 pt-2 text-[11px] text-slate-400 border-t border-slate-800/60">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="text-slate-500 font-medium">表示凡例:</span>
+              {showComprehensionHighlights && (
+                <div className="flex items-center gap-2 px-2 py-0.5 rounded-lg bg-slate-950 border border-slate-800/80 text-[10px]">
+                  <span className="text-slate-400 font-bold">理解度:</span>
+                  <span className="text-rose-400 font-medium flex items-center gap-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>1:要復習
+                  </span>
+                  <span className="text-amber-400 font-medium flex items-center gap-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>2:曖昧
+                  </span>
+                  <span className="text-sky-300 font-medium flex items-center gap-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>3:理解
+                  </span>
+                  <span className="text-emerald-400 font-medium flex items-center gap-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>4:即解
+                  </span>
+                </div>
+              )}
               {showTargetHighlights && (
                 <>
                   <span className="flex items-center space-x-1 text-purple-300 font-medium animate-fadeIn">
                     <span className="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>
-                    <span>💡 出題構文</span>
+                    <span>💡 構文</span>
                   </span>
                   <span className="flex items-center space-x-1 text-sky-300 font-medium animate-fadeIn">
                     <span className="w-2 h-2 rounded-full bg-sky-400 inline-block"></span>
-                    <span>🔵 出題単語</span>
+                    <span>🔵 単語</span>
                   </span>
                 </>
               )}
+              <span className="flex items-center space-x-1 text-amber-300 font-medium">
+                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
+                <span>習得中</span>
+              </span>
             </div>
 
-            <button
-              onClick={() => {
-                const next = !showTargetHighlights;
-                setShowTargetHighlights(next);
-                localStorage.setItem('reader_show_targets', String(next));
-              }}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                showTargetHighlights
-                  ? 'bg-purple-950/80 text-purple-300 border-purple-500/50 shadow-sm'
-                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-              title="出題された重要構文・単語のハイライト表示を切り替えます"
-            >
-              {showTargetHighlights ? (
-                <>
-                  <Eye className="w-3.5 h-3.5 text-purple-400" />
-                  <span>ターゲット可視化: ON</span>
-                </>
-              ) : (
-                <>
-                  <EyeOff className="w-3.5 h-3.5 text-slate-500" />
-                  <span>ターゲット可視化: OFF</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-1.5">
+              {/* Comprehension Color Toggle */}
+              <button
+                onClick={() => {
+                  const next = !showComprehensionHighlights;
+                  setShowComprehensionHighlights(next);
+                  localStorage.setItem('reader_show_comprehension', String(next));
+                }}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                  showComprehensionHighlights
+                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50 shadow-sm'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+                }`}
+                title="初見リスニングで記録した理解度カラーの表示を切り替えます"
+              >
+                <Palette className="w-3.5 h-3.5 text-emerald-400" />
+                <span>理解度カラー: {showComprehensionHighlights ? 'ON' : 'OFF'}</span>
+              </button>
+
+              {/* Target Visibility Toggle */}
+              <button
+                onClick={() => {
+                  const next = !showTargetHighlights;
+                  setShowTargetHighlights(next);
+                  localStorage.setItem('reader_show_targets', String(next));
+                }}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                  showTargetHighlights
+                    ? 'bg-purple-950/80 text-purple-300 border-purple-500/50 shadow-sm'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+                }`}
+                title="出題された重要構文・単語のハイライト表示を切り替えます"
+              >
+                {showTargetHighlights ? (
+                  <>
+                    <Eye className="w-3.5 h-3.5 text-purple-400" />
+                    <span>ターゲット: ON</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+                    <span>ターゲット: OFF</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -828,15 +875,36 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
                     const status = getWordStatus(seg.cleanWord);
 
+                    // 理解度カラーの判定
+                    const sentenceOfSeg = sentenceList.find(s => s.pIdx === para.pIdx && seg.charStart >= s.charStart && seg.charStart < s.charEnd);
+                    const sentenceRating = sentenceOfSeg
+                      ? (currentStory.sentenceRatings?.[sentenceOfSeg.id]?.rating || currentStory.listeningMetrics?.sentenceRatings?.[sentenceOfSeg.id]?.rating)
+                      : undefined;
+
+                    let comprehensionBase = '';
+                    if (showComprehensionHighlights && sentenceRating) {
+                      if (sentenceRating === 1) {
+                        comprehensionBase = 'bg-rose-950/40 text-rose-100 border-b-2 border-rose-500/80 ';
+                      } else if (sentenceRating === 2) {
+                        comprehensionBase = 'bg-amber-950/40 text-amber-100 border-b-2 border-amber-400/80 ';
+                      } else if (sentenceRating === 3) {
+                        comprehensionBase = 'bg-sky-950/30 text-sky-100 border-b border-sky-400/60 ';
+                      } else if (sentenceRating === 4) {
+                        comprehensionBase = 'bg-emerald-950/20 text-emerald-100 ';
+                      }
+                    }
+
                     if (isPattern) {
                       // 💡 出題構文（パープル系背景・波線）
-                      wordStyle = 'bg-purple-950/70 text-purple-200 underline decoration-purple-400 decoration-2 underline-offset-4 font-semibold hover:bg-purple-900/90 hover:text-purple-100 rounded px-0.5';
+                      wordStyle = `${comprehensionBase}bg-purple-950/70 text-purple-200 underline decoration-purple-400 decoration-2 underline-offset-4 font-semibold hover:bg-purple-900/90 hover:text-purple-100 rounded px-0.5`;
                     } else if (isTargetMatch) {
                       // 🔵 出題ターゲット単語（可視化ON時は最優先でスカイブルー強調！）
-                      wordStyle = 'text-sky-300 underline decoration-sky-400/90 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/50 font-medium rounded px-0.5';
+                      wordStyle = `${comprehensionBase}text-sky-300 underline decoration-sky-400/90 decoration-2 underline-offset-2 hover:text-sky-200 bg-sky-950/50 font-medium rounded px-0.5`;
                     } else if (status === 'lapsed') {
                       // 🟡 習得中 / 要復習（単語帳に登録中・Anki学習中）
-                      wordStyle = 'text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10';
+                      wordStyle = `${comprehensionBase}text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10`;
+                    } else if (comprehensionBase) {
+                      wordStyle = `${comprehensionBase}hover:text-sky-300`;
                     }
                     // 既知・習得済み(mastered)単語は読書を邪魔しないよう通常テキストスタイルを維持
                   }

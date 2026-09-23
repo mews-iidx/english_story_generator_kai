@@ -5,15 +5,14 @@ import {
   loadReadingSessionLogs,
   deleteReadingSessionLog,
 } from '../services/storage';
-import { ReadingSessionLog } from '../types/mastery';
-import { DailySnapshot } from '../types/mastery';
+import { ReadingSessionLog, DailySnapshot } from '../types/mastery';
 import { VocabItem } from '../types/vocab';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
 import {
   Zap, Volume2, Search, Trash2, ShieldCheck, BarChart3, Globe,
   ChevronDown, ChevronUp, BookOpen, PenTool, Sparkles, Headphones, Activity,
-  Flame, AlertTriangle
+  Flame, AlertTriangle, Calendar, TrendingUp
 } from 'lucide-react';
 import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
@@ -32,8 +31,9 @@ interface MasteryDashboardViewProps {
 }
 
 type SavedStockTab = 'cards' | 'errors';
-type CardFilterType = 'all' | 'word' | 'pattern' | 'mastered' | 'learning';
+type CardFilterType = 'all' | 'reading_en_ja' | 'speaking_ja_en' | 'word' | 'pattern' | 'mastered' | 'learning';
 export type CefrProgressMode = 'comprehension' | 'assembly';
+export type CefrTimelineView = 'realtime' | 'daily' | 'monthly';
 
 function formatDateKey(d: Date): string {
   const y = d.getFullYear();
@@ -85,6 +85,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   const [cardFilter, setCardFilter] = useState<CardFilterType>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [progressMode, setProgressMode] = useState<CefrProgressMode>('comprehension');
+  const [timelineView, setTimelineView] = useState<CefrTimelineView>('realtime');
   const [isReadingLogOpen, setIsReadingLogOpen] = useState<boolean>(false);
   const [readingLogs, setReadingLogs] = useState<ReadingSessionLog[]>(() => loadReadingSessionLogs());
 
@@ -170,7 +171,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       }
       if (m.unitLogs) {
         m.unitLogs
-          .filter(l => l.retryCount >= 1 || l.revealedEnglish)
+          .filter(l => l.retryCount >= 1 || l.revealedEnglish || (l.rating !== undefined && l.rating <= 2))
           .forEach(l => {
             allBottlenecks.push({
               storyTitle: s.title,
@@ -200,12 +201,21 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     };
   }, [stories]);
 
-  // 5. センテンス武器庫のステータス集計
-  const { masteredCardsCount, learningCardsCount, wordCardsCount, patternCardsCount } = useMemo(() => {
+  // 5. センテンス武器庫のステータス集計（英日・読解ストック vs 日英・発話武器）
+  const {
+    masteredCardsCount,
+    learningCardsCount,
+    wordCardsCount,
+    patternCardsCount,
+    readingCardsCount,
+    weaponCardsCount,
+  } = useMemo(() => {
     let mastered = 0;
     let learning = 0;
     let words = 0;
     let patterns = 0;
+    let reading = 0;
+    let weapons = 0;
 
     savedVocabs.forEach(v => {
       const isMastered = (v.intervalDays && v.intervalDays >= 21) || (v.repetitionCount && v.repetitionCount >= 4);
@@ -214,6 +224,12 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
       if (v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0)) patterns++;
       else words++;
+
+      if (v.cardDirection === 'ja_to_en') {
+        weapons++;
+      } else {
+        reading++;
+      }
     });
 
     return {
@@ -221,6 +237,8 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       learningCardsCount: learning,
       wordCardsCount: words,
       patternCardsCount: patterns,
+      readingCardsCount: reading,
+      weaponCardsCount: weapons,
     };
   }, [savedVocabs]);
 
@@ -250,40 +268,129 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     return Math.max(...last7DaysData.map(d => d.words), 200);
   }, [last7DaysData]);
 
-  // 7. 読了ログ削除ハンドラー
+  // 7. CEFR日次・月次積み上げ推移データ
+  const cefrDailyBreakdowns = useMemo(() => {
+    const sorted = [...dailySnapshots].sort((a, b) => a.date.localeCompare(b.date));
+    const recent = sorted.slice(-10); // recent 10 recorded days
+    return recent.map(snap => {
+      const a1 = snap.a1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 100, patternMastered: 0, patternLapsed: 0, patternUnseen: 20 };
+      const a2 = snap.a2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 150, patternMastered: 0, patternLapsed: 0, patternUnseen: 30 };
+      const b1 = snap.b1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 200, patternMastered: 0, patternLapsed: 0, patternUnseen: 40 };
+      const b2 = snap.b2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 250, patternMastered: 0, patternLapsed: 0, patternUnseen: 50 };
+
+      const totalMastered = (a1.vocabMastered || 0) + (a1.patternMastered || 0) +
+                            (a2.vocabMastered || 0) + (a2.patternMastered || 0) +
+                            (b1.vocabMastered || 0) + (b1.patternMastered || 0) +
+                            (b2.vocabMastered || 0) + (b2.patternMastered || 0);
+
+      const totalLearning = (a1.vocabLapsed || 0) + (a1.patternLapsed || 0) + (a1.vocabExposed || 0) + (a1.patternExposed || 0) +
+                            (a2.vocabLapsed || 0) + (a2.patternLapsed || 0) + (a2.vocabExposed || 0) + (a2.patternExposed || 0) +
+                            (b1.vocabLapsed || 0) + (b1.patternLapsed || 0) + (b1.vocabExposed || 0) + (b1.patternExposed || 0) +
+                            (b2.vocabLapsed || 0) + (b2.patternLapsed || 0) + (b2.vocabExposed || 0) + (b2.patternExposed || 0);
+
+      const totalItems = ((a1.vocabTotal || 0) + (a1.patternTotal || 0) +
+                          (a2.vocabTotal || 0) + (a2.patternTotal || 0) +
+                          (b1.vocabTotal || 0) + (b1.patternTotal || 0) +
+                          (b2.vocabTotal || 0) + (b2.patternTotal || 0)) || 1000;
+
+      const totalUnseen = Math.max(0, totalItems - totalMastered - totalLearning);
+
+      return {
+        date: snap.date,
+        displayDate: snap.date.slice(5), // MM-DD
+        totalMastered,
+        totalLearning,
+        totalUnseen,
+        totalItems,
+        masteredPct: Math.round((totalMastered / totalItems) * 100),
+        learningPct: Math.round((totalLearning / totalItems) * 100),
+        unseenPct: Math.max(0, 100 - Math.round((totalMastered / totalItems) * 100) - Math.round((totalLearning / totalItems) * 100)),
+      };
+    });
+  }, [dailySnapshots]);
+
+  // 月次集計
+  const cefrMonthlyBreakdowns = useMemo(() => {
+    const monthGroups: Record<string, DailySnapshot[]> = {};
+    dailySnapshots.forEach(s => {
+      const monthKey = s.date.slice(0, 7); // YYYY-MM
+      if (!monthGroups[monthKey]) monthGroups[monthKey] = [];
+      monthGroups[monthKey].push(s);
+    });
+
+    return Object.keys(monthGroups).sort().map(mKey => {
+      const list = monthGroups[mKey];
+      const latestSnap = list[list.length - 1];
+      const a1 = latestSnap.a1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 100, patternMastered: 0, patternLapsed: 0, patternUnseen: 20 };
+      const a2 = latestSnap.a2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 150, patternMastered: 0, patternLapsed: 0, patternUnseen: 30 };
+      const b1 = latestSnap.b1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 200, patternMastered: 0, patternLapsed: 0, patternUnseen: 40 };
+      const b2 = latestSnap.b2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 250, patternMastered: 0, patternLapsed: 0, patternUnseen: 50 };
+
+      const totalMastered = (a1.vocabMastered || 0) + (a1.patternMastered || 0) +
+                            (a2.vocabMastered || 0) + (a2.patternMastered || 0) +
+                            (b1.vocabMastered || 0) + (b1.patternMastered || 0) +
+                            (b2.vocabMastered || 0) + (b2.patternMastered || 0);
+
+      const totalLearning = (a1.vocabLapsed || 0) + (a1.patternLapsed || 0) + (a1.vocabExposed || 0) + (a1.patternExposed || 0) +
+                            (a2.vocabLapsed || 0) + (a2.patternLapsed || 0) + (a2.vocabExposed || 0) + (a2.patternExposed || 0) +
+                            (b1.vocabLapsed || 0) + (b1.patternLapsed || 0) + (b1.vocabExposed || 0) + (b1.patternExposed || 0) +
+                            (b2.vocabLapsed || 0) + (b2.patternLapsed || 0) + (b2.vocabExposed || 0) + (b2.patternExposed || 0);
+
+      const totalItems = ((a1.vocabTotal || 0) + (a1.patternTotal || 0) +
+                          (a2.vocabTotal || 0) + (a2.patternTotal || 0) +
+                          (b1.vocabTotal || 0) + (b1.patternTotal || 0) +
+                          (b2.vocabTotal || 0) + (b2.patternTotal || 0)) || 1000;
+
+      const totalUnseen = Math.max(0, totalItems - totalMastered - totalLearning);
+
+      return {
+        month: mKey,
+        totalMastered,
+        totalLearning,
+        totalUnseen,
+        totalItems,
+        masteredPct: Math.round((totalMastered / totalItems) * 100),
+        learningPct: Math.round((totalLearning / totalItems) * 100),
+        unseenPct: Math.max(0, 100 - Math.round((totalMastered / totalItems) * 100) - Math.round((totalLearning / totalItems) * 100)),
+      };
+    });
+  }, [dailySnapshots]);
+
+  // 読了ログの削除ハンドラー
   const handleDeleteReadingLog = (logId: string) => {
-    if (confirm('この読了ログを削除しますか？（日次統計が自動再計算されます）')) {
-      const res = deleteReadingSessionLog(logId);
-      setReadingLogs(res.logs);
+    if (confirm('この読了セッションログを削除しますか？')) {
+      const updated = deleteReadingSessionLog(logId);
+      setReadingLogs(updated.logs);
     }
   };
 
-  // 8. 1センテンス Ankiカードのフィルタリング & 検索
+  // 8. センテンス武器庫のフィルタリング
   const filteredCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-
     return savedVocabs.filter(v => {
+      // 検索一致
+      const matchQuery =
+        !q ||
+        (v.phrase && v.phrase.toLowerCase().includes(q)) ||
+        (v.focusWord && v.focusWord.toLowerCase().includes(q)) ||
+        (v.meaning && v.meaning.toLowerCase().includes(q)) ||
+        (v.sentence && v.sentence.toLowerCase().includes(q)) ||
+        (v.translation && v.translation.toLowerCase().includes(q));
+
+      if (!matchQuery) return false;
+
+      // フィルタ一致
+      if (cardFilter === 'all') return true;
+      if (cardFilter === 'reading_en_ja') return v.cardDirection === 'en_to_ja' || !v.cardDirection;
+      if (cardFilter === 'speaking_ja_en') return v.cardDirection === 'ja_to_en';
+      if (cardFilter === 'word') return v.focusType !== 'pattern' && (!v.corePatterns || v.corePatterns.length === 0);
+      if (cardFilter === 'pattern') return v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0);
+      
       const isMastered = (v.intervalDays && v.intervalDays >= 21) || (v.repetitionCount && v.repetitionCount >= 4);
-      const isPattern = v.focusType === 'pattern' || (v.corePatterns && v.corePatterns.length > 0);
+      if (cardFilter === 'mastered') return isMastered;
+      if (cardFilter === 'learning') return !isMastered;
 
-      if (cardFilter === 'mastered' && !isMastered) return false;
-      if (cardFilter === 'learning' && isMastered) return false;
-      if (cardFilter === 'word' && isPattern) return false;
-      if (cardFilter === 'pattern' && !isPattern) return false;
-
-      if (!q) return true;
-      const targetText = [
-        v.phrase,
-        v.focusWord,
-        v.meaning,
-        v.focusMeaning,
-        v.sentence,
-        v.translation,
-        v.contextNote,
-        ...(v.corePatterns?.map(p => p.patternName + ' ' + p.formula) || []),
-      ].join(' ').toLowerCase();
-
-      return targetText.includes(q);
+      return true;
     });
   }, [savedVocabs, cardFilter, searchQuery]);
 
@@ -677,7 +784,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         )}
       </div>
 
-      {/* 4. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) ＆ 理解/組立 3状態グラフ */}
+      {/* 4. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) ＆ 積み上げ分布推移 */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 transition-all">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-3">
@@ -687,78 +794,266 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <h3 className="text-base sm:text-lg font-black text-white">
-                  🌐 リアルCEFRシラバス進捗マップ (A1〜B2)
+                  🌐 リアルCEFRシラバス進捗 ＆ 積み上げ推移
                 </h3>
               </div>
               <p className="text-[11px] text-slate-400">
-                マスターDBに基づく【🟢 既知 / 🟡 学習中 / ⚪ 未知】の3状態リアル分布
+                【🟢 習得済 / 🟡 学習中 / ⚪ 未知】の3状態リアルタイム分布 ＆ 日次・月次の積み上げ
               </p>
             </div>
           </div>
 
-          {/* Mode Switcher: 理解 vs 組立 */}
-          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 self-start sm:self-auto">
-            <button
-              onClick={() => setProgressMode('comprehension')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                progressMode === 'comprehension'
-                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>理解 (インプット)</span>
-            </button>
-            <button
-              onClick={() => setProgressMode('assembly')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                progressMode === 'assembly'
-                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <PenTool className="w-3.5 h-3.5" />
-              <span>組立 (アウトプット)</span>
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Timeline Selector: リアルタイム vs 日次 vs 月次 */}
+            <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800">
+              <button
+                onClick={() => setTimelineView('realtime')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  timelineView === 'realtime'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                現在値
+              </button>
+              <button
+                onClick={() => setTimelineView('daily')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  timelineView === 'daily'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                日次積み上げ
+              </button>
+              <button
+                onClick={() => setTimelineView('monthly')}
+                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  timelineView === 'monthly'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                月次積み上げ
+              </button>
+            </div>
+
+            {/* Mode Switcher: 理解 vs 組立 */}
+            <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800">
+              <button
+                onClick={() => setProgressMode('comprehension')}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  progressMode === 'comprehension'
+                    ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <BookOpen className="w-3 h-3" />
+                <span>理解</span>
+              </button>
+              <button
+                onClick={() => setProgressMode('assembly')}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  progressMode === 'assembly'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <PenTool className="w-3 h-3" />
+                <span>組立</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Level Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {(['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
-            const data = allCefrProgress[lvl];
-            const masteredPct = progressMode === 'comprehension' ? data.overallPct : (data.overallAssemblyPct || 0);
-            const totalItems = (data.patternTotal || 0) + (data.vocabTotal || 0);
-
-            return (
-              <div
-                key={lvl}
-                className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-3 relative overflow-hidden"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-mono font-black text-base text-white px-2.5 py-0.5 rounded-lg bg-slate-900 border border-slate-700">
-                    {lvl}
-                  </span>
-                  <span className="text-xs font-bold text-cyan-400 font-mono">
-                    {masteredPct}% 習得
-                  </span>
-                </div>
-
-                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden flex">
-                  <div
-                    className="bg-gradient-to-r from-emerald-500 to-cyan-400 h-full transition-all duration-500"
-                    style={{ width: `${masteredPct}%` }}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>対象項目数</span>
-                  <span className="font-mono text-slate-300">{totalItems} 項目</span>
-                </div>
+        {timelineView === 'realtime' ? (
+          /* Realtime CEFR Stacked Level Grid (A1〜B2) */
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
+                  <span className="text-emerald-300 font-bold">習得済 (Mastered)</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+                  <span className="text-amber-300 font-bold">学習中 (In Progress)</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-600 inline-block" />
+                  <span className="text-slate-400 font-bold">未知 (Unseen)</span>
+                </span>
               </div>
-            );
-          })}
-        </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              {(['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
+                const data = allCefrProgress[lvl];
+                const totalItems = (data.patternTotal || 0) + (data.vocabTotal || 0);
+
+                const masteredCount = progressMode === 'comprehension'
+                  ? (data.patternMastered || 0) + (data.vocabMastered || 0)
+                  : (data.patternAssemblyMastered || 0) + (data.vocabAssemblyMastered || 0);
+
+                const learningCount = (data.patternLapsed || 0) + (data.patternExposed || 0) +
+                                      (data.vocabLapsed || 0) + (data.vocabExposed || 0);
+
+                const unseenCount = Math.max(0, totalItems - masteredCount - learningCount);
+
+                const masteredPct = Math.round((masteredCount / totalItems) * 100);
+                const learningPct = Math.round((learningCount / totalItems) * 100);
+                const unseenPct = Math.max(0, 100 - masteredPct - learningPct);
+
+                return (
+                  <div
+                    key={lvl}
+                    className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-3 relative overflow-hidden group hover:border-slate-700 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono font-black text-base text-white px-2.5 py-0.5 rounded-lg bg-slate-900 border border-slate-700">
+                        {lvl}
+                      </span>
+                      <span className="text-xs font-bold text-cyan-400 font-mono">
+                        {masteredPct}% 習得
+                      </span>
+                    </div>
+
+                    {/* Stacked Progress Bar */}
+                    <div className="w-full bg-slate-900 h-3 rounded-full overflow-hidden flex shadow-inner">
+                      {/* Mastered */}
+                      <div
+                        className="bg-gradient-to-r from-emerald-500 to-emerald-400 h-full transition-all duration-500"
+                        style={{ width: `${masteredPct}%` }}
+                        title={`習得済: ${masteredCount} (${masteredPct}%)`}
+                      />
+                      {/* Learning */}
+                      <div
+                        className="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-500"
+                        style={{ width: `${learningPct}%` }}
+                        title={`学習中: ${learningCount} (${learningPct}%)`}
+                      />
+                      {/* Unseen */}
+                      <div
+                        className="bg-slate-800 h-full transition-all duration-500"
+                        style={{ width: `${unseenPct}%` }}
+                        title={`未知: ${unseenCount} (${unseenPct}%)`}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1 text-[10px] text-center pt-1 font-mono">
+                      <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
+                        <span className="text-emerald-400 block font-bold">{masteredCount}</span>
+                        <span className="text-slate-500">習得</span>
+                      </div>
+                      <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
+                        <span className="text-amber-400 block font-bold">{learningCount}</span>
+                        <span className="text-slate-500">学習中</span>
+                      </div>
+                      <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
+                        <span className="text-slate-400 block font-bold">{unseenCount}</span>
+                        <span className="text-slate-500">未知</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : timelineView === 'daily' ? (
+          /* Daily Stacked Progression (日次積み上げ推移) */
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>直近の日次学習ログに基づくCEFRアイテム推移</span>
+              <span className="font-mono">{cefrDailyBreakdowns.length} 日分</span>
+            </div>
+
+            {cefrDailyBreakdowns.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-500">
+                日次スナップショットがまだ蓄積されていません。学習を進めると自動記録されます。
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {cefrDailyBreakdowns.map((d, idx) => (
+                  <div key={idx} className="p-3 bg-slate-950/80 rounded-2xl border border-slate-800/80 space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-mono font-bold text-white flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-cyan-400" />
+                        {d.date}
+                      </span>
+                      <div className="flex items-center gap-2 font-mono text-[11px]">
+                        <span className="text-emerald-400 font-bold">🟢 {d.totalMastered} ({d.masteredPct}%)</span>
+                        <span className="text-amber-400 font-bold">🟡 {d.totalLearning}</span>
+                        <span className="text-slate-500">⚪ {d.totalUnseen}</span>
+                      </div>
+                    </div>
+
+                    <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden flex shadow-inner">
+                      <div
+                        className="bg-emerald-500 h-full transition-all duration-300"
+                        style={{ width: `${d.masteredPct}%` }}
+                      />
+                      <div
+                        className="bg-amber-400 h-full transition-all duration-300"
+                        style={{ width: `${d.learningPct}%` }}
+                      />
+                      <div
+                        className="bg-slate-800 h-full transition-all duration-300"
+                        style={{ width: `${d.unseenPct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Monthly Stacked Progression (月次積み上げ推移) */
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>月間ごとのCEFR総習得・学習中アイテム積み上げ推移</span>
+              <span className="font-mono">{cefrMonthlyBreakdowns.length} ヶ月分</span>
+            </div>
+
+            {cefrMonthlyBreakdowns.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-500">
+                月次スナップショットがまだありません。
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {cefrMonthlyBreakdowns.map((m, idx) => (
+                  <div key={idx} className="p-4 bg-slate-950/90 rounded-2xl border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-xs sm:text-sm">
+                      <span className="font-mono font-black text-white flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4 text-purple-400" />
+                        {m.month}
+                      </span>
+                      <div className="flex items-center gap-3 font-mono text-xs">
+                        <span className="text-emerald-400 font-bold">🟢 習得: {m.totalMastered} ({m.masteredPct}%)</span>
+                        <span className="text-amber-400 font-bold">🟡 学習中: {m.totalLearning}</span>
+                        <span className="text-slate-400">⚪ 未知: {m.totalUnseen}</span>
+                      </div>
+                    </div>
+
+                    <div className="w-full bg-slate-900 h-3 rounded-full overflow-hidden flex shadow-inner">
+                      <div
+                        className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-500"
+                        style={{ width: `${m.masteredPct}%` }}
+                      />
+                      <div
+                        className="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-500"
+                        style={{ width: `${m.learningPct}%` }}
+                      />
+                      <div
+                        className="bg-slate-800 h-full transition-all duration-500"
+                        style={{ width: `${m.unseenPct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 5. センテンス武器庫 (Ankiカード一覧) ＆ 偽英語・発話カルテ */}
@@ -773,7 +1068,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                 センテンス武器庫 ＆ 発話カルテ
               </h3>
               <p className="text-xs text-slate-400">
-                ストーリーから抽出・蓄積されたAnkiカードと発話修正ログ
+                読解ストック（英日） ＆ 会話発話武器（日英）のAnkiカード管理
               </p>
             </div>
           </div>
@@ -817,21 +1112,27 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
           {activeTab === 'cards' && (
             <div className="flex items-center gap-1.5 flex-wrap">
-              {(['all', 'pattern', 'word', 'mastered', 'learning'] as CardFilterType[]).map(f => (
+              {(
+                [
+                  { id: 'all', label: `すべて (${savedVocabs.length})` },
+                  { id: 'reading_en_ja', label: `📖 読解 (英日: ${readingCardsCount})` },
+                  { id: 'speaking_ja_en', label: `⚔️ 発話武器 (日英: ${weaponCardsCount})` },
+                  { id: 'pattern', label: `💡 構文 (${patternCardsCount})` },
+                  { id: 'word', label: `🔤 単語 (${wordCardsCount})` },
+                  { id: 'mastered', label: `🟢 マスター済 (${masteredCardsCount})` },
+                  { id: 'learning', label: `🟡 学習中 (${learningCardsCount})` },
+                ] as { id: CardFilterType; label: string }[]
+              ).map(f => (
                 <button
-                  key={f}
-                  onClick={() => setCardFilter(f)}
+                  key={f.id}
+                  onClick={() => setCardFilter(f.id)}
                   className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    cardFilter === f
-                      ? 'bg-purple-600 text-white'
+                    cardFilter === f.id
+                      ? 'bg-purple-600 text-white shadow-sm'
                       : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
                   }`}
                 >
-                  {f === 'all' && 'すべて'}
-                  {f === 'pattern' && `構文 (${patternCardsCount})`}
-                  {f === 'word' && `単語 (${wordCardsCount})`}
-                  {f === 'mastered' && `マスター済 (${masteredCardsCount})`}
-                  {f === 'learning' && `学習中 (${learningCardsCount})`}
+                  {f.label}
                 </button>
               ))}
             </div>
@@ -848,6 +1149,8 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
               {filteredCards.map(card => {
                 const isMastered = (card.intervalDays && card.intervalDays >= 21) || (card.repetitionCount && card.repetitionCount >= 4);
+                const isWeaponJaToEn = card.cardDirection === 'ja_to_en';
+
                 return (
                   <div
                     key={card.id}
@@ -855,7 +1158,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-sm text-white">
                             {card.phrase || card.focusWord}
                           </span>
@@ -897,7 +1200,17 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 pt-1">
+                    <div className="flex items-center gap-2 pt-1 flex-wrap">
+                      {/* Direction Tag */}
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        isWeaponJaToEn
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                          : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                      }`}>
+                        {isWeaponJaToEn ? '⚔️ 発話武器 (日英)' : '📖 読解ストック (英日)'}
+                      </span>
+
+                      {/* Mastery Tag */}
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         isMastered
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -905,6 +1218,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
                       }`}>
                         {isMastered ? 'マスター済み' : '学習中'}
                       </span>
+
                       {card.level && (
                         <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[10px] font-mono">
                           {card.level}

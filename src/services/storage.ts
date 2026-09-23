@@ -125,6 +125,7 @@ export function recordStoryListeningCompleted(
       listeningStatus: 'completed',
       listeningCompletedAt: story.listeningCompletedAt || new Date().toISOString(),
       listeningMetrics: metrics,
+      sentenceRatings: metrics.sentenceRatings || story.sentenceRatings,
     };
     stories[index] = updatedStory;
     localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));
@@ -1644,10 +1645,7 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
   const today = getTodayDateString();
 
   const id1 = 'voc_en_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const id2 = 'voc_ja_' + (Date.now() + 1) + '_' + Math.random().toString(36).substring(2, 6);
-
   const srs1 = calculateLapseSRS();
-  const srs2 = calculateLapseSRS();
 
   const cleanSentence = extractSingleSentence(params.sentence, params.focusWord);
   const isWord = params.focusType === 'word';
@@ -1666,7 +1664,7 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     ? (params.corePatterns[0].briefNote || params.corePatterns[0].meaningTemplate)
     : (params.focusMeaning ? cleanTranslationText(params.focusMeaning) : '');
 
-  // Card 1: 英 ➔ 和 (読解・コンパイル用)
+  // Card 1: 英 ➔ 和 (読解・インプット認識用: 片方向)
   const card1: VocabItem = {
     id: id1,
     phrase: phraseText,
@@ -1681,35 +1679,8 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     focusMeaning: isWord ? meaningText : undefined,
     corePatterns: params.corePatterns || [],
     cardDirection: 'en_to_ja',
-    siblingId: id2,
     ...srs1,
     nextReviewDate: today,
-    createdAt: now,
-    lastReviewedAt: now,
-    sourceStoryId: params.sourceStoryId,
-    importance: params.importance || (params.focusType === 'pattern' ? 4 : 3),
-    cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
-  };
-
-  // Card 2: 和 ➔ 英 (瞬間英作文・組み立て用)
-  // 両方のカードを本日復習対象として即時登録し、Ankiのシャッフルでランダムに出題
-  const card2: VocabItem = {
-    id: id2,
-    phrase: phraseText,
-    meaning: meaningText,
-    partOfSpeech: isWord ? '単語・イディオム' : (params.focusType === 'pattern' ? '構文・文法' : '1文・表現'),
-    contextNote: primaryNote,
-    exampleSentence: cleanSentence,
-    sentence: cleanSentence,
-    translation: cleanTranslationText(params.translation),
-    focusType: params.focusType,
-    focusWord: isWord ? params.focusWord?.trim() : undefined,
-    focusMeaning: isWord ? meaningText : undefined,
-    corePatterns: params.corePatterns || [],
-    cardDirection: 'ja_to_en',
-    siblingId: id1,
-    ...srs2,
-    nextReviewDate: today, // 本日すぐに復習可能
     createdAt: now,
     lastReviewedAt: now,
     sourceStoryId: params.sourceStoryId,
@@ -1724,21 +1695,9 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     ? (v: VocabItem) => v.phrase.toLowerCase() === card1.phrase.toLowerCase() && v.cardDirection === 'en_to_ja'
     : (v: VocabItem) => v.sentence === card1.sentence && v.cardDirection === 'en_to_ja';
 
-  const matchFn2 = isWord
-    ? (v: VocabItem) => v.phrase.toLowerCase() === card2.phrase.toLowerCase() && v.cardDirection === 'ja_to_en'
-    : (v: VocabItem) => v.sentence === card2.sentence && v.cardDirection === 'ja_to_en';
-
   const existingIdx1 = vocabs.findIndex(matchFn1);
-  const existingIdx2 = vocabs.findIndex(matchFn2);
-
   const finalId1 = existingIdx1 >= 0 ? vocabs[existingIdx1].id : id1;
-  const finalId2 = existingIdx2 >= 0 ? vocabs[existingIdx2].id : id2;
-
   card1.id = finalId1;
-  card1.siblingId = finalId2;
-
-  card2.id = finalId2;
-  card2.siblingId = finalId1;
 
   if (existingIdx1 >= 0) {
     vocabs[existingIdx1] = { ...vocabs[existingIdx1], ...card1 };
@@ -1746,14 +1705,8 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     vocabs.unshift(card1);
   }
 
-  if (existingIdx2 >= 0) {
-    vocabs[existingIdx2] = { ...vocabs[existingIdx2], ...card2 };
-  } else {
-    vocabs.unshift(card2);
-  }
-
   saveVocabsBatch(vocabs);
-  return { card1, card2 };
+  return { card1, card2: card1 };
 }
 
 // ===================== DRILL LOGS & PROGRESS RECORDING =====================
