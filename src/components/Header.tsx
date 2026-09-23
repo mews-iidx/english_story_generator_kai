@@ -5,6 +5,7 @@ export type NavTab = 'bookshelf' | 'drill' | 'listening_lab' | 'quiz' | 'mastery
 
 interface HeaderProps {
   activeTab: NavTab;
+  isReading?: boolean;
   setActiveTab: (tab: NavTab) => void;
   dueCount: number;
   isSyncing: boolean;
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   isGenerating,
   generatingTheme,
   isCallActive = false,
+  isReading = false,
 }) => {
   const tabs: (TabItem & { isMaintenance?: boolean })[] = [
     { id: 'bookshelf', label: '物語', icon: BookOpen },
@@ -171,6 +173,7 @@ export const Header: React.FC<HeaderProps> = ({
       </header>
 
       {/* 2. Mobile Bottom Navigation Bar */}
+      {!isReading && (
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/90 px-1 py-1.5 flex items-center justify-around shadow-2xl safe-area-pb">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -210,6 +213,7 @@ export const Header: React.FC<HeaderProps> = ({
           );
         })}
       </nav>
+      )}
     </>
   );
 };

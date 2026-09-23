@@ -42,6 +42,9 @@ interface ListeningUnit {
   boundaryReason?: string;
 }
 
+// 1-second base64 silent WAV to keep OS MediaSession alive on mobile/PWA
+const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
 const SPEECH_RATES = [
   { label: '0.75x', value: 0.75 },
   { label: '0.85x', value: 0.85 },
@@ -77,6 +80,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
   // Refs for tracking timestamps
   const unitStartTimeRef = useRef<number>(0);
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Story word count
   const storyWordCount = useMemo(() => {
@@ -144,6 +148,11 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   const stopAudio = useCallback(() => {
     stopSpeech();
     setIsPlaying(false);
+    try {
+      if (silentAudioRef.current) {
+        silentAudioRef.current.pause();
+      }
+    } catch (_) {}
   }, []);
 
   useEffect(() => {
@@ -162,6 +171,15 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
     if (isRetry) {
       setCurrentRetryCount(prev => prev + 1);
     }
+
+    // Play silent audio loop to unlock Bluetooth / lockscreen MediaSession controls in mobile/PWA
+    try {
+      if (!silentAudioRef.current) {
+        silentAudioRef.current = new Audio(SILENT_AUDIO_URI);
+        silentAudioRef.current.loop = true;
+      }
+      silentAudioRef.current.play().catch(() => {});
+    } catch (_) {}
 
     // MediaSession API: スマホのロック画面・イヤホン操作のメタデータ更新
     if ('mediaSession' in navigator) {
@@ -259,13 +277,14 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   // Default advance (calculate appropriate rating if not explicitly rated)
   const handleAdvanceDefault = useCallback(() => {
     if (!currentUnit) return;
-    let defaultRating: 1 | 2 | 3 | 4 = 4;
+    // 音声コントロール/Spaceでの通常進行時は「3: 理解（中くらいわかった）」をデフォルトとする
+    let defaultRating: 1 | 2 | 3 | 4 = 3;
     if (revealedJapanese || currentRetryCount >= 3) {
-      defaultRating = 1;
+      defaultRating = 1; // 3回以上リピート / 和訳確認 ➔ 1: 要復習
     } else if (revealedEnglish || currentRetryCount >= 1) {
-      defaultRating = 2;
+      defaultRating = 2; // リピート / 英文確認 ➔ 2: 曖昧
     } else {
-      defaultRating = 4;
+      defaultRating = 3; // 通常次へ（中くらいわかった） ➔ 3: 理解
     }
     handleRateAndAdvance(defaultRating);
   }, [currentUnit, revealedJapanese, currentRetryCount, revealedEnglish, handleRateAndAdvance]);
@@ -455,7 +474,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   };
 
   return (
-    <div className={`max-w-4xl mx-auto space-y-6 animate-fadeIn ${stepStatus === 'listening' ? 'pb-64 sm:pb-56' : 'pb-20'}`}>
+    <div className={`max-w-4xl mx-auto space-y-6 animate-fadeIn ${stepStatus === 'listening' ? 'pb-80 sm:pb-72' : 'pb-20'}`}>
       {/* 1. Header Navigation & Stage Indicator */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -920,7 +939,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
           {/* ========================================================= */}
           {/* Fixed Sticky Bottom Dock: 上段=操作ボタン / 下段=4段階理解度 */}
           {/* ========================================================= */}
-          <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3 sm:p-4 pb-safe space-y-2.5 max-w-4xl mx-auto">
+          <div className="fixed bottom-0 inset-x-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3 sm:p-4 space-y-2.5 max-w-4xl mx-auto" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 16px))' }}>
             
             {/* 上段: リピート・英文・和訳・戻る・次へ等の操作コントロール */}
             <div className="flex items-center justify-between gap-2">
