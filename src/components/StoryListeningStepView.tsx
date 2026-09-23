@@ -399,7 +399,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   };
 
   return (
-    <div className={`max-w-4xl mx-auto space-y-6 animate-fadeIn ${stepStatus === 'listening' ? 'pb-60 sm:pb-52' : 'pb-20'}`}>
+    <div className={`max-w-4xl mx-auto space-y-6 animate-fadeIn ${stepStatus === 'listening' ? 'pb-64 sm:pb-56' : 'pb-20'}`}>
       {/* 1. Header Navigation & Stage Indicator */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -646,7 +646,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                 {metricsData.bottlenecks.map((item, idx) => (
                   <div
                     key={idx}
-                    className="p-3 bg-slate-900 border border-slate-850 rounded-xl space-y-1 text-xs"
+                    className="p-3 bg-slate-900 border border-slate-855 rounded-xl space-y-1 text-xs"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="font-bold text-white font-serif leading-relaxed">
@@ -705,9 +705,9 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       ) : (
         /* 4. Active Listening Stream Player */
         <div className="space-y-6">
-          {/* Unit Progress Bar */}
+          {/* Unit Progress Bar & Speed Switcher */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2">
-            <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center justify-between text-xs flex-wrap gap-2">
               <span className="font-bold text-slate-300 flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-mono font-bold">
                   {streamMode === 'sentence' ? '文' : 'チャンク'} {currentIndex + 1} / {units.length}
@@ -720,6 +720,24 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               </span>
 
               <div className="flex items-center space-x-2">
+                {/* Compact Rate Selector */}
+                <div className="flex items-center gap-1 bg-slate-950 px-1.5 py-0.5 rounded-lg border border-slate-800">
+                  {SPEECH_RATES.map(r => (
+                    <button
+                      key={r.value}
+                      type="button"
+                      onClick={() => setSpeechRate(r.value)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                        speechRate === r.value
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+
                 {currentRetryCount > 0 && (
                   <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold font-mono animate-pulse">
                     リトライ {currentRetryCount} 回目
@@ -777,7 +795,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
                 ) : (
                   <>
                     <Headphones className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>理解度を選んで次へ進んでください（1〜4キー）</span>
+                    <span>聞き取れましたか？（上のボタンでリピート / 下の理解度で次へ）</span>
                   </>
                 )}
               </span>
@@ -843,20 +861,104 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
             </div>
           </div>
 
-          {/* Fixed Sticky Bottom Dock for Controls & 4-Level Ratings */}
+          {/* ========================================================= */}
+          {/* Fixed Sticky Bottom Dock: 上段=操作ボタン / 下段=4段階理解度 */}
+          {/* ========================================================= */}
           <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3 sm:p-4 pb-safe space-y-2.5 max-w-4xl mx-auto">
-            {/* Top row: 4-Level Comprehension Rating Buttons */}
-            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+            
+            {/* 上段: リピート・英文・和訳・戻る・次へ等の操作コントロール */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* 戻るボタン */}
+                {currentIndex > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePrevious}
+                    className="flex items-center space-x-1 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition-all cursor-pointer shadow-sm active:scale-95"
+                    title="1つ前の文へ戻る (←キー)"
+                  >
+                    <span>⏮️ 戻る</span>
+                  </button>
+                )}
+
+                {/* リピート (もう一度聴く) ボタン */}
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  className="flex items-center space-x-1.5 px-3.5 py-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-300 hover:text-white rounded-xl text-xs font-bold border border-amber-500/40 hover:border-amber-400 transition-all cursor-pointer shadow-sm active:scale-95 group"
+                  title="もう一度再生 (Rキー)"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-400 group-hover:rotate-[-45deg] transition-transform" />
+                  <span>もう一度聴く (R)</span>
+                </button>
+
+                {/* 英文表示 / 非表示 トグル */}
+                <button
+                  type="button"
+                  onClick={() => setRevealedEnglish(prev => !prev)}
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-sm active:scale-95 ${
+                    revealedEnglish
+                      ? 'bg-sky-500/20 text-sky-200 border-sky-500/50'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+                  }`}
+                  title="英文を見る / 隠す (Vキー)"
+                >
+                  {revealedEnglish ? (
+                    <>
+                      <EyeOff className="w-3.5 h-3.5 text-sky-400" />
+                      <span>英文を隠す</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-3.5 h-3.5 text-sky-400" />
+                      <span>英文を見る (V)</span>
+                    </>
+                  )}
+                </button>
+
+                {/* 和訳表示 / 非表示 トグル */}
+                <button
+                  type="button"
+                  onClick={() => setRevealedJapanese(prev => !prev)}
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-sm active:scale-95 ${
+                    revealedJapanese
+                      ? 'bg-amber-500/20 text-amber-200 border-amber-500/50'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+                  }`}
+                  title="和訳を確認 / 隠す (Jキー)"
+                >
+                  <span className="text-[11px] text-amber-400">💡</span>
+                  <span>{revealedJapanese ? '和訳を隠す' : '和訳を見る (J)'}</span>
+                </button>
+              </div>
+
+              {/* 通常次へボタン (Space / Enter) */}
+              <button
+                type="button"
+                onClick={handleAdvanceDefault}
+                className="flex items-center space-x-1.5 px-4 sm:px-5 py-2 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 cursor-pointer ml-auto shrink-0"
+              >
+                <SkipForward className="w-3.5 h-3.5" />
+                <span>
+                  {currentIndex + 1 < units.length
+                    ? '次へ (Space)'
+                    : 'サマリーへ 🚀'}
+                </span>
+              </button>
+            </div>
+
+            {/* 下段: 4段階理解度レーティング (1〜4キーで直接評価＆次へ進む) */}
+            <div className="grid grid-cols-4 gap-1.5 sm:gap-2 pt-1 border-t border-slate-850/80">
               {/* Rating 1: 🔴 */}
               <button
                 type="button"
                 onClick={() => handleRateAndAdvance(1)}
-                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-600/40 hover:border-rose-500 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-600/50 hover:border-rose-400 transition-all active:scale-95 cursor-pointer shadow-sm group"
                 title="1キー: 全く聞き取れず・要復習"
               >
                 <div className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-rose-500 inline-block group-hover:animate-ping" />
-                  <span className="text-[10px] font-mono px-1 py-0.2 bg-rose-900/80 rounded border border-rose-700/60 font-bold">1</span>
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-rose-900/90 rounded border border-rose-700 font-bold">1</span>
                 </div>
                 <span className="text-[10px] sm:text-xs font-black truncate">聞き取れず</span>
               </button>
@@ -865,12 +967,12 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleRateAndAdvance(2)}
-                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-amber-950/70 hover:bg-amber-900 text-amber-300 hover:text-white border border-amber-600/40 hover:border-amber-500 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-amber-950/80 hover:bg-amber-900 text-amber-300 hover:text-white border border-amber-600/50 hover:border-amber-400 transition-all active:scale-95 cursor-pointer shadow-sm group"
                 title="2キー: 曖昧・要リトライ"
               >
                 <div className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                  <span className="text-[10px] font-mono px-1 py-0.2 bg-amber-900/80 rounded border border-amber-700/60 font-bold">2</span>
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-amber-900/90 rounded border border-amber-700 font-bold">2</span>
                 </div>
                 <span className="text-[10px] sm:text-xs font-black truncate">曖昧</span>
               </button>
@@ -879,12 +981,12 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleRateAndAdvance(3)}
-                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-sky-950/70 hover:bg-sky-900 text-sky-300 hover:text-white border border-sky-600/40 hover:border-sky-500 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-sky-950/80 hover:bg-sky-900 text-sky-300 hover:text-white border border-sky-600/50 hover:border-sky-400 transition-all active:scale-95 cursor-pointer shadow-sm group"
                 title="3キー: 理解できた"
               >
                 <div className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-sky-400 inline-block" />
-                  <span className="text-[10px] font-mono px-1 py-0.2 bg-sky-900/80 rounded border border-sky-700/60 font-bold">3</span>
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-sky-900/90 rounded border border-sky-700 font-bold">3</span>
                 </div>
                 <span className="text-[10px] sm:text-xs font-black truncate">理解できた</span>
               </button>
@@ -893,87 +995,14 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleRateAndAdvance(4)}
-                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 hover:text-white border border-emerald-500/50 hover:border-emerald-400 transition-all active:scale-95 cursor-pointer shadow-sm group"
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl bg-emerald-950/85 hover:bg-emerald-900 text-emerald-300 hover:text-white border border-emerald-500/60 hover:border-emerald-400 transition-all active:scale-95 cursor-pointer shadow-sm group"
                 title="4キー: 即座に情景が浮かんだ"
               >
                 <div className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
-                  <span className="text-[10px] font-mono px-1 py-0.2 bg-emerald-900/80 rounded border border-emerald-600/60 font-bold">4</span>
+                  <span className="text-[10px] font-mono px-1 py-0.2 bg-emerald-900/90 rounded border border-emerald-600 font-bold">4</span>
                 </div>
                 <span className="text-[10px] sm:text-xs font-black truncate">即座に理解</span>
-              </button>
-            </div>
-
-            {/* Bottom row: Controls & Default Next button */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                {/* Back Button */}
-                {currentIndex > 0 && (
-                  <button
-                    type="button"
-                    onClick={handlePrevious}
-                    className="p-2 sm:px-3 sm:py-2 bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-medium border border-slate-800 transition-all cursor-pointer shrink-0"
-                    title="1つ戻る (←キー)"
-                  >
-                    <span>⏮️</span>
-                  </button>
-                )}
-
-                {/* Retry Button */}
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  className="flex items-center space-x-1 px-3 py-2 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition-all cursor-pointer shrink-0"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline">もう一度聴く (R)</span>
-                  <span className="sm:hidden">再聴 (R)</span>
-                </button>
-
-                {/* Peek English Button */}
-                <button
-                  type="button"
-                  onClick={() => setRevealedEnglish(prev => !prev)}
-                  className="flex items-center space-x-1 px-2.5 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition-all cursor-pointer shrink-0"
-                >
-                  {revealedEnglish ? (
-                    <>
-                      <EyeOff className="w-3.5 h-3.5 text-slate-400" />
-                      <span className="hidden sm:inline">隠す</span>
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="w-3.5 h-3.5 text-sky-400" />
-                      <span className="hidden sm:inline">英文 (V)</span>
-                      <span className="sm:hidden">文 (V)</span>
-                    </>
-                  )}
-                </button>
-
-                {/* Peek Japanese Button */}
-                <button
-                  type="button"
-                  onClick={() => setRevealedJapanese(prev => !prev)}
-                  className="flex items-center space-x-1 px-2.5 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition-all cursor-pointer shrink-0"
-                >
-                  <span className="text-[11px] text-amber-400">💡</span>
-                  <span className="hidden sm:inline">{revealedJapanese ? '訳を隠す' : '和訳 (J)'}</span>
-                  <span className="sm:hidden">訳</span>
-                </button>
-              </div>
-
-              {/* Primary Advance Button */}
-              <button
-                type="button"
-                onClick={handleAdvanceDefault}
-                className="flex items-center space-x-1.5 px-4 sm:px-6 py-2.5 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 cursor-pointer ml-auto shrink-0"
-              >
-                <SkipForward className="w-3.5 h-3.5" />
-                <span>
-                  {currentIndex + 1 < units.length
-                    ? '次へ (Space)'
-                    : 'サマリーへ 🚀'}
-                </span>
               </button>
             </div>
           </div>
