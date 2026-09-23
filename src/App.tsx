@@ -1125,10 +1125,6 @@ export const App: React.FC = () => {
                 onRecordTokenUsage={handleRecordTokenUsage}
                 savedVocabPhrases={savedVocabPhrases}
                 onCallStateChange={(active: boolean) => setIsCallActive(active)}
-                chatMessages={chatMessages}
-                onSendChatMessage={handleSendChatMessage}
-                onClearChat={handleClearChat}
-                initialChatInput={initialChatInput}
               />
             )}
 

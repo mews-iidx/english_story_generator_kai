@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Settings, RefreshCw, Zap, PlusCircle, Download, Phone, Target } from 'lucide-react';
+import { BookOpen, Settings, RefreshCw, Zap, PlusCircle, Download, Phone, Target, Bot } from 'lucide-react';
 
 export type NavTab = 'bookshelf' | 'drill' | 'listening_lab' | 'quiz' | 'mastery' | 'chat' | 'call' | 'create' | 'settings';
 
@@ -44,6 +44,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'quiz', label: 'Anki', icon: PlusCircle, badge: dueCount > 0 ? dueCount : undefined },
     { id: 'mastery', label: '分析', icon: Target },
     { id: 'call', label: '英会話', icon: Phone },
+    { id: 'chat', label: 'AI相談', icon: Bot },
     { id: 'settings', label: '設定', icon: Settings },
   ];
 
