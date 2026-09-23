@@ -397,11 +397,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const wpm = Math.round(wordCount / durationMinutes);
     setPendingWpm(wpm);
 
-    // 読書量とWPMを記録
-    recordDailyReadingActivity(wordCount, wpm, activeStory.title, activeStory.id);
-
+    // 読書量とWPMを記録 (App側のコールバック経由で一元記録)
     if (onRecordStoryRead) {
       onRecordStoryRead(activeStory.id, wpm);
+    } else {
+      recordDailyReadingActivity(wordCount, wpm, activeStory.title, activeStory.id);
     }
 
     try {

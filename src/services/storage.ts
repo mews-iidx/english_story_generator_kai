@@ -1425,7 +1425,27 @@ export function loadReadingSessionLogs(): ReadingSessionLog[] {
     const raw = localStorage.getItem(STORAGE_KEYS.READING_LOGS);
     if (!raw) return [];
     const logs: ReadingSessionLog[] = JSON.parse(raw);
-    return logs.sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+    const sorted = logs.sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+
+    // 過去の重複ログの自動クレンジング（同一ストーリーで5秒以内の二重記録を除去）
+    const deduped: ReadingSessionLog[] = [];
+    for (const log of sorted) {
+      const isDuplicate = deduped.some(existing => {
+        if (existing.storyId && log.storyId && existing.storyId === log.storyId) {
+          const diff = Math.abs(new Date(existing.completedAt).getTime() - new Date(log.completedAt).getTime());
+          return diff < 5000;
+        }
+        return false;
+      });
+      if (!isDuplicate) {
+        deduped.push(log);
+      }
+    }
+
+    if (deduped.length !== logs.length) {
+      saveReadingSessionLogs(deduped);
+    }
+    return deduped;
   } catch (e) {
     console.error('Failed to load reading session logs', e);
     return [];
@@ -1473,8 +1493,17 @@ export function recordDailyReadingActivity(wordsCount: number, wpm?: number, sto
   const today = getTodayDateString();
   const now = new Date().toISOString();
 
-  // 1. 読了セッション個別ログに追加
+  // 1. 読了セッション個別ログに追加（同一ストーリーの5秒以内二重呼び出しをガード）
   const logs = loadReadingSessionLogs();
+  if (storyId && logs.length > 0) {
+    const latest = logs[0];
+    const diffMs = Date.now() - new Date(latest.completedAt).getTime();
+    if (latest.storyId === storyId && diffMs < 5000) {
+      console.warn('Duplicate reading activity log ignored within 5s', storyId);
+      return;
+    }
+  }
+
   const newLog: ReadingSessionLog = {
     id: 'read_log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
     storyId,
