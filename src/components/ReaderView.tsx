@@ -12,6 +12,7 @@ import { speakText, stopSpeech } from '../utils/speech';
 import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence, recordStoryListeningCompleted } from '../services/storage';
 import { StoryListeningStepView } from './StoryListeningStepView';
 import { getCandidateLemmas } from '../utils/storyVocabExtractor';
+import { splitStoryIntoSentences } from '../utils/sentenceUtils';
 import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
 
 interface ReaderViewProps {
@@ -25,6 +26,7 @@ interface ReaderViewProps {
   onSaveDifficultSentence?: (sentence: string, translation: string, phrase: string) => void;
   onUpdateSentenceReason?: (sentenceId: string, category: DifficultyReasonCategory, note: string) => void;
   onRecordStoryRead?: (storyId: string, wpm?: number) => void;
+  onUpdateStory?: (story: Story) => void;
   onSelectStory?: (story: Story) => void;
   onQueueNextEpisode?: (story: Story) => void;
   onBackToBookshelf: () => void;
@@ -47,9 +49,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   selectedPhrase,
   onClearSelection,
   onRecordStoryRead,
+  onUpdateStory,
   onSelectStory,
   onBackToBookshelf,
 }) => {
+  // Active story state ensures newly completed listening metrics & ratings are immediately available
+  const [activeStory, setActiveStory] = useState<Story>(currentStory);
+
+  useEffect(() => {
+    setActiveStory(currentStory);
+  }, [currentStory]);
+
   // 2-Stage Story Lifecycle: 初見チャンクリスニング ➔ いつものリーダー
   const [isListeningStage, setIsListeningStage] = useState<boolean>(() => {
     return currentStory.listeningStatus !== 'completed';
@@ -71,7 +81,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   // 全ランクのマスター状態（習得済み・要復習）を取得
   const masteryState = useMemo(() => {
     return loadMasteryState();
-  }, [vocabs, currentStory.id, isFinished]);
+  }, [vocabs, activeStory.id, isFinished]);
 
   const savedVocabSet = useMemo(() => {
     return new Set(
@@ -86,7 +96,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   }, [vocabs, masteryState]);
 
   const targetVocabSet = useMemo(() => {
-    const list = currentStory.targetVocabList || [];
+    const list = activeStory.targetVocabList || [];
     const set = new Set<string>();
     list.forEach(t => {
       const clean = t.replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
@@ -96,7 +106,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       }
     });
     return set;
-  }, [currentStory.targetVocabList]);
+  }, [activeStory.targetVocabList]);
 
   // 単語ごとのステータス判定（活用形・全CEFRランク対応）
   const getWordStatus = useCallback((cleanWord: string): 'lapsed' | 'mastered' | 'target' | 'unseen' => {
@@ -146,7 +156,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setIsPlayingAudio(false);
     lapsedTargetIdsRef.current.clear();
     sessionLookedUpTokensRef.current.clear();
-  }, [currentStory.id]);
+  }, [activeStory.id]);
 
   useEffect(() => {
     return () => {
@@ -181,33 +191,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   // 段落リスト
   const paragraphs = useMemo(() => {
-    return currentStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
-  }, [currentStory.storyContent]);
+    return activeStory.storyContent.split('\n\n').filter(p => p.trim().length > 0);
+  }, [activeStory.storyContent]);
 
-  // 一文ごとのリスト（理解度カラーマッピング用）
+  // 一文ごとの統一リスト（理解度カラーマッピング用）
   const sentenceList = useMemo(() => {
-    const result: { id: number; text: string; pIdx: number; charStart: number; charEnd: number }[] = [];
-    let counter = 0;
-
-    paragraphs.forEach((p, pIdx) => {
-      const regex = /[^.!?]+[.!?]+["']?|[^.!?]+$/g;
-      let match: RegExpExecArray | null;
-      while ((match = regex.exec(p)) !== null) {
-        const trimmed = match[0].trim();
-        if (trimmed.length > 0) {
-          result.push({
-            id: counter++,
-            text: trimmed,
-            pIdx,
-            charStart: match.index,
-            charEnd: regex.lastIndex,
-          });
-        }
-      }
-    });
-
-    return result;
-  }, [paragraphs]);
+    return splitStoryIntoSentences(activeStory.storyContent);
+  }, [activeStory.storyContent]);
 
   const paragraphSegments = useMemo(() => {
     return paragraphs.map((para, pIdx) => {
@@ -257,7 +247,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       const targetMatches: { start: number; end: number }[] = [];
       const savedMatches: { start: number; end: number }[] = [];
 
-      const targetList = currentStory.targetVocabList || [];
+      const targetList = activeStory.targetVocabList || [];
       const lowerPara = para.toLowerCase();
 
       targetList.forEach(t => {
@@ -281,7 +271,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       });
 
       const patternMatches: { start: number; end: number; embedding: TargetEmbedding }[] = [];
-      const targetEmbeddings = currentStory.targetEmbeddings || [];
+      const targetEmbeddings = activeStory.targetEmbeddings || [];
       targetEmbeddings.forEach(emb => {
         const span = (emb.textSpan || '').trim().toLowerCase();
         if (span && span.length > 2) {
@@ -302,7 +292,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         patternMatches,
       };
     });
-  }, [paragraphs, currentStory, vocabs]);
+  }, [paragraphs, activeStory, vocabs]);
 
   // 音声再生・停止
   const handleToggleAudio = () => {
@@ -311,7 +301,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       setIsPlayingAudio(false);
     } else {
       setIsPlayingAudio(true);
-      speakText(currentStory.storyContent, speechRate, 'en-US', () => {
+      speakText(activeStory.storyContent, speechRate, 'en-US', () => {
         setIsPlayingAudio(false);
       });
     }
@@ -384,7 +374,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
       if (!matchingEmbedding) {
         const pText = phrase.toLowerCase();
-        matchingEmbedding = currentStory.targetEmbeddings?.find(emb => {
+        matchingEmbedding = activeStory.targetEmbeddings?.find(emb => {
           const tText = (emb.textSpan || emb.targetName || '').toLowerCase().trim();
           if (tText && (pText === tText || (pText.length > 3 && tText.includes(pText)))) return true;
           return false;
@@ -403,23 +393,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     // WPM 計算
     const durationMinutes = Math.max(0.2, (Date.now() - startTime) / 60000);
-    const wordCount = currentStory.actualWordCount || currentStory.targetWordCount || 700;
+    const wordCount = activeStory.actualWordCount || activeStory.targetWordCount || 700;
     const wpm = Math.round(wordCount / durationMinutes);
     setPendingWpm(wpm);
 
     // 読書量とWPMを記録
-    recordDailyReadingActivity(wordCount, wpm, currentStory.title, currentStory.id);
+    recordDailyReadingActivity(wordCount, wpm, activeStory.title, activeStory.id);
 
     if (onRecordStoryRead) {
-      onRecordStoryRead(currentStory.id, wpm);
+      onRecordStoryRead(activeStory.id, wpm);
     }
 
     try {
       enqueueMasteryScanTask({
         sourceType: 'story',
-        sourceId: currentStory.id,
-        title: currentStory.title,
-        text: currentStory.storyContent || (currentStory as any).story || "",
+        sourceId: activeStory.id,
+        title: activeStory.title,
+        text: activeStory.storyContent || (activeStory as any).story || "",
         lookedUpTokens: Array.from(sessionLookedUpTokensRef.current),
       });
     } catch (e) {
@@ -432,18 +422,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   // 3部作の次のエピソード探索
   const nextEpisode = useMemo(() => {
-    if (!currentStory.seriesId || !currentStory.episodeIndex || !currentStory.totalEpisodes) return null;
-    if (currentStory.episodeIndex >= currentStory.totalEpisodes) return null;
+    if (!activeStory.seriesId || !activeStory.episodeIndex || !activeStory.totalEpisodes) return null;
+    if (activeStory.episodeIndex >= activeStory.totalEpisodes) return null;
     return allStories.find(
-      s => s.seriesId === currentStory.seriesId && s.episodeIndex === (currentStory.episodeIndex || 0) + 1
+      s => s.seriesId === activeStory.seriesId && s.episodeIndex === (activeStory.episodeIndex || 0) + 1
     );
-  }, [currentStory, allStories]);
+  }, [activeStory, allStories]);
 
   const getContentTypeBadge = () => {
-    if (currentStory.contentType === 'podcast') {
+    if (activeStory.contentType === 'podcast') {
       return <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-bold border border-purple-500/30">🎙️ Podcast</span>;
     }
-    if (currentStory.contentType === 'dialogue') {
+    if (activeStory.contentType === 'dialogue') {
       return <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">💬 Dialogue</span>;
     }
     return <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">📖 Story</span>;
@@ -453,9 +443,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   if (isListeningStage) {
     return (
       <StoryListeningStepView
-        story={currentStory}
+        story={activeStory}
         onCompleteListening={(metrics) => {
-          recordStoryListeningCompleted(currentStory.id, metrics);
+          const updated = recordStoryListeningCompleted(activeStory.id, metrics);
+          const finalStory = updated || {
+            ...activeStory,
+            listeningStatus: 'completed' as const,
+            listeningMetrics: metrics,
+            sentenceRatings: metrics.sentenceRatings,
+          };
+          setActiveStory(finalStory);
+          onUpdateStory?.(finalStory);
           setIsListeningStage(false);
         }}
         onSkipToReader={() => {
@@ -499,15 +497,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </div>
 
         <div className="flex items-center space-x-2 text-xs">
-          {currentStory.episodeIndex && currentStory.totalEpisodes && currentStory.totalEpisodes > 1 && (
+          {activeStory.episodeIndex && activeStory.totalEpisodes && activeStory.totalEpisodes > 1 && (
             <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
               <Film className="w-3 h-3" />
-              第 {currentStory.episodeIndex}/{currentStory.totalEpisodes} 話
+              第 {activeStory.episodeIndex}/{activeStory.totalEpisodes} 話
             </span>
           )}
           {getContentTypeBadge()}
           <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">
-            {currentStory.cefrLevel || 'A2'}
+            {activeStory.cefrLevel || 'A2'}
           </span>
         </div>
       </div>
@@ -561,17 +559,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         <div className="border-b border-slate-800 pb-4 space-y-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-              {currentStory.title}
+              {activeStory.title}
             </h1>
           </div>
-          {currentStory.titleJa && (
+          {activeStory.titleJa && (
             <p className="text-sm font-semibold text-slate-300">
-              {currentStory.titleJa}
+              {activeStory.titleJa}
             </p>
           )}
-          {currentStory.summary && (
+          {activeStory.summary && (
             <p className="text-xs text-slate-400 leading-relaxed pt-1">
-              {currentStory.summary}
+              {activeStory.summary}
             </p>
           )}
 
@@ -581,7 +579,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <span className="text-slate-500 font-medium">表示凡例:</span>
               {showComprehensionHighlights && (
                 <div className="flex items-center gap-2 px-2 py-0.5 rounded-lg bg-slate-950 border border-slate-800/80 text-[10px]">
-                  <span className="text-slate-400 font-bold">理解度:</span>
+                  <span className="text-slate-400 font-bold">リスニング理解度:</span>
                   <span className="text-rose-400 font-medium flex items-center gap-0.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>1:要復習
                   </span>
@@ -699,22 +697,33 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
                   const status = getWordStatus(seg.cleanWord);
 
-                  // 理解度カラーの判定
-                  const sentenceOfSeg = sentenceList.find(s => s.pIdx === para.pIdx && seg.charStart >= s.charStart && seg.charStart < s.charEnd);
+                  // 一意な一文リストからこの単語が含まれる文を探索
+                  const sentenceOfSeg = sentenceList.find(s =>
+                    s.pIdx === para.pIdx &&
+                    ((seg.charStart >= s.charStart && seg.charStart < s.charEnd) ||
+                     (seg.charEnd > s.charStart && seg.charEnd <= s.charEnd) ||
+                     (s.charStart >= seg.charStart && s.charEnd <= seg.charEnd))
+                  );
+
                   const sentenceRating = sentenceOfSeg
-                    ? (currentStory.sentenceRatings?.[sentenceOfSeg.id]?.rating || currentStory.listeningMetrics?.sentenceRatings?.[sentenceOfSeg.id]?.rating)
+                    ? (activeStory.sentenceRatings?.[sentenceOfSeg.id]?.rating ||
+                       activeStory.listeningMetrics?.sentenceRatings?.[sentenceOfSeg.id]?.rating)
                     : undefined;
 
                   let comprehensionBase = '';
                   if (showComprehensionHighlights && sentenceRating) {
                     if (sentenceRating === 1) {
+                      // 1: 要復習 (赤系アンダーライン＆背景)
                       comprehensionBase = 'bg-rose-950/40 text-rose-100 border-b-2 border-rose-500/80 ';
                     } else if (sentenceRating === 2) {
+                      // 2: 曖昧 (黄系アンダーライン＆背景)
                       comprehensionBase = 'bg-amber-950/40 text-amber-100 border-b-2 border-amber-400/80 ';
                     } else if (sentenceRating === 3) {
+                      // 3: 理解 (青系アンダーライン)
                       comprehensionBase = 'bg-sky-950/30 text-sky-100 border-b border-sky-400/60 ';
                     } else if (sentenceRating === 4) {
-                      comprehensionBase = 'bg-emerald-950/20 text-emerald-100 ';
+                      // 4: 即解 (緑系アンダーライン)
+                      comprehensionBase = 'bg-emerald-950/20 text-emerald-100 border-b border-emerald-500/40 ';
                     }
                   }
 
@@ -728,7 +737,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     // 🟡 習得中 / 要復習（単語帳に登録中・Anki学習中）
                     wordStyle = `${comprehensionBase}text-amber-300 underline decoration-amber-400/80 decoration-2 underline-offset-2 hover:text-amber-200 hover:bg-amber-500/10`;
                   } else if (comprehensionBase) {
-                    wordStyle = `${comprehensionBase}hover:text-sky-300`;
+                    wordStyle = `${comprehensionBase}hover:text-sky-300 transition-colors`;
                   }
                 }
 
@@ -780,7 +789,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 <span>全文日本語訳</span>
               </div>
               <div className="space-y-3 text-sm sm:text-base leading-relaxed text-slate-300 whitespace-pre-line">
-                {currentStory.japaneseTranslation || '（日本語訳データがありません）'}
+                {activeStory.japaneseTranslation || '（日本語訳データがありません）'}
               </div>
             </div>
           )}
@@ -791,7 +800,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <div>
                 <div className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
                   <Film className="w-3.5 h-3.5 text-amber-400" />
-                  <span>{currentStory.seriesType === 'continuous' || currentStory.seriesType === 'trilogy' ? `連載ストーリー: 次の第 ${nextEpisode.episodeIndex} 話へ` : `次の第 ${nextEpisode.episodeIndex} 話へ`}</span>
+                  <span>{activeStory.seriesType === 'continuous' || activeStory.seriesType === 'trilogy' ? `連載ストーリー: 次の第 ${nextEpisode.episodeIndex} 話へ` : `次の第 ${nextEpisode.episodeIndex} 話へ`}</span>
                 </div>
                 <div className="text-sm font-bold text-white pt-0.5">
                   『{nextEpisode.titleJa || nextEpisode.title}』
@@ -811,9 +820,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       {/* 読了スコア ＆ 完了HUDモーダル */}
       {isSyncModalOpen && (
         <StoryCompletionSyncModal
-          story={currentStory}
+          story={activeStory}
           calculatedWpm={pendingWpm}
-          newCapturedCount={vocabs.filter(v => v.sourceStoryId === currentStory.id).length}
+          newCapturedCount={vocabs.filter(v => v.sourceStoryId === activeStory.id).length}
           onClose={() => {
             setIsSyncModalOpen(false);
           }}

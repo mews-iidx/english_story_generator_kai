@@ -1005,6 +1005,10 @@ export const App: React.FC = () => {
         {readingStory ? (
           <ReaderView
             currentStory={readingStory}
+            onUpdateStory={(updated) => {
+              setReadingStory(updated);
+              setStories(prev => prev.map(s => s.id === updated.id ? updated : s));
+            }}
             allStories={stories}
             vocabs={vocabs}
             difficultSentences={difficultSentences}

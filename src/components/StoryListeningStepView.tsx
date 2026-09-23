@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Story, StoryListeningMetrics, StoryListeningUnitLog } from '../types/story';
 import { splitIntoSmartChunks } from '../services/listeningLabService';
+import { splitStoryIntoSentences } from '../utils/sentenceUtils';
 import { speakText, stopSpeech } from '../utils/speech';
 
 interface StoryListeningStepViewProps {
@@ -90,14 +91,12 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
   }, [story.actualWordCount, story.storyContent, story.targetWordCount]);
 
   // 4. Breakdown story into units (Sentence units or Chunk units)
-  const units: ListeningUnit[] = useMemo(() => {
-    if (!story.storyContent) return [];
+  const storySentences = useMemo(() => {
+    return splitStoryIntoSentences(story.storyContent);
+  }, [story.storyContent]);
 
-    const rawSentences = story.storyContent
-      .replace(/\r\n/g, '\n')
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
+  const units: ListeningUnit[] = useMemo(() => {
+    if (!storySentences.length) return [];
 
     const rawJaSentences = (story.japaneseTranslation || '')
       .replace(/\r\n/g, '\n')
@@ -106,29 +105,29 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
       .filter(s => s.length > 0);
 
     if (streamMode === 'sentence') {
-      return rawSentences.map((sentText, sIdx) => ({
-        id: `sent_${sIdx}`,
+      return storySentences.map((sent) => ({
+        id: `sent_${sent.id}`,
         type: 'sentence',
-        unitIdx: sIdx,
-        sentenceIdx: sIdx,
-        text: sentText,
-        translationJa: rawJaSentences[sIdx] || (sIdx === 0 ? story.japaneseTranslation : ''),
+        unitIdx: sent.id,
+        sentenceIdx: sent.id,
+        text: sent.text,
+        translationJa: rawJaSentences[sent.id] || (sent.id === 0 ? story.japaneseTranslation : ''),
       }));
     } else {
       // Chunk (Thought Group) Mode: Flatten all chunks across sentences
       const chunkUnits: ListeningUnit[] = [];
       let globalChunkIdx = 0;
 
-      rawSentences.forEach((sentText, sIdx) => {
-        const jaTrans = rawJaSentences[sIdx] || (sIdx === 0 ? story.japaneseTranslation : '');
-        const chunks = splitIntoSmartChunks(sentText, jaTrans);
+      storySentences.forEach((sent) => {
+        const jaTrans = rawJaSentences[sent.id] || (sent.id === 0 ? story.japaneseTranslation : '');
+        const chunks = splitIntoSmartChunks(sent.text, jaTrans);
 
         chunks.forEach((chunk, cIdx) => {
           chunkUnits.push({
-            id: `chunk_${sIdx}_${cIdx}`,
+            id: `chunk_${sent.id}_${cIdx}`,
             type: 'chunk',
             unitIdx: globalChunkIdx++,
-            sentenceIdx: sIdx,
+            sentenceIdx: sent.id,
             chunkIdx: cIdx,
             totalChunksInSentence: chunks.length,
             text: chunk.text,
@@ -140,7 +139,7 @@ export const StoryListeningStepView: React.FC<StoryListeningStepViewProps> = ({
 
       return chunkUnits;
     }
-  }, [story.storyContent, story.japaneseTranslation, streamMode]);
+  }, [storySentences, story.japaneseTranslation, streamMode]);
 
   const currentUnit = units[currentIndex] || null;
 
