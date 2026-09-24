@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Story } from '../types/story';
 import {
   ArrowLeft, Headphones, RotateCcw,
-  ChevronLeft, ChevronRight, Eye,
+  ChevronLeft, Eye, EyeOff,
   CheckCircle2, Trophy, BookOpen
 } from 'lucide-react';
 import { speakText, stopSpeech } from '../utils/speech';
@@ -111,7 +111,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     });
   }, [sentences, speechRate, stopAudio, story.title, story.cefrLevel]);
 
-  // Play on initial mount or sentence change
+  // Play on initial mount
   useEffect(() => {
     playCurrentSentenceAudio(currentIndex, subStep);
   }, []);
@@ -180,6 +180,13 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     playCurrentSentenceAudio(currentIndex, subStep);
   }, [currentIndex, subStep, playCurrentSentenceAudio]);
 
+  // Toggle shadowing english visibility
+  const toggleShadowingEnglish = useCallback(() => {
+    if (subStep === 'shadowing') {
+      setShowEnglishInShadowing(prev => !prev);
+    }
+  }, [subStep]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -196,7 +203,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
         handleReplay();
       } else if (e.code === 'KeyV') {
         e.preventDefault();
-        setShowEnglishInShadowing(prev => !prev);
+        toggleShadowingEnglish();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
         handleStepBack();
@@ -207,7 +214,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleAdvanceStep, handleReplay, handleStepBack]);
+  }, [handleAdvanceStep, handleReplay, handleStepBack, toggleShadowingEnglish]);
 
   // MediaSession API handler
   useEffect(() => {
@@ -291,7 +298,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
   const overallPercent = Math.round((currentSubStepNum / totalSubSteps) * 100);
 
   return (
-    <div className="max-w-4xl mx-auto space-y-5 pb-64 sm:pb-56 animate-fadeIn">
+    <div className="max-w-3xl mx-auto space-y-5 pb-72 sm:pb-80 animate-fadeIn">
       {/* 1. Top Header */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -418,7 +425,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
         </div>
 
         {/* Big Center Display */}
-        <div className="bg-slate-950/90 border border-slate-800/90 rounded-3xl p-6 sm:p-10 space-y-6 text-center shadow-inner relative overflow-hidden min-h-[240px] flex flex-col justify-center">
+        <div className="bg-slate-950/90 border border-slate-800/90 rounded-3xl p-6 sm:p-10 space-y-6 text-center shadow-inner relative overflow-hidden min-h-[260px] flex flex-col justify-center">
           {/* Audio Wave Visualizer */}
           <div className="flex items-center justify-center gap-1.5 py-2">
             {[0.4, 0.7, 1.0, 0.6, 0.9, 0.5, 0.8, 0.3].map((heightRatio, i) => (
@@ -439,96 +446,100 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
             ))}
           </div>
 
-          {/* English Text: Visible in Overlapping, Hidden in Shadowing unless peeked */}
+          {/* English Text: Visible in Overlapping, Toggleable in Shadowing */}
           {subStep === 'overlapping' || showEnglishInShadowing ? (
-            <div className={`p-5 sm:p-7 rounded-3xl space-y-3 animate-fadeIn shadow-lg border transition-all ${
-              subStep === 'overlapping'
-                ? 'bg-slate-900/90 border-teal-500/30'
-                : 'bg-slate-900/90 border-purple-500/30'
-            }`}>
-              <p className="text-lg sm:text-2xl font-bold text-white leading-relaxed font-serif">
+            <div
+              onClick={() => {
+                if (subStep === 'shadowing') {
+                  setShowEnglishInShadowing(false);
+                }
+              }}
+              className={`p-6 sm:p-8 rounded-3xl space-y-3 animate-fadeIn shadow-lg border transition-all ${
+                subStep === 'overlapping'
+                  ? 'bg-slate-900/90 border-teal-500/30'
+                  : 'bg-slate-900/90 border-purple-500/30 cursor-pointer hover:border-purple-400/50 hover:bg-slate-900'
+              }`}
+              title={subStep === 'shadowing' ? 'クリックして英文を再び隠す (Vキー)' : undefined}
+            >
+              <p className="text-xl sm:text-2xl font-bold text-white leading-relaxed font-serif">
                 {currentSentence?.text}
               </p>
               {subStep === 'shadowing' && (
-                <div className="text-[10px] text-purple-400 font-medium">
-                  👁️ 英文を表示中（詰まった箇所を確認したら、隠して耳だけで挑戦！）
+                <div className="text-xs text-purple-400 font-bold flex items-center justify-center gap-1.5 pt-2 border-t border-purple-500/20">
+                  <EyeOff className="w-4 h-4" />
+                  <span>英文を表示中（クリック または Vキー で再び隠す）</span>
                 </div>
               )}
             </div>
           ) : (
-            <div className="p-8 bg-slate-900/40 border border-dashed border-purple-500/30 rounded-3xl space-y-3 animate-fadeIn">
+            <div
+              onClick={() => setShowEnglishInShadowing(true)}
+              className="p-8 sm:p-10 bg-slate-900/40 border-2 border-dashed border-purple-500/30 hover:border-purple-400/60 hover:bg-slate-900/60 rounded-3xl space-y-3 animate-fadeIn cursor-pointer transition-all group"
+              title="クリックして英文をチラ見 (Vキー)"
+            >
               <p className="text-sm sm:text-base text-purple-200/90 font-bold leading-relaxed">
                 🎧 英文は非表示です（音の1拍後ろを影のように追走）
               </p>
-              <button
-                type="button"
-                onClick={() => setShowEnglishInShadowing(true)}
-                className="text-xs font-bold text-purple-400 hover:text-purple-300 hover:underline transition-all cursor-pointer inline-flex items-center gap-1 pt-1"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>どうしても言えない時は英文をチラ見 (Vキー)</span>
-              </button>
+              <div className="text-xs font-bold text-purple-400 group-hover:text-purple-300 transition-all inline-flex items-center gap-1.5 pt-1">
+                <Eye className="w-4 h-4" />
+                <span>英文を見る / チラ見する (タップ または Vキー)</span>
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* 3. Sticky Bottom Control Bar */}
+      {/* 3. Sticky Bottom Control Bar with Full-Width Vertically Stacked Buttons */}
       <div
-        className="fixed bottom-0 inset-x-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3 sm:p-4 space-y-2.5 max-w-4xl mx-auto"
-        style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 16px))' }}
+        className="fixed bottom-0 inset-x-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3.5 sm:p-4 max-w-3xl mx-auto"
+        style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom, 20px))' }}
       >
-        <div className="flex items-center justify-between gap-2">
-          {/* Left: Previous Step (戻る) Button */}
-          {(currentIndex > 0 || subStep === 'shadowing') ? (
-            <button
-              type="button"
-              onClick={handleStepBack}
-              className="flex items-center space-x-1.5 px-3 sm:px-4 py-2.5 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-xl text-xs sm:text-sm font-bold border border-slate-700 transition-all cursor-pointer shadow-sm active:scale-95"
-              title="1つ前のステップに戻る (←キー)"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              <span>
-                {subStep === 'shadowing'
-                  ? '⏮️ ① オーバーラップに戻る'
-                  : `⏮️ 前の文 (文 ${currentIndex}) へ`}
-              </span>
-            </button>
-          ) : (
-            <div className="w-10" />
-          )}
-
-          {/* Center: Replay current sentence button */}
-          <button
-            type="button"
-            onClick={handleReplay}
-            className="flex items-center space-x-1.5 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white rounded-xl text-xs sm:text-sm font-bold border border-slate-700 transition-all cursor-pointer shadow-sm active:scale-95 group"
-            title="もう一度音声を聴いて発音 (Rキー)"
-          >
-            <RotateCcw className="w-4 h-4 text-purple-400 group-hover:rotate-[-45deg] transition-transform" />
-            <span>もう一度 (R)</span>
-          </button>
-
-          {/* Right: Main Single Action Button */}
+        <div className="flex flex-col gap-2.5 w-full">
+          {/* 1. Main Complete / Advance Button (Top, Large, Primary Emphasis) */}
           <button
             type="button"
             onClick={handleAdvanceStep}
-            className={`flex items-center space-x-2 px-5 sm:px-7 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-xl transition-all active:scale-95 cursor-pointer ml-auto shrink-0 ${
+            className={`w-full flex items-center justify-center space-x-2 py-3.5 px-6 rounded-2xl text-sm sm:text-base font-black shadow-xl transition-all active:scale-[0.98] cursor-pointer ${
               subStep === 'overlapping'
-                ? 'bg-gradient-to-r from-teal-600 via-emerald-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white shadow-teal-600/30'
-                : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white shadow-purple-600/30'
+                ? 'bg-gradient-to-r from-teal-600 via-emerald-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white shadow-teal-600/30 ring-1 ring-teal-400/40'
+                : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white shadow-purple-600/30 ring-1 ring-purple-400/40'
             }`}
           >
-            <CheckCircle2 className="w-4 h-4" />
-            <span>
+            <CheckCircle2 className="w-5 h-5 shrink-0" />
+            <span className="truncate">
               {subStep === 'overlapping'
-                ? '🗣️ オーバーラップ完了 ➔ ② シャドーイングへ (Space)'
+                ? '🗣️ オーバーラップ完了 ➔ ② シャドーイングへ (Space / Enter)'
                 : currentIndex + 1 < sentences.length
-                ? `🎧 シャドーイング完了 ➔ 次の文 (文 ${currentIndex + 2}) へ`
+                ? `🎧 シャドーイング完了 ➔ 次の文 (文 ${currentIndex + 2}) へ (Space / Enter)`
                 : '🎉 全文の発話特訓を完了する！'}
             </span>
-            <ChevronRight className="w-4 h-4" />
           </button>
+
+          {/* 2. Replay Audio Button (Middle, Medium Emphasis) */}
+          <button
+            type="button"
+            onClick={handleReplay}
+            className="w-full flex items-center justify-center space-x-2 py-3 px-4 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 hover:border-slate-600 transition-all cursor-pointer shadow-md active:scale-[0.98] group"
+          >
+            <RotateCcw className="w-4 h-4 text-purple-400 group-hover:rotate-[-45deg] transition-transform shrink-0" />
+            <span>もう一度音声を聴いて発音する (R)</span>
+          </button>
+
+          {/* 3. Step Back Button (Bottom, Subtle Emphasis, Only if previous step exists) */}
+          {(currentIndex > 0 || subStep === 'shadowing') && (
+            <button
+              type="button"
+              onClick={handleStepBack}
+              className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-slate-950 hover:bg-slate-900 text-slate-400 hover:text-slate-200 rounded-2xl text-xs font-semibold border border-slate-800 hover:border-slate-700 transition-all cursor-pointer active:scale-[0.98]"
+            >
+              <ChevronLeft className="w-4 h-4 shrink-0" />
+              <span>
+                {subStep === 'shadowing'
+                  ? '⏮️ ① オーバーラップに戻る (←キー)'
+                  : `⏮️ 前の文 (文 ${currentIndex}) のシャドーイングに戻る (←キー)`}
+              </span>
+            </button>
+          )}
         </div>
       </div>
     </div>
