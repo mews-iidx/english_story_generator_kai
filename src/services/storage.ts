@@ -1,4 +1,4 @@
-import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress, ReadingSessionLog, DrillAttemptLog, CategoryWeaknessSummary, WeakPatternItem, PatternCategory } from '../types/mastery';
+import { PatternMasterItem, VocabMasterItem, UserMasteryState, LevelProgressSummary, DailySnapshot, MyGoal, MasteryStatus, ItemProgress, ReadingSessionLog, DrillAttemptLog, CategoryWeaknessSummary, WeakPatternItem, PatternCategory, SpeechPracticeLog } from '../types/mastery';
 import { StoryQueueTask, StoryQueueStatus } from '../types/storyQueue';
 import { getPatternsByLevel } from '../data/cefrPatternsMaster';
 import { CEFR_VOCAB_MASTER, getVocabMasterByLevel, getVocabByPhrase } from '../data/cefrVocabMaster';
@@ -28,6 +28,7 @@ const STORAGE_KEYS = {
   DRILL_LOGS: 'storykai_drill_logs_v1',
   STORY_QUEUE: 'storykai_story_queue_v1',
   RALLY_TOPICS: 'storykai_rally_topics_v1',
+  SPEECH_LOGS: 'storykai_speech_logs_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -2228,4 +2229,105 @@ export function recordSpeechPracticeProgress(
     return updatedStory;
   }
   return null;
+}
+
+// --------------------- SPEECH PRACTICE LOGS (発話特訓・シャドーイング履歴) ---------------------
+
+export function loadSpeechPracticeLogs(): SpeechPracticeLog[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.SPEECH_LOGS);
+    if (!raw) return [];
+    const logs: SpeechPracticeLog[] = JSON.parse(raw);
+    return logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  } catch (e) {
+    console.error('Failed to load speech practice logs', e);
+    return [];
+  }
+}
+
+export function saveSpeechPracticeLogs(logs: SpeechPracticeLog[]): void {
+  try {
+    const trimmed = logs.slice(0, 3000);
+    localStorage.setItem(STORAGE_KEYS.SPEECH_LOGS, JSON.stringify(trimmed));
+  } catch (e) {
+    console.error('Failed to save speech practice logs', e);
+  }
+}
+
+export function recordSpeechPracticeEvent(params: {
+  storyId: string;
+  storyTitle: string;
+  sentenceIdx: number;
+  subStep: 'overlapping' | 'shadowing';
+  sentenceText?: string;
+}): void {
+  const today = getTodayDateString();
+  const now = new Date().toISOString();
+
+  const logs = loadSpeechPracticeLogs();
+
+  // 800ms以内の同一文・同一サブステップの二重トリガー防止
+  if (logs.length > 0) {
+    const latest = logs[0];
+    const diffMs = Date.now() - new Date(latest.timestamp).getTime();
+    if (latest.storyId === params.storyId && latest.sentenceIdx === params.sentenceIdx && latest.subStep === params.subStep && diffMs < 800) {
+      return;
+    }
+  }
+
+  const newLog: SpeechPracticeLog = {
+    id: 'speech_log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    storyId: params.storyId,
+    storyTitle: params.storyTitle,
+    sentenceIdx: params.sentenceIdx,
+    subStep: params.subStep,
+    sentenceText: params.sentenceText,
+    timestamp: now,
+    dateString: today,
+  };
+
+  const updatedLogs = [newLog, ...logs];
+  saveSpeechPracticeLogs(updatedLogs);
+
+  // 日次スナップショットの更新
+  const snapshots = loadDailySnapshots();
+  let existing = snapshots.find(s => s.date === today);
+  if (!existing) {
+    existing = ensureTodaySnapshot();
+  }
+
+  const todayLogs = updatedLogs.filter(l => l.dateString === today);
+  const uniqueKeys = new Set(todayLogs.map(l => `${l.storyId}_${l.sentenceIdx}`));
+
+  existing.speechUtterancesCount = todayLogs.length;
+  existing.uniqueSentencesCount = uniqueKeys.size;
+
+  const snapIdx = snapshots.findIndex(s => s.date === today);
+  if (snapIdx >= 0) {
+    snapshots[snapIdx] = existing;
+  } else {
+    snapshots.push(existing);
+  }
+  saveDailySnapshotsBatch(snapshots);
+}
+
+export function deleteSpeechPracticeLog(logId: string): { logs: SpeechPracticeLog[]; snapshots: DailySnapshot[] } {
+  const logs = loadSpeechPracticeLogs();
+  const target = logs.find(l => l.id === logId);
+  const updatedLogs = logs.filter(l => l.id !== logId);
+  saveSpeechPracticeLogs(updatedLogs);
+
+  const snapshots = loadDailySnapshots();
+  if (target) {
+    const dateLogs = updatedLogs.filter(l => l.dateString === target.dateString);
+    const snapIdx = snapshots.findIndex(s => s.date === target.dateString);
+    if (snapIdx >= 0) {
+      const uniqueKeys = new Set(dateLogs.map(l => `${l.storyId}_${l.sentenceIdx}`));
+      snapshots[snapIdx].speechUtterancesCount = dateLogs.length;
+      snapshots[snapIdx].uniqueSentencesCount = uniqueKeys.size;
+      saveDailySnapshotsBatch(snapshots);
+    }
+  }
+
+  return { logs: updatedLogs, snapshots };
 }

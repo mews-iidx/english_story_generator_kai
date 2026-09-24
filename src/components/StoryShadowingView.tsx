@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { speakText, stopSpeech } from '../utils/speech';
 import { splitStoryIntoSentences, StorySentenceItem } from '../utils/sentenceUtils';
-import { recordSpeechPracticeProgress } from '../services/storage';
+import { recordSpeechPracticeProgress, recordSpeechPracticeEvent } from '../services/storage';
 
 interface StoryShadowingViewProps {
   story: Story;
@@ -83,6 +83,15 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
 
     stopAudio();
     setIsPlaying(true);
+
+    // Record speech practice attempt event for insights & daily progress
+    recordSpeechPracticeEvent({
+      storyId: story.id,
+      storyTitle: story.title,
+      sentenceIdx: index,
+      subStep: currentSubStep,
+      sentenceText: target.text,
+    });
 
     try {
       if (!silentAudioRef.current) {

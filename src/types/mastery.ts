@@ -142,6 +142,8 @@ export interface DailySnapshot {
   averageWpm: number;
   newMasteredPatternsCount: number;
   newMasteredVocabsCount: number;
+  speechUtterancesCount?: number;
+  uniqueSentencesCount?: number;
 }
 
 export interface MyGoal {
@@ -192,4 +194,15 @@ export interface WeakPatternItem {
   progress: ItemProgress;
   mistakeCount: number;
   lastErrorReason?: string;
+}
+
+export interface SpeechPracticeLog {
+  id: string;
+  storyId: string;
+  storyTitle: string;
+  sentenceIdx: number;
+  subStep: 'overlapping' | 'shadowing';
+  sentenceText?: string;
+  timestamp: string;
+  dateString: string;
 }

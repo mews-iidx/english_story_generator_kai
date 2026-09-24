@@ -4,13 +4,15 @@ import {
   computeAllLevelProgress,
   loadReadingSessionLogs,
   deleteReadingSessionLog,
+  loadSpeechPracticeLogs,
+  deleteSpeechPracticeLog,
 } from '../services/storage';
-import { ReadingSessionLog, DailySnapshot } from '../types/mastery';
+import { ReadingSessionLog, DailySnapshot, SpeechPracticeLog } from '../types/mastery';
 import { VocabItem } from '../types/vocab';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
 import {
-  Zap, Volume2, BarChart3, Globe,
+  Zap, Volume2, BarChart3, Globe, Mic, Trophy,
   ChevronDown, ChevronUp, BookOpen, PenTool, Sparkles, Headphones,
   Flame, AlertTriangle, Calendar, TrendingUp, Trash2
 } from 'lucide-react';
@@ -44,7 +46,7 @@ function computeDailyStreak(snapshots: DailySnapshot[]): number {
   
   const activeDates = new Set(
     snapshots
-      .filter(s => (s.wordsRead && s.wordsRead > 0) || (s.newMasteredVocabsCount && s.newMasteredVocabsCount > 0))
+      .filter(s => (s.wordsRead && s.wordsRead > 0) || (s.newMasteredVocabsCount && s.newMasteredVocabsCount > 0) || (s.speechUtterancesCount && s.speechUtterancesCount > 0))
       .map(s => s.date)
   );
 
@@ -79,6 +81,13 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   const [timelineView, setTimelineView] = useState<CefrTimelineView>('realtime');
   const [isReadingLogOpen, setIsReadingLogOpen] = useState<boolean>(false);
   const [readingLogs, setReadingLogs] = useState<ReadingSessionLog[]>(() => loadReadingSessionLogs());
+  const [isSpeechLogOpen, setIsSpeechLogOpen] = useState<boolean>(false);
+  const [speechLogs, setSpeechLogs] = useState<SpeechPracticeLog[]>(() => loadSpeechPracticeLogs());
+
+  const handleDeleteSpeechLog = (logId: string) => {
+    const { logs } = deleteSpeechPracticeLog(logId);
+    setSpeechLogs(logs);
+  };
 
   // 日次スナップショット & CEFRリアル進捗
   const dailySnapshots = useMemo(() => loadDailySnapshots(), [readingLogs]);
@@ -121,6 +130,54 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
 
     return { averageWpm: avg, wpmTier: tier };
   }, [dailySnapshots]);
+
+
+  // 3.5. 発話特訓（シャドーイング・オーバーラッピング）集計
+  const speechStats = useMemo(() => {
+    const todayStr = getTodayDateString();
+    const todayLogs = speechLogs.filter(l => l.dateString === todayStr);
+    const todayUtterances = todayLogs.length;
+    const todayUniqueSentences = new Set(todayLogs.map(l => `${l.storyId}_${l.sentenceIdx}`)).size;
+
+    const totalUtterances = speechLogs.length;
+    const totalUniqueSentences = new Set(speechLogs.map(l => `${l.storyId}_${l.sentenceIdx}`)).size;
+
+    const completedSpeechStories = (stories || []).filter(s => s.speechPracticeStatus === 'completed').length;
+    const inProgressSpeechStories = (stories || []).filter(s => s.speechPracticeStatus === 'in_progress').length;
+
+    const last7DaysSpeech: { date: string; displayDate: string; utterances: number; uniqueCount: number; isToday: boolean }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = formatDateKey(d);
+      const displayDate = `${d.getMonth() + 1}/${d.getDate()}`;
+      const dayLogs = speechLogs.filter(l => l.dateString === dateStr);
+      const utterances = dayLogs.length;
+      const uniqueCount = new Set(dayLogs.map(l => `${l.storyId}_${l.sentenceIdx}`)).size;
+      const snap = dailySnapshots.find(s => s.date === dateStr);
+
+      last7DaysSpeech.push({
+        date: dateStr,
+        displayDate,
+        utterances: utterances > 0 ? utterances : (snap?.speechUtterancesCount || 0),
+        uniqueCount: uniqueCount > 0 ? uniqueCount : (snap?.uniqueSentencesCount || 0),
+        isToday: dateStr === todayStr,
+      });
+    }
+
+    const maxUtterances = Math.max(...last7DaysSpeech.map(d => d.utterances), 20);
+
+    return {
+      todayUtterances,
+      todayUniqueSentences,
+      totalUtterances,
+      totalUniqueSentences,
+      completedSpeechStories,
+      inProgressSpeechStories,
+      last7DaysSpeech,
+      maxUtterances,
+    };
+  }, [speechLogs, stories, dailySnapshots]);
 
   // 3. 連続学習ストリーク（日数）
   const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
@@ -508,7 +565,197 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         )}
       </div>
 
-      {/* 3. 🎧 初見リスニング・実効バンド幅 ＆ 要復習ボトルネック */}
+      {/* 3. 🎙️ 発話特訓（シャドーイング・オーバーラッピング）実績 ＆ 日別推移 */}
+      <div className="bg-slate-900/90 border border-purple-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
+              <Mic className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>発話特訓（シャドーイング・オーバーラップ）実績</span>
+                <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-mono">
+                  Speech Mileage
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                声に出した回数（発話リピート数）と日々のユニーク発話文数の積み上げ
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setIsSpeechLogOpen(!isSpeechLogOpen)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+            >
+              <span>発話ログ詳細 ({speechLogs.length}件)</span>
+              {isSpeechLogOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Speech Practice Summary KPIs */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Card 1: Today's Speech Repetitions */}
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-bold">今日の発話量</span>
+              <Mic className="w-4 h-4 text-purple-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black text-purple-300 font-mono">
+              {speechStats.todayUtterances} <span className="text-xs font-normal text-slate-400">回</span>
+            </div>
+            <p className="text-[11px] text-purple-400 font-medium">
+              ユニーク {speechStats.todayUniqueSentences} 文 練習
+            </p>
+          </div>
+
+          {/* Card 2: Total Speech Utterances */}
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-bold">累計発話回数</span>
+              <Flame className="w-4 h-4 text-pink-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black text-pink-300 font-mono">
+              {speechStats.totalUtterances} <span className="text-xs font-normal text-slate-400">回</span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              総リピート・マイレージ
+            </p>
+          </div>
+
+          {/* Card 3: Total Unique Sentences */}
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-bold">累計ユニーク文数</span>
+              <Sparkles className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
+              {speechStats.totalUniqueSentences} <span className="text-xs font-normal text-slate-400">文</span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              口に馴染ませた英語構文
+            </p>
+          </div>
+
+          {/* Card 4: Completed Stories */}
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-bold">特訓完走ストーリー</span>
+              <Trophy className="w-4 h-4 text-amber-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono">
+              {speechStats.completedSpeechStories} <span className="text-xs font-normal text-slate-400">編</span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              特訓中: {speechStats.inProgressSpeechStories} 編
+            </p>
+          </div>
+        </div>
+
+        {/* 7-Day Speech Trend Chart */}
+        <div className="space-y-2 pt-2">
+          <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+            <span>直近7日間の日別発話回数（バー）＆ ユニーク文数（ラベル）</span>
+            <span className="font-mono text-purple-300">最高: {speechStats.maxUtterances}回 / 日</span>
+          </div>
+
+          <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-1">
+            {speechStats.last7DaysSpeech.map((d, i) => {
+              const heightPct = Math.min(100, Math.round((d.utterances / speechStats.maxUtterances) * 100));
+              return (
+                <div key={i} className="flex flex-col items-center space-y-2 group">
+                  <div className="text-[10px] font-mono text-slate-400 group-hover:text-purple-300 transition-colors">
+                    {d.uniqueCount > 0 ? `${d.uniqueCount}文` : '-'}
+                  </div>
+
+                  <div className="w-full bg-slate-950 h-28 sm:h-32 rounded-2xl p-1 flex flex-col justify-end border border-slate-800/80 relative overflow-hidden">
+                    <div
+                      className={`w-full rounded-xl transition-all duration-500 ${
+                        d.utterances > 0
+                          ? d.isToday
+                            ? 'bg-gradient-to-t from-purple-600 via-indigo-500 to-pink-500 shadow-lg shadow-purple-500/25'
+                            : 'bg-gradient-to-t from-purple-900/80 to-purple-600/80 group-hover:from-purple-600 group-hover:to-pink-500'
+                          : 'bg-transparent'
+                      }`}
+                      style={{ height: `${d.utterances > 0 ? Math.max(12, heightPct) : 0}%` }}
+                    />
+                    {d.utterances > 0 && (
+                      <div className="absolute inset-x-0 bottom-1 text-center text-[9px] font-bold font-mono text-white/90">
+                        {d.utterances}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={`text-[11px] font-medium font-mono ${d.isToday ? 'text-purple-400 font-bold' : 'text-slate-400'}`}>
+                    {d.displayDate}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Collapsible Speech Practice Logs Table */}
+        {isSpeechLogOpen && (
+          <div className="mt-4 pt-4 border-t border-slate-800 space-y-3 animate-fadeIn">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>発話特訓ログ（誤操作等のログは個別削除できます）</span>
+              <span className="font-mono">最新 {speechLogs.length} 件</span>
+            </div>
+
+            {speechLogs.length === 0 ? (
+              <div className="text-center py-6 text-xs text-slate-500">
+                まだ発話ログがありません。発話特訓（シャドーイング・オーバーラップ）を行うとここに記録されます。
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {speechLogs.slice(0, 50).map(log => (
+                  <div
+                    key={log.id}
+                    className="flex items-center justify-between p-3 bg-slate-950/80 border border-slate-800/80 rounded-2xl text-xs hover:border-slate-700 transition-colors gap-3"
+                  >
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold font-mono ${
+                          log.subStep === 'overlapping'
+                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                            : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        }`}>
+                          {log.subStep === 'overlapping' ? '🗣️ オーバーラップ' : '🎧 シャドーイング'}
+                        </span>
+                        <span className="font-bold text-white truncate text-xs">
+                          {log.storyTitle || '英語ストーリー'} (文 {log.sentenceIdx + 1})
+                        </span>
+                      </div>
+                      {log.sentenceText && (
+                        <p className="text-[11px] text-slate-300 font-serif line-clamp-1 italic">
+                          "{log.sentenceText}"
+                        </p>
+                      )}
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        📅 {log.dateString} ({new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleDeleteSpeechLog(log.id)}
+                      className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-xl transition-colors shrink-0 cursor-pointer"
+                      title="この発話記録を削除"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 4. 🎧 初見リスニング・実効バンド幅 ＆ 要復習ボトルネック */}
       <div className="bg-slate-900/90 border border-indigo-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
           <div className="flex items-center space-x-2.5">
@@ -636,7 +883,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
         ) : null}
       </div>
 
-      {/* 4. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) ＆ 積み上げ分布推移 */}
+      {/* 5. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) ＆ 積み上げ分布推移 */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 transition-all">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-3">
