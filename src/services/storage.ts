@@ -6,7 +6,7 @@ import { getTodayDateString } from '../utils/srs';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { VocabItem, VocabLookupResult, ExtractedCorePattern } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
-import { Story, StoryListeningMetrics } from '../types/story';
+import { Story, StoryListeningMetrics, PracticeStepStatus } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
 import { ChatMessage } from '../types/chat';
 import { Persona, CallSession } from '../types/persona';
@@ -2205,11 +2205,11 @@ export function recordAnkiCardReviewWithMasterySync(
   return updated;
 }
 
-export function recordStoryPracticeProgress(
+export function recordSpeechPracticeProgress(
   storyId: string,
-  type: 'shadowing' | 'overlapping',
-  status: 'unstarted' | 'in_progress' | 'completed',
-  lastSentenceIdx?: number
+  sentenceIdx: number,
+  subStep: 'overlapping' | 'shadowing',
+  status: PracticeStepStatus
 ): Story | null {
   const stories = loadStories();
   const index = stories.findIndex(s => s.id === storyId);
@@ -2218,15 +2218,10 @@ export function recordStoryPracticeProgress(
     const now = new Date().toISOString();
     const updatedStory: Story = {
       ...story,
-      ...(type === 'shadowing' ? {
-        shadowingStatus: status,
-        shadowingLastSentenceIdx: lastSentenceIdx !== undefined ? lastSentenceIdx : story.shadowingLastSentenceIdx,
-        shadowingCompletedAt: status === 'completed' ? now : story.shadowingCompletedAt,
-      } : {
-        overlappingStatus: status,
-        overlappingLastSentenceIdx: lastSentenceIdx !== undefined ? lastSentenceIdx : story.overlappingLastSentenceIdx,
-        overlappingCompletedAt: status === 'completed' ? now : story.overlappingCompletedAt,
-      }),
+      speechPracticeStatus: status,
+      practiceSentenceIdx: sentenceIdx,
+      practiceSubStep: subStep,
+      speechPracticeCompletedAt: status === 'completed' ? now : story.speechPracticeCompletedAt,
     };
     stories[index] = updatedStory;
     localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));

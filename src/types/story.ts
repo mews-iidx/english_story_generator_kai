@@ -69,14 +69,11 @@ export interface Story {
   readingStatus?: 'unstarted' | 'completed';
   firstReadWpm?: number;
 
-  // Shadowing & Overlapping statuses (発話特訓ステータス)
-  shadowingStatus?: PracticeStepStatus;
-  shadowingCompletedAt?: string;
-  shadowingLastSentenceIdx?: number;
-
-  overlappingStatus?: PracticeStepStatus;
-  overlappingCompletedAt?: string;
-  overlappingLastSentenceIdx?: number;
+  // Unified Speech Practice (発話特訓: 1文ごとに オーバーラップ ➔ シャドーイング)
+  speechPracticeStatus?: PracticeStepStatus;
+  speechPracticeCompletedAt?: string;
+  practiceSentenceIdx?: number;
+  practiceSubStep?: 'overlapping' | 'shadowing';
 
   isRead?: boolean; // 読了済みフラグ
   readAt?: string; // 読了日時 (ISO timestamp)
