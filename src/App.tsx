@@ -71,14 +71,13 @@ import {
   clearStoryQueueHistory,
   sanitizeStuckStoryQueue,
   getUnmasteredTargetPatterns,
-  getUnmasteredTargetVocabs,
 } from './services/storage';
 
 import { AppLogger } from './services/liveLogger';
 import { generateStorySeriesWithGemini, fetchContextualWordMeaning,
   extractSentenceCorePatternsWithGemini } from './services/gemini';
 import { translateWithGoogleFree } from './services/translate';
-import { pickTargetVocabsForStory, pickTargetErrorPatternsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
+import { pickTargetVocabsForStory, extractRecentSummaries, getTodayDateString } from './utils/srs';
 import { requestGoogleAccessToken, getOrCreateSpreadsheet, syncAllToGoogleSheets } from './services/googleSheets';
 
 export const App: React.FC = () => {
@@ -328,13 +327,12 @@ export const App: React.FC = () => {
       const currentStoryList = loadStories();
       const recentSummaries = extractRecentSummaries(currentStoryList, 5);
       const currentVocabs = loadVocabs();
-      const errorList = loadExpressionErrors();
 
-      const selectedDueVocabs = pickTargetVocabsForStory(currentVocabs, 4, currentStoryList);
-      const targetErrorPatterns = pickTargetErrorPatternsForStory(errorList, 2);
+      // 新設計：Anki復習プールからクールダウン（直近10話）を考慮して0〜2個選定
+      const selectedDueVocabs = pickTargetVocabsForStory(currentVocabs, 2, currentStoryList);
       const levelKey = (settings.cefrLevel === 'C1' ? 'B2' : settings.cefrLevel) as 'A1' | 'A2' | 'B1' | 'B2';
-      const targetPatterns = getUnmasteredTargetPatterns(levelKey, 3);
-      const targetVocabMaster = getUnmasteredTargetVocabs(levelKey, 4);
+      // CEFR構文は最大1個（無理に詰め込まない）
+      const targetPatterns = getUnmasteredTargetPatterns(levelKey, 1);
 
       const res = await generateStorySeriesWithGemini(
         {
@@ -347,8 +345,6 @@ export const App: React.FC = () => {
           userPrompt: nextTask.params?.userPrompt || nextTask.title,
           targetVocabs: selectedDueVocabs,
           targetPatterns,
-          targetVocabMaster,
-          targetErrorPatterns,
           recentSummaries,
           targetWordCount: nextTask.params?.targetWordCount || 700,
         },

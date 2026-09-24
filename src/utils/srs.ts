@@ -391,16 +391,21 @@ export function calculateSuccessSRS(item: VocabItem) {
  */
 export function pickTargetVocabsForStory(
   vocabList: VocabItem[],
-  count: number = 4,
+  count: number = 2,
   recentStories: Story[] = []
 ): string[] {
   if (!vocabList || vocabList.length === 0) return [];
 
+  // 約20%の確率で「ターゲット注入ゼロ」の完全フリー物語とし、自然な読書体験の純度を高める
+  if (Math.random() < 0.20) {
+    return [];
+  }
+
   const today = getTodayDateString();
 
-  // 1. 直近の話（最大5話分）で使われた単語を、使用された新しさ順（0 = 最も直近）に記録
+  // 1. 直近10話で使われた単語を記録（連続出現の完全防止・クールダウン強化）
   const recencyMap = new Map<string, number>();
-  recentStories.slice(0, 5).forEach((s, storyIdx) => {
+  recentStories.slice(0, 10).forEach((s, storyIdx) => {
     (s.targetVocabList || []).forEach(v => {
       const clean = v
         .replace(/\s*\([^)]*\)/g, '')
@@ -413,13 +418,13 @@ export function pickTargetVocabsForStory(
     });
   });
 
-  // 2. 単語のスコアリング（未定着・復習期日・高重要度・高Lapseを優先）
+  // 2. 単語のスコアリング（未定着・今日が復習期日・高重要度・高Lapseを優先）
   const getVocabScore = (item: VocabItem): number => {
     let score = 0;
     const isDue = item.nextReviewDate <= today;
     if (isDue) score += 100; // 今日の復習期日
     if ((item.repetitionCount ?? 0) < 3) score += 50; // 未定着
-    score += (item.importance ?? 3) * 20; // 重要度 (1..5 -> 20..100)
+    score += (item.importance ?? 3) * 20; // 重要度
     score += (item.lapseCount ?? 0) * 15; // 忘れやすい単語
     return score;
   };
@@ -432,30 +437,16 @@ export function pickTargetVocabsForStory(
     return new Date(a.lastReviewedAt || 0).getTime() - new Date(b.lastReviewedAt || 0).getTime();
   });
 
-  // 3. クールダウン（直近使用済み）単語と新鮮（未使用）単語に分類
-  const freshItems: VocabItem[] = [];
-  const usedItems: { item: VocabItem; recency: number }[] = [];
-
-  sortedVocabs.forEach(v => {
+  // 3. 直近10話で使われていない新鮮なアイテムのみを抽出
+  const freshItems = sortedVocabs.filter(v => {
     const key = v.phrase.trim().toLowerCase();
-    if (recencyMap.has(key)) {
-      usedItems.push({ item: v, recency: recencyMap.get(key)! });
-    } else {
-      freshItems.push(v);
-    }
+    return !recencyMap.has(key);
   });
 
-  // 使用済みアイテムは「最も昔に使われた順（recency大）」➔「優先度スコア高い順」でソート
-  usedItems.sort((a, b) => {
-    if (b.recency !== a.recency) return b.recency - a.recency;
-    return getVocabScore(b.item) - getVocabScore(a.item);
-  });
-
-  // 4. 候補の選定（1日2〜3話生成してもプールの上位から順に重複なく4単語ずつ消化）
+  // 4. 候補の選定（最大0〜2個をサンプリング）
   const selected: VocabItem[] = [];
   const pickedSentences = new Set<string>();
 
-  // まず新鮮な高優先度単語から順に枠を埋める (兄弟カードの重複を防ぐ)
   for (const item of freshItems) {
     if (selected.length >= count) break;
     const sentKey = item.sentence || item.exampleSentence || item.phrase;
@@ -465,17 +456,7 @@ export function pickTargetVocabsForStory(
     }
   }
 
-  // 新鮮な単語だけでは count に満たない場合、最も昔に使われた単語から補充
-  if (selected.length < count) {
-    for (const { item } of usedItems) {
-      if (selected.length >= count) break;
-      if (!selected.some(s => s.id === item.id)) {
-        selected.push(item);
-      }
-    }
-  }
-
-  // 5. Geminiプロンプト用フォーマットに整形して返却（単語または構文骨格）
+  // 5. Geminiプロンプト用フォーマットに整形
   return selected.map(item => {
     const term = item.focusWord || (item.focusType === 'pattern' && item.corePatterns?.[0]?.formula ? item.corePatterns[0].formula : item.phrase);
     const meaning = item.focusMeaning || item.meaning;
