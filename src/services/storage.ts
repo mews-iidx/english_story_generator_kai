@@ -2204,3 +2204,33 @@ export function recordAnkiCardReviewWithMasterySync(
 
   return updated;
 }
+
+export function recordStoryPracticeProgress(
+  storyId: string,
+  type: 'shadowing' | 'overlapping',
+  status: 'unstarted' | 'in_progress' | 'completed',
+  lastSentenceIdx?: number
+): Story | null {
+  const stories = loadStories();
+  const index = stories.findIndex(s => s.id === storyId);
+  if (index >= 0) {
+    const story = stories[index];
+    const now = new Date().toISOString();
+    const updatedStory: Story = {
+      ...story,
+      ...(type === 'shadowing' ? {
+        shadowingStatus: status,
+        shadowingLastSentenceIdx: lastSentenceIdx !== undefined ? lastSentenceIdx : story.shadowingLastSentenceIdx,
+        shadowingCompletedAt: status === 'completed' ? now : story.shadowingCompletedAt,
+      } : {
+        overlappingStatus: status,
+        overlappingLastSentenceIdx: lastSentenceIdx !== undefined ? lastSentenceIdx : story.overlappingLastSentenceIdx,
+        overlappingCompletedAt: status === 'completed' ? now : story.overlappingCompletedAt,
+      }),
+    };
+    stories[index] = updatedStory;
+    localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));
+    return updatedStory;
+  }
+  return null;
+}

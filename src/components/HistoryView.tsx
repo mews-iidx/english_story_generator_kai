@@ -355,6 +355,16 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           📖 未読
                         </span>
                       )}
+                      {story.overlappingStatus === 'completed' && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/25 text-teal-300 font-bold border border-teal-400/40 backdrop-blur-md">
+                          🗣️ オーバーラップ済
+                        </span>
+                      )}
+                      {story.shadowingStatus === 'completed' && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/25 text-purple-300 font-bold border border-purple-400/40 backdrop-blur-md">
+                          🎙️ シャドーイング済
+                        </span>
+                      )}
                     </div>
 
                     <button

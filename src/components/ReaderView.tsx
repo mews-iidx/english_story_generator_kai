@@ -5,12 +5,13 @@ import { VocabItem } from '../types/vocab';
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
 import {
   Languages, CheckCircle2, ChevronDown, ChevronUp, ArrowLeft,
-  Headphones, BookOpen, Pause, Play, Square, Eye, EyeOff, Film, Palette
+  Headphones, BookOpen, Pause, Play, Square, Eye, EyeOff, Film, Palette, Mic
 } from 'lucide-react';
 
 import { speakText, stopSpeech } from '../utils/speech';
 import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence, recordStoryListeningCompleted } from '../services/storage';
 import { StoryListeningStepView } from './StoryListeningStepView';
+import { StoryShadowingView } from './StoryShadowingView';
 import { getCandidateLemmas } from '../utils/storyVocabExtractor';
 import { splitStoryIntoSentences, computeStoryComprehensionStats } from '../utils/sentenceUtils';
 import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
@@ -61,6 +62,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   }, [currentStory]);
 
   // 2-Stage Story Lifecycle: 初見チャンクリスニング ➔ いつものリーダー
+  const [isShadowingStage, setIsShadowingStage] = useState<boolean>(false);
   const [isListeningStage, setIsListeningStage] = useState<boolean>(() => {
     return currentStory.listeningStatus !== 'completed';
   });
@@ -439,6 +441,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">📖 Story</span>;
   };
 
+  // 第3段階：シャドーイング・オーバーラッピング発話特訓
+  if (isShadowingStage) {
+    return (
+      <StoryShadowingView
+        story={activeStory}
+        onUpdateStory={(updated) => {
+          setActiveStory(updated);
+          onUpdateStory?.(updated);
+        }}
+        onBackToReader={() => {
+          setIsShadowingStage(false);
+        }}
+        onBackToBookshelf={onBackToBookshelf}
+      />
+    );
+  }
+
   // 第1段階：初見チャンクリスニング
   if (isListeningStage) {
     return (
@@ -476,23 +495,32 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           <span>本棚に戻る</span>
         </button>
 
-        {/* Unified Mode Switcher: 読むモード vs リスニングモード */}
-        <div className="flex items-center bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        {/* Unified Mode Switcher: 読むモード vs リスニング特訓 vs 発話特訓 */}
+        <div className="flex items-center bg-slate-900 p-1 rounded-2xl border border-slate-800 gap-0.5">
           <button
             type="button"
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-sm transition-all"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-sm transition-all"
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>📖 精読モード</span>
+            <span>📖 精読</span>
           </button>
           <button
             type="button"
             onClick={() => setIsListeningStage(true)}
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-indigo-300 hover:bg-slate-850 transition-all cursor-pointer"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-indigo-300 hover:bg-slate-850 transition-all cursor-pointer"
             title="シャドーイング＆耳トレで100%緑を目指して再挑戦！"
           >
             <Headphones className="w-3.5 h-3.5 text-indigo-400" />
-            <span>🎧 リスニング特訓</span>
+            <span>🎧 耳トレ</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsShadowingStage(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-purple-300 hover:bg-slate-850 transition-all cursor-pointer"
+            title="シャドーイング・オーバーラッピング発話特訓へ"
+          >
+            <Mic className="w-3.5 h-3.5 text-purple-400" />
+            <span>🎙️ 発話特訓</span>
           </button>
         </div>
 

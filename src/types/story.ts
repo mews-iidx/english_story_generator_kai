@@ -3,6 +3,7 @@ import { CefrLevel } from './settings';
 
 export type ContentType = 'story' | 'podcast' | 'dialogue';
 export type SeriesType = 'single' | 'continuous' | 'omnibus' | 'trilogy';
+export type PracticeStepStatus = 'unstarted' | 'in_progress' | 'completed';
 
 export interface TargetEmbedding {
   targetId: string; // pattern ID (e.g. pat_b1_001) or vocab ID
@@ -67,6 +68,15 @@ export interface Story {
   sentenceRatings?: Record<number, { rating: 1 | 2 | 3 | 4; timestamp: string }>;
   readingStatus?: 'unstarted' | 'completed';
   firstReadWpm?: number;
+
+  // Shadowing & Overlapping statuses (発話特訓ステータス)
+  shadowingStatus?: PracticeStepStatus;
+  shadowingCompletedAt?: string;
+  shadowingLastSentenceIdx?: number;
+
+  overlappingStatus?: PracticeStepStatus;
+  overlappingCompletedAt?: string;
+  overlappingLastSentenceIdx?: number;
 
   isRead?: boolean; // 読了済みフラグ
   readAt?: string; // 読了日時 (ISO timestamp)
