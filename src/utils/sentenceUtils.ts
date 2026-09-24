@@ -36,3 +36,55 @@ export function splitStoryIntoSentences(storyContent: string): StorySentenceItem
 
   return result;
 }
+
+export interface StoryComprehensionStats {
+  totalSentences: number;
+  greenCount: number; // Rating 4: 即座に理解
+  blueCount: number;  // Rating 3: 理解
+  amberCount: number; // Rating 2: 曖昧
+  roseCount: number;  // Rating 1: 要復習
+  greenRate: number;  // 0 - 100%
+  isAllGreen: boolean; // greenCount === totalSentences && totalSentences > 0
+  ratedCount: number;
+}
+
+export function computeStoryComprehensionStats(story: {
+  storyContent?: string;
+  sentenceRatings?: Record<number, { rating: 1 | 2 | 3 | 4 }>;
+  listeningMetrics?: { sentenceRatings?: Record<number, { rating: 1 | 2 | 3 | 4 }> };
+}): StoryComprehensionStats {
+  const sentences = splitStoryIntoSentences(story.storyContent || '');
+  const totalSentences = sentences.length;
+  const ratings = story.sentenceRatings || story.listeningMetrics?.sentenceRatings || {};
+
+  let greenCount = 0;
+  let blueCount = 0;
+  let amberCount = 0;
+  let roseCount = 0;
+  let ratedCount = 0;
+
+  sentences.forEach(s => {
+    const r = ratings[s.id]?.rating;
+    if (r !== undefined) {
+      ratedCount++;
+      if (r === 4) greenCount++;
+      else if (r === 3) blueCount++;
+      else if (r === 2) amberCount++;
+      else if (r === 1) roseCount++;
+    }
+  });
+
+  const greenRate = totalSentences > 0 ? Math.round((greenCount / totalSentences) * 100) : 0;
+  const isAllGreen = totalSentences > 0 && greenCount === totalSentences;
+
+  return {
+    totalSentences,
+    greenCount,
+    blueCount,
+    amberCount,
+    roseCount,
+    greenRate,
+    isAllGreen,
+    ratedCount,
+  };
+}

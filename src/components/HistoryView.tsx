@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Story } from '../types/story';
+import { computeStoryComprehensionStats } from '../utils/sentenceUtils';
 import { BookOpen, Calendar, Trash2, Search, Sparkles, Filter, RefreshCw, PlusCircle, ChevronDown, ChevronUp, Layers, Plus } from 'lucide-react';
 import { StoryQueueTask } from '../types/storyQueue';
 
@@ -316,15 +317,35 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           {story.seriesType === 'continuous' || story.seriesType === 'trilogy' ? `連載 ${story.episodeIndex}/${story.totalEpisodes}` : `話 ${story.episodeIndex}/${story.totalEpisodes}`}
                         </span>
                       )}
-                      {story.listeningStatus === 'completed' ? (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/40 backdrop-blur-md">
-                          🎧 聴取済 {story.listeningMetrics ? `(${(story.listeningMetrics.avgChunkLatencyMs / 1000).toFixed(1)}s/塊)` : ''}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800/80 text-slate-300 font-semibold border border-slate-700 backdrop-blur-md">
-                          🎧 リスニング未
-                        </span>
-                      )}
+                      {(() => {
+                        const stats = computeStoryComprehensionStats(story);
+                        if (stats.isAllGreen) {
+                          return (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 font-black border border-emerald-400/50 backdrop-blur-md shadow-sm flex items-center gap-1">
+                              👑 100% 🟢 完全制覇
+                            </span>
+                          );
+                        }
+                        if (stats.ratedCount > 0) {
+                          return (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/40 backdrop-blur-md flex items-center gap-1">
+                              🎧 {stats.greenRate}% 🟢 ({stats.greenCount}/{stats.totalSentences})
+                            </span>
+                          );
+                        }
+                        if (story.listeningStatus === 'completed') {
+                          return (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/40 backdrop-blur-md">
+                              🎧 聴取済
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800/80 text-slate-300 font-semibold border border-slate-700 backdrop-blur-md">
+                            🎧 リスニング未
+                          </span>
+                        );
+                      })()}
                       {story.isRead ? (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 font-bold border border-emerald-400/40 backdrop-blur-md">
                           ✓ 読了済 {story.firstReadWpm || story.wpm ? `(${story.firstReadWpm || story.wpm} WPM)` : ''}

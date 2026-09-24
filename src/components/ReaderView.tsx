@@ -12,7 +12,7 @@ import { speakText, stopSpeech } from '../utils/speech';
 import { recordDailyReadingActivity, loadMasteryState, extractSingleSentence, recordStoryListeningCompleted } from '../services/storage';
 import { StoryListeningStepView } from './StoryListeningStepView';
 import { getCandidateLemmas } from '../utils/storyVocabExtractor';
-import { splitStoryIntoSentences } from '../utils/sentenceUtils';
+import { splitStoryIntoSentences, computeStoryComprehensionStats } from '../utils/sentenceUtils';
 import { StoryCompletionSyncModal } from './StoryCompletionSyncModal';
 
 interface ReaderViewProps {
@@ -489,12 +489,34 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             type="button"
             onClick={() => setIsListeningStage(true)}
             className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-indigo-300 hover:bg-slate-850 transition-all cursor-pointer"
-            title="初見リスニング（耳トレ・4段階理解度メモ）へ切り替え"
+            title="シャドーイング＆耳トレで100%緑を目指して再挑戦！"
           >
             <Headphones className="w-3.5 h-3.5 text-indigo-400" />
             <span>🎧 リスニング特訓</span>
           </button>
         </div>
+
+        {/* Green Rate Achievement Pill */}
+        {(() => {
+          const stats = computeStoryComprehensionStats(activeStory);
+          if (stats.isAllGreen) {
+            return (
+              <span className="px-2.5 py-1 rounded-xl bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-xs font-black flex items-center gap-1 shadow-sm animate-fadeIn">
+                👑 100% 🟢 完全制覇！
+              </span>
+            );
+          }
+          if (stats.ratedCount > 0) {
+            return (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+                <span className="text-slate-400 font-medium">耳トレ達成度:</span>
+                <span className="text-emerald-400 font-black">{stats.greenRate}% 🟢</span>
+                <span className="text-slate-500 text-[11px]">({stats.greenCount}/{stats.totalSentences} 即解)</span>
+              </div>
+            );
+          }
+          return null;
+        })()}
 
         <div className="flex items-center space-x-2 text-xs">
           {activeStory.episodeIndex && activeStory.totalEpisodes && activeStory.totalEpisodes > 1 && (
