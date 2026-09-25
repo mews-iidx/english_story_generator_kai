@@ -27,6 +27,57 @@ const SPEECH_RATES = [
 
 const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
+function getRatingBadge(rating?: 1 | 2 | 3 | 4) {
+  if (rating === 4) {
+    return {
+      label: '🟢 即座に理解',
+      bg: 'bg-emerald-500/20',
+      text: 'text-emerald-300',
+      border: 'border-emerald-500/40',
+      cardBorder: 'border-emerald-500/40',
+      dot: 'bg-emerald-400',
+    };
+  }
+  if (rating === 3) {
+    return {
+      label: '🔵 理解',
+      bg: 'bg-sky-500/20',
+      text: 'text-sky-300',
+      border: 'border-sky-500/40',
+      cardBorder: 'border-sky-500/40',
+      dot: 'bg-sky-400',
+    };
+  }
+  if (rating === 2) {
+    return {
+      label: '🟡 曖昧 (要反復)',
+      bg: 'bg-amber-500/20',
+      text: 'text-amber-300',
+      border: 'border-amber-500/40',
+      cardBorder: 'border-amber-500/50 ring-1 ring-amber-500/20',
+      dot: 'bg-amber-400',
+    };
+  }
+  if (rating === 1) {
+    return {
+      label: '🔴 要復習 (重点)',
+      bg: 'bg-rose-500/20',
+      text: 'text-rose-300',
+      border: 'border-rose-500/40',
+      cardBorder: 'border-rose-500/60 ring-1 ring-rose-500/30',
+      dot: 'bg-rose-400',
+    };
+  }
+  return {
+    label: '⚪ 未評価',
+    bg: 'bg-slate-800/40',
+    text: 'text-slate-400',
+    border: 'border-slate-700/40',
+    cardBorder: 'border-slate-800',
+    dot: 'bg-slate-700',
+  };
+}
+
 export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
   story,
   onUpdateStory,
@@ -44,6 +95,11 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     return splitStoryIntoSentences(story.storyContent);
   }, [story.storyContent]);
 
+  // Listening ratings map
+  const sentenceRatings = useMemo(() => {
+    return story.sentenceRatings || story.listeningMetrics?.sentenceRatings || {};
+  }, [story.sentenceRatings, story.listeningMetrics]);
+
   // Initial sentence and sub-step from saved progress
   const initialSentenceIdx = useMemo(() => {
     return Math.min(Math.max(0, sentences.length - 1), Math.max(0, story.practiceSentenceIdx || 0));
@@ -58,6 +114,10 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
 
   const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentSentence: StorySentenceItem | undefined = sentences[currentIndex];
+  const currentRatingInfo = useMemo(() => {
+    const r = sentenceRatings[currentIndex]?.rating;
+    return getRatingBadge(r);
+  }, [sentenceRatings, currentIndex]);
 
   // Stop audio safely
   const stopAudio = useCallback(() => {
@@ -118,7 +178,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
         navigator.mediaSession.playbackState = 'paused';
       }
     });
-  }, [sentences, speechRate, stopAudio, story.title, story.cefrLevel]);
+  }, [sentences, speechRate, stopAudio, story.id, story.title, story.cefrLevel]);
 
   // Play on initial mount
   useEffect(() => {
@@ -183,6 +243,17 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
       playCurrentSentenceAudio(prevIdx, 'shadowing');
     }
   }, [subStep, currentIndex, saveProgress, playCurrentSentenceAudio]);
+
+  // Direct jump to sentence
+  const handleJumpToSentence = useCallback((targetIdx: number) => {
+    if (targetIdx >= 0 && targetIdx < sentences.length && targetIdx !== currentIndex) {
+      setCurrentIndex(targetIdx);
+      setSubStep('overlapping');
+      setShowEnglishInShadowing(false);
+      saveProgress(targetIdx, 'overlapping', 'in_progress');
+      playCurrentSentenceAudio(targetIdx, 'overlapping');
+    }
+  }, [sentences.length, currentIndex, saveProgress, playCurrentSentenceAudio]);
 
   // Replay current sentence
   const handleReplay = useCallback(() => {
@@ -408,24 +479,50 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
 
       {/* 2. Main Sentence Display Card */}
       <div className="space-y-4">
-        {/* Progress Bar */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 shadow-lg space-y-2">
+        {/* Progress Bar & Sentence Navigation Map */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-lg space-y-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-bold text-slate-300 flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono font-bold">
                 文 {currentIndex + 1} / {sentences.length}
               </span>
               <span className="text-[11px] text-slate-400">
                 ({subStep === 'overlapping' ? '① オーバーラップ' : '② シャドーイング'})
               </span>
-            </span>
+              {/* Listening Comprehension Badge for Current Sentence */}
+              <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border font-mono ${currentRatingInfo.bg} ${currentRatingInfo.text} ${currentRatingInfo.border}`}>
+                🎧 {currentRatingInfo.label}
+              </span>
+            </div>
 
             <span className="text-[11px] text-purple-300 font-mono font-bold">
               全体進捗 {overallPercent}%
             </span>
           </div>
 
-          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+          {/* Mini Sentences Dots Map */}
+          <div className="flex items-center gap-1.5 overflow-x-auto py-1 px-0.5 no-scrollbar">
+            {sentences.map((_, idx) => {
+              const r = sentenceRatings[idx]?.rating;
+              const info = getRatingBadge(r);
+              const isCurrent = idx === currentIndex;
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleJumpToSentence(idx)}
+                  className={`h-2.5 rounded-full transition-all shrink-0 cursor-pointer ${
+                    isCurrent
+                      ? 'w-7 ring-2 ring-purple-400 ring-offset-1 ring-offset-slate-950 ' + info.dot
+                      : `w-3 hover:w-5 opacity-80 hover:opacity-100 ` + info.dot
+                  }`}
+                  title={`文 ${idx + 1}: ${info.label}`}
+                />
+              );
+            })}
+          </div>
+
+          <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800/80">
             <div
               className="bg-gradient-to-r from-teal-400 via-purple-500 to-indigo-400 h-full transition-all duration-300"
               style={{ width: `${overallPercent}%` }}
@@ -434,9 +531,9 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
         </div>
 
         {/* Big Center Display */}
-        <div className="bg-slate-950/90 border border-slate-800/90 rounded-3xl p-6 sm:p-10 space-y-6 text-center shadow-inner relative overflow-hidden min-h-[260px] flex flex-col justify-center">
+        <div className="bg-slate-950/90 border border-slate-800/90 rounded-3xl p-6 sm:p-8 space-y-5 text-center shadow-inner relative overflow-hidden min-h-[260px] flex flex-col justify-center">
           {/* Audio Wave Visualizer */}
-          <div className="flex items-center justify-center gap-1.5 py-2">
+          <div className="flex items-center justify-center gap-1.5 py-1">
             {[0.4, 0.7, 1.0, 0.6, 0.9, 0.5, 0.8, 0.3].map((heightRatio, i) => (
               <div
                 key={i}
@@ -465,14 +562,22 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
               }}
               className={`p-6 sm:p-8 rounded-3xl space-y-3 animate-fadeIn shadow-lg border transition-all ${
                 subStep === 'overlapping'
-                  ? 'bg-slate-900/90 border-teal-500/30'
-                  : 'bg-slate-900/90 border-purple-500/30 cursor-pointer hover:border-purple-400/50 hover:bg-slate-900'
+                  ? `bg-slate-900/90 ${currentRatingInfo.cardBorder}`
+                  : `bg-slate-900/90 ${currentRatingInfo.cardBorder} cursor-pointer hover:bg-slate-900`
               }`}
               title={subStep === 'shadowing' ? 'クリックして英文を再び隠す (Vキー)' : undefined}
             >
+              {/* Listening Rating Header inside box */}
+              <div className="flex items-center justify-center gap-2 pb-1">
+                <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border ${currentRatingInfo.bg} ${currentRatingInfo.text} ${currentRatingInfo.border}`}>
+                  リスニング判定: {currentRatingInfo.label}
+                </span>
+              </div>
+
               <p className="text-xl sm:text-2xl font-bold text-white leading-relaxed font-serif">
                 {currentSentence?.text}
               </p>
+
               {subStep === 'shadowing' && (
                 <div className="text-xs text-purple-400 font-bold flex items-center justify-center gap-1.5 pt-2 border-t border-purple-500/20">
                   <EyeOff className="w-4 h-4" />
@@ -483,9 +588,16 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
           ) : (
             <div
               onClick={() => setShowEnglishInShadowing(true)}
-              className="p-8 sm:p-10 bg-slate-900/40 border-2 border-dashed border-purple-500/30 hover:border-purple-400/60 hover:bg-slate-900/60 rounded-3xl space-y-3 animate-fadeIn cursor-pointer transition-all group"
+              className={`p-8 sm:p-10 bg-slate-900/40 border-2 border-dashed ${currentRatingInfo.cardBorder} hover:bg-slate-900/60 rounded-3xl space-y-3 animate-fadeIn cursor-pointer transition-all group`}
               title="クリックして英文をチラ見 (Vキー)"
             >
+              {/* Rating indicator even when masked */}
+              <div className="flex items-center justify-center gap-2">
+                <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border ${currentRatingInfo.bg} ${currentRatingInfo.text} ${currentRatingInfo.border}`}>
+                  リスニング判定: {currentRatingInfo.label}
+                </span>
+              </div>
+
               <p className="text-sm sm:text-base text-purple-200/90 font-bold leading-relaxed">
                 🎧 英文は非表示です（音の1拍後ろを影のように追走）
               </p>
