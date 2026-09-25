@@ -29,6 +29,7 @@ const STORAGE_KEYS = {
   STORY_QUEUE: 'storykai_story_queue_v1',
   RALLY_TOPICS: 'storykai_rally_topics_v1',
   SPEECH_LOGS: 'storykai_speech_logs_v1',
+  BG_CARD_QUEUE: 'storykai_bg_card_queue_v1',
 };
 
 // ===================== SETTINGS =====================
@@ -2330,4 +2331,71 @@ export function deleteSpeechPracticeLog(logId: string): { logs: SpeechPracticeLo
   }
 
   return { logs: updatedLogs, snapshots };
+}
+
+// --------------------- PERSISTENT BACKGROUND ANKI GENERATION QUEUE ---------------------
+
+export interface BgVocabQueueItem {
+  phrase: string;
+  partOfSpeech: string;
+  meaning: string;
+  cefr?: string;
+  enqueuedAt: string;
+}
+
+export function loadBgVocabQueue(): BgVocabQueueItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.BG_CARD_QUEUE);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load bg vocab queue', e);
+    return [];
+  }
+}
+
+export function saveBgVocabQueue(queue: BgVocabQueueItem[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.BG_CARD_QUEUE, JSON.stringify(queue.slice(0, 500)));
+  } catch (e) {
+    console.error('Failed to save bg vocab queue', e);
+  }
+}
+
+export function enqueueBgVocabItem(item: Omit<BgVocabQueueItem, 'enqueuedAt'>): void {
+  const queue = loadBgVocabQueue();
+  const exists = queue.some(q => q.phrase.toLowerCase() === item.phrase.toLowerCase());
+  if (!exists) {
+    queue.push({
+      ...item,
+      enqueuedAt: new Date().toISOString(),
+    });
+    saveBgVocabQueue(queue);
+  }
+}
+
+export function popBgVocabBatch(batchSize: number = 4): { batch: BgVocabQueueItem[]; remaining: BgVocabQueueItem[] } {
+  const queue = loadBgVocabQueue();
+  const batch = queue.slice(0, batchSize);
+  const remaining = queue.slice(batchSize);
+  saveBgVocabQueue(remaining);
+  return { batch, remaining };
+}
+
+export function enrichExistingVocabCard(phrase: string, enriched: { sentence: string; translation: string; corePatterns?: import('../types/vocab').ExtractedCorePattern[]; importance?: number }): boolean {
+  const vocabs = loadVocabs();
+  const index = vocabs.findIndex(v => v.phrase.toLowerCase() === phrase.trim().toLowerCase());
+  if (index >= 0) {
+    vocabs[index] = {
+      ...vocabs[index],
+      sentence: enriched.sentence,
+      exampleSentence: enriched.sentence,
+      translation: enriched.translation,
+      corePatterns: enriched.corePatterns || vocabs[index].corePatterns || [],
+      importance: enriched.importance || vocabs[index].importance || 4,
+    };
+    saveVocabsBatch(vocabs);
+    return true;
+  }
+  return false;
 }

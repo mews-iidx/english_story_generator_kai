@@ -10,6 +10,10 @@ import {
   loadMasteryState,
   recordVocabMasteryStatus,
   saveSentenceCardWithSiblings,
+  loadBgVocabQueue,
+  enqueueBgVocabItem,
+  popBgVocabBatch,
+  enrichExistingVocabCard,
 } from '../services/storage';
 import { generateVocabCardsBatchWithGemini } from '../services/gemini';
 import { speakText } from '../utils/speech';
@@ -45,9 +49,9 @@ export const DrillView: React.FC<DrillViewProps> = ({
   const [history, setHistory] = useState<DrillHistoryItem[]>([]);
   const [masteryStateVersion, setMasteryStateVersion] = useState<number>(0);
 
-  // Background Anki Card Generation Queue
-  const [bgQueue, setBgQueue] = useState<VocabMasterItem[]>([]);
-  const [bgProcessedCount, setBgProcessedCount] = useState<number>(0);
+  // Background Anki Card Queue Length State (Persistent in localStorage)
+  const [queueCount, setQueueCount] = useState<number>(() => loadBgVocabQueue().length);
+  const [processedCount, setProcessedCount] = useState<number>(0);
   const isProcessingRef = useRef<boolean>(false);
 
   // Session summary counters
@@ -99,16 +103,24 @@ export const DrillView: React.FC<DrillViewProps> = ({
     }
   }, [currentIndex, currentVocab?.id]);
 
-  // 2. Background Anki Card Generator Worker
+  // 2. Persistent Background Anki Card Enrichment Worker
   useEffect(() => {
-    if (bgQueue.length === 0 || isProcessingRef.current || !apiKey) {
+    if (isProcessingRef.current || !apiKey) {
       return;
     }
 
-    const processNextBatch = async () => {
-      isProcessingRef.current = true;
+    const interval = setInterval(async () => {
+      const currentQueue = loadBgVocabQueue();
+      setQueueCount(currentQueue.length);
 
-      const batch = bgQueue.slice(0, 4);
+      if (currentQueue.length === 0 || isProcessingRef.current || !apiKey) {
+        return;
+      }
+
+      isProcessingRef.current = true;
+      const { batch, remaining } = popBgVocabBatch(3);
+      setQueueCount(remaining.length);
+
       try {
         const reqItems = batch.map(v => ({
           phrase: v.phrase,
@@ -121,72 +133,86 @@ export const DrillView: React.FC<DrillViewProps> = ({
 
         if (result.cards && result.cards.length > 0) {
           result.cards.forEach(card => {
-            saveSentenceCardWithSiblings({
+            enrichExistingVocabCard(card.phrase, {
               sentence: card.sentence,
               translation: card.translation,
-              focusType: 'word',
-              focusWord: card.phrase,
-              focusMeaning: card.meaning,
               corePatterns: card.corePatterns,
               importance: card.importance || 4,
             });
           });
 
-          setBgProcessedCount(prev => prev + result.cards.length);
+          setProcessedCount(prev => prev + result.cards.length);
           if (onUpdateVocabs) {
             onUpdateVocabs();
           }
         }
       } catch (err) {
-        console.warn('Background Anki card generation error:', err);
+        console.warn('Background Anki card enrichment error:', err);
       } finally {
-        setBgQueue(prev => prev.slice(batch.length));
         isProcessingRef.current = false;
+        setQueueCount(loadBgVocabQueue().length);
       }
-    };
+    }, 1500);
 
-    processNextBatch();
-  }, [bgQueue, apiKey, selectedModel, onUpdateVocabs]);
+    return () => clearInterval(interval);
+  }, [apiKey, selectedModel, onUpdateVocabs]);
 
   // 3. Handle Rating & Triage
-  const handleRate = useCallback((status: MasteryStatus, enqueueToAnki: boolean = false) => {
+  const handleRate = useCallback((status: MasteryStatus, registerToAnki: boolean = false) => {
     if (!currentVocab) return;
 
     const state = loadMasteryState();
     const prevStatus: MasteryStatus = state.vocabs[currentVocab.phrase.toLowerCase()]?.status || 'unseen';
 
-    // Update mastery status in storage
+    // 1. Update mastery status in storage
     recordVocabMasteryStatus(currentVocab.phrase, status);
     recordVocabMasteryStatus(currentVocab.id, status);
 
-    // If "🔴 もう一度" or "🟡 難しい", enqueue for background Anki card generation
-    if (enqueueToAnki) {
-      setBgQueue(prev => {
-        if (prev.some(v => v.id === currentVocab.id || v.phrase.toLowerCase() === currentVocab.phrase.toLowerCase())) {
-          return prev;
-        }
-        return [...prev, currentVocab];
+    // 2. ★ CRUCIAL: Immediately save base card to Anki (0ms synchronous save)
+    if (registerToAnki) {
+      saveSentenceCardWithSiblings({
+        sentence: `${currentVocab.phrase}`,
+        translation: currentVocab.meaning,
+        focusType: 'word',
+        focusWord: currentVocab.phrase,
+        focusMeaning: currentVocab.meaning,
+        importance: 4,
       });
+
+      // Enqueue to persistent background queue for rich AI sentence enrichment
+      enqueueBgVocabItem({
+        phrase: currentVocab.phrase,
+        partOfSpeech: currentVocab.partOfSpeech || '単語',
+        meaning: currentVocab.meaning,
+        cefr: currentVocab.cefr,
+      });
+
+      setQueueCount(loadBgVocabQueue().length);
+
+      // Trigger immediate live UI update so Anki badge increases instantly
+      if (onUpdateVocabs) {
+        onUpdateVocabs();
+      }
     }
 
-    // Record undo history
+    // 3. Record undo history
     setHistory(prev => [
       { vocab: currentVocab, prevStatus, newStatus: status, index: currentIndex },
       ...prev.slice(0, 30),
     ]);
 
-    // Update session stats
+    // 4. Update session stats
     setSessionStats(prev => ({
       mastered: status === 'mastered' ? prev.mastered + 1 : prev.mastered,
       lapsed: status === 'lapsed' ? prev.lapsed + 1 : prev.lapsed,
       exposed: status === 'exposed' ? prev.exposed + 1 : prev.exposed,
     }));
 
-    // Advance to next word
+    // 5. Advance to next word immediately
     setIsRevealed(false);
     setCurrentIndex(prev => prev + 1);
     setMasteryStateVersion(v => v + 1);
-  }, [currentVocab, currentIndex]);
+  }, [currentVocab, currentIndex, onUpdateVocabs]);
 
   // 4. Handle Undo (巻き戻し)
   const handleUndo = useCallback(() => {
@@ -198,9 +224,6 @@ export const DrillView: React.FC<DrillViewProps> = ({
     // Revert status in storage
     recordVocabMasteryStatus(lastAction.vocab.phrase, lastAction.prevStatus);
     recordVocabMasteryStatus(lastAction.vocab.id, lastAction.prevStatus);
-
-    // Remove from bgQueue if pending
-    setBgQueue(prev => prev.filter(v => v.id !== lastAction.vocab.id && v.phrase !== lastAction.vocab.phrase));
 
     // Revert index & state
     setCurrentIndex(lastAction.index);
@@ -225,10 +248,10 @@ export const DrillView: React.FC<DrillViewProps> = ({
         setIsRevealed(prev => !prev);
       } else if (e.code === 'Digit1' || e.code === 'Numpad1') {
         e.preventDefault();
-        handleRate('lapsed', true); // 🔴 もう一度 (Ankiキューへ)
+        handleRate('lapsed', true); // 🔴 もう一度 (即座にAnki登録 & BG例文強化)
       } else if (e.code === 'Digit2' || e.code === 'Numpad2') {
         e.preventDefault();
-        handleRate('exposed', true); // 🟡 難しい (Ankiキューへ)
+        handleRate('exposed', true); // 🟡 難しい (即座にAnki登録 & BG例文強化)
       } else if (e.code === 'Digit3' || e.code === 'Numpad3') {
         e.preventDefault();
         handleRate('exposed', false); // 🔵 覚えた
@@ -272,22 +295,22 @@ export const DrillView: React.FC<DrillViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                単語を高速トリアージ。知らん単語は裏でAnkiに自動生成蓄積！
+                単語を高速仕分け。「知らない」を押した瞬間に即座にAnki登録完了！
               </p>
             </div>
           </div>
 
           {/* Background Anki Queue Indicator */}
           <div className="flex items-center gap-2">
-            {bgQueue.length > 0 ? (
+            {queueCount > 0 ? (
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/80 border border-purple-500/40 text-purple-300 text-xs font-bold animate-pulse">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Anki生成中: 残り {bgQueue.length} 語</span>
+                <span>AI例文生成中: 残り {queueCount} 語</span>
               </div>
-            ) : bgProcessedCount > 0 ? (
+            ) : processedCount > 0 ? (
               <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 text-xs font-bold rounded-xl">
                 <Check className="w-3.5 h-3.5" />
-                <span>Anki {bgProcessedCount} 語 蓄積済</span>
+                <span>Anki {processedCount} 語 AI例文強化済</span>
               </div>
             ) : null}
 
@@ -361,7 +384,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
               すべての単語を仕分け切りました！🎉
             </h2>
             <p className="text-sm text-slate-300 max-w-md mx-auto">
-              今回のセッションで「⚡ 絶対わかる」にした単語は完全に卒業し、分からなかった単語は裏でAnkiデッキに自動蓄積されています。
+              今回のセッションで「⚡ 絶対わかる」にした単語は完全に卒業し、分からなかった単語はAnkiデッキに即座に蓄積されています。
             </p>
           </div>
 
@@ -514,7 +537,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                   <span>🔴 もう一度</span>
                   <span className="font-mono text-[10px] text-rose-400">[1]</span>
                 </div>
-                <span className="text-[10px] text-rose-400/80 font-normal">Ankiカード自動生成</span>
+                <span className="text-[10px] text-rose-400/80 font-normal">即座にAnki登録</span>
               </button>
 
               <button
@@ -526,7 +549,7 @@ export const DrillView: React.FC<DrillViewProps> = ({
                   <span>🟡 難しい</span>
                   <span className="font-mono text-[10px] text-amber-400">[2]</span>
                 </div>
-                <span className="text-[10px] text-amber-400/80 font-normal">Ankiカード自動生成</span>
+                <span className="text-[10px] text-amber-400/80 font-normal">即座にAnki登録</span>
               </button>
 
               <button
