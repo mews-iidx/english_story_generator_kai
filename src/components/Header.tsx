@@ -41,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const tabs: (TabItem & { isMaintenance?: boolean })[] = [
     { id: 'bookshelf', label: '物語', icon: BookOpen },
-    { id: 'drill', label: 'ドリル (メンテ中)', icon: Zap, isMaintenance: true },
+    { id: 'drill', label: 'ドリル', icon: Zap },
     { id: 'quiz', label: 'Anki', icon: PlusCircle, badge: dueCount > 0 ? dueCount : undefined },
     { id: 'mastery', label: '分析', icon: Target },
     { id: 'call', label: '英会話', icon: Phone },
@@ -54,10 +54,7 @@ export const Header: React.FC<HeaderProps> = ({
       alert('⚠️ 通話・特訓セッション中です。画面上の終了ボタンを押してから他のメニューへ移動してください。');
       return;
     }
-    if (tabId === 'drill') {
-      alert('🛠️ ドリル機能は現在リニューアル・メンテ中です！Ankiや瞬間ラリー英会話をご活用ください。');
-      return;
-    }
+
     setActiveTab(tabId);
   };
 

@@ -1208,6 +1208,7 @@ export const App: React.FC = () => {
               messages={chatMessages}
               onSendMessage={handleSendChatMessage}
               onAddToVocab={handleAddToVocab}
+              onSaveSentenceCard={handleSaveSentenceCard}
               onClearChat={handleClearChat}
               onRecordTokenUsage={handleRecordTokenUsage}
               savedVocabPhrases={savedVocabPhrases}

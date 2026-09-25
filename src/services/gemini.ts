@@ -168,6 +168,11 @@ export async function generateStoryWithGemini(params: GenerateStoryParams): Prom
   promptText += `2. **2文連続での不自然な表現挿入の厳禁**: ターゲット表現を2文連続で並べたり、脈絡なく詰め込むことは絶対に避けてください。
 `;
   promptText += `3. **CEFRレベル【${cefrLevel}】の流暢な土台**: 本文の95%以上は学習者のCEFRレベルに応じた平易でスムーズな英文とし、直読直解で情景が浮かぶ多読体験（i+1）を提供してください。
+`;
+  promptText += `4. **★マンネリ打破＆主人公の多様性（Anti-Leo & Diversity）**: 
+   - 「Leo」「Alex」「Chloe」「Oliver」などの頻出AIテンプレ名は【絶対に使用禁止】です。
+   - 多国籍で多彩な名前（Maya, Elena, Kenji, Tariq, Soren, Amara, Freya, Marcus, Diego, Zoe, Jonah, Leila, Haruki, Nina, Mateo 等）を使用してください。
+   - 「静かな町のカフェ店主/パン屋/時計職人が古い鍵を見つける」というクリシェを厳禁とし、夜行列車、深海調査船、航空整備士、スタートアップハッカソン、深夜天文台、動物レスキュー、ストリートアート、料理バトル、考古学キャンプなど、毎回異なるワクワクする新鮮な舞台を描いてください。
 
 `;
 
@@ -1929,5 +1934,115 @@ Return ONLY a pure JSON object:
       { text: `Honestly, I don't have much experience, but...`, labelJa: "あまり経験はないけど…と答える" },
       { text: `What's your own favorite thing about it?`, labelJa: "AI側のおすすめを聞き返す" },
     ],
+  };
+}
+
+export interface VocabCardBatchRequestItem {
+  phrase: string;
+  partOfSpeech: string;
+  meaning: string;
+  cefr?: string;
+}
+
+export interface GeneratedVocabCardItem {
+  phrase: string;
+  partOfSpeech: string;
+  meaning: string;
+  sentence: string;
+  translation: string;
+  corePatterns?: ExtractedCorePattern[];
+  importance?: number;
+}
+
+export async function generateVocabCardsBatchWithGemini(
+  items: VocabCardBatchRequestItem[],
+  apiKey: string,
+  model = 'gemini-3.7-flash'
+): Promise<{ cards: GeneratedVocabCardItem[]; tokenUsage?: { promptTokens: number; candidatesTokens: number } }> {
+  if (!apiKey || items.length === 0) {
+    return { cards: [] };
+  }
+
+  const prompt = `以下の英単語・熟語リストに対して、指定された【品詞】および【指定の意味】に100%合致する、自然で高品質な英語例文（1文）と日本語訳を作成してください。
+
+【超重要ルール】
+1. **多義語・品詞の厳守**: 例として "book" の品詞が "動詞" で意味が "予約する" の場合、名詞の「本」ではなく、必ず「予約する」の意味で例文を作成してください。
+2. **生きた実用的な1文**: 日常会話やストーリーでそのまま使える、情景が浮かぶ自然な1文にしてください。
+
+【対象単語リスト】:
+${items.map((it, idx) => `${idx + 1}. 単語: "${it.phrase}", 品詞: "${it.partOfSpeech}", 指定の意味: "${it.meaning}"`).join('\n')}
+
+【出力フォーマット】:
+必ず以下のJSON配列のみを出力してください。Markdownバッククォートは付けないでください。
+[
+  {
+    "phrase": "英単語",
+    "partOfSpeech": "品詞",
+    "meaning": "指定の意味",
+    "sentence": "自然な英語例文（1文）",
+    "translation": "例文の自然な日本語全訳",
+    "importance": 4,
+    "corePatterns": [
+      {
+        "patternName": "使われている構文やキー構造名",
+        "formula": "骨格 (例: S + V + O)",
+        "meaningTemplate": "日本語の型",
+        "highlightTokens": ["文中で該当する単語"],
+        "briefNote": "1行解説"
+      }
+    ]
+  }
+]`;
+
+  const candidateModels = Array.from(new Set([model, ...FALLBACK_MODELS])).filter(Boolean);
+
+  for (const currentModel of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        const cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        const cards: GeneratedVocabCardItem[] = Array.isArray(parsed) ? parsed : [];
+        return {
+          cards,
+          tokenUsage: {
+            promptTokens: data.usageMetadata?.promptTokenCount || 0,
+            candidatesTokens: data.usageMetadata?.candidatesTokenCount || 0,
+          },
+        };
+      }
+    } catch (e) {
+      console.warn(`Failed batch card generation with ${currentModel}:`, e);
+    }
+  }
+
+  // Fallback if AI fails: Return clean valid cards without stalling
+  return {
+    cards: items.map(it => ({
+      phrase: it.phrase,
+      partOfSpeech: it.partOfSpeech,
+      meaning: it.meaning,
+      sentence: `${it.phrase} (${it.meaning})`,
+      translation: it.meaning,
+      importance: 3,
+    })),
   };
 }

@@ -1,1006 +1,561 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  Zap,
-  CheckCircle2,
-  AlertCircle,
-  ArrowRight,
-  RefreshCw,
-  Volume2,
-  Plus,
-  BookOpen,
-  PenTool,
-  Flame,
-  ChevronRight,
-  Settings2,
-
-  Check,
-
-  Sparkles,
-  Layers,
-  Brain
+  Zap, Volume2, Flame, Layers, Check, Undo2,
+  Eye, RefreshCw, Trophy
 } from 'lucide-react';
-import { PatternMasterItem, VocabMasterItem } from '../types/mastery';
+import { VocabMasterItem, MasteryStatus } from '../types/mastery';
 import { CefrLevel } from '../types/settings';
-import { getPatternsByLevel } from '../data/cefrPatternsMaster';
 import { getVocabMasterByLevel } from '../data/cefrVocabMaster';
 import {
   loadMasteryState,
-  recordDrillResult,
+  recordVocabMasteryStatus,
   saveSentenceCardWithSiblings,
-  loadVocabs,
-  saveVocabsBatch
 } from '../services/storage';
-import {
-  evaluateDrillAnswerWithGemini,
-  EvaluateDrillResult,
-  generateDynamicDrillQuestion,
-  DynamicDrillQuestion
-} from '../services/gemini';
-import { playCorrectSound, playWrongSound } from '../utils/audio';
-import { LiveLogger } from '../services/liveLogger';
+import { generateVocabCardsBatchWithGemini } from '../services/gemini';
+import { speakText } from '../utils/speech';
 
 interface DrillViewProps {
   apiKey: string;
   selectedModel?: string;
   userLevel?: CefrLevel;
   onNavigateToAnki?: () => void;
+  onUpdateVocabs?: () => void;
 }
 
-export type DrillFilterMode = 'all' | 'unseen' | 'lapsed';
-export type DrillTargetScope = 'all' | 'pattern' | 'vocab'; // 総合 (構文+単語), 構文のみ, 単語のみ
+export type DrillFilterMode = 'unseen' | 'lapsed' | 'all';
 
-export interface DrillQueueItem {
-  queueId: string;
-  targetType: 'pattern' | 'vocab';
-  item: PatternMasterItem | VocabMasterItem;
-  question: DynamicDrillQuestion;
-  generatedAt: number;
+interface DrillHistoryItem {
+  vocab: VocabMasterItem;
+  prevStatus: MasteryStatus;
+  newStatus: MasteryStatus;
+  index: number;
 }
-
-const QUEUE_TARGET_SIZE = 4; // 常時プールしておく先読み問題数
 
 export const DrillView: React.FC<DrillViewProps> = ({
   apiKey,
   selectedModel = 'gemini-3.7-flash',
-  userLevel,
+  userLevel = 'A1',
   onNavigateToAnki,
+  onUpdateVocabs,
 }) => {
   const [selectedCefr, setSelectedCefr] = useState<CefrLevel>(userLevel || 'A1');
-  const [drillType, setDrillType] = useState<'assembly' | 'comprehension'>('assembly');
   const [filterMode, setFilterMode] = useState<DrillFilterMode>('unseen');
-  const [targetScope, setTargetScope] = useState<DrillTargetScope>('all');
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [isRevealed, setIsRevealed] = useState<boolean>(false);
+  const [history, setHistory] = useState<DrillHistoryItem[]>([]);
+  const [masteryStateVersion, setMasteryStateVersion] = useState<number>(0);
 
-  // Pre-generation Queue & Current Question State
-  const [isSessionActive, setIsSessionActive] = useState<boolean>(false);
-  const [drillQueue, setDrillQueue] = useState<DrillQueueItem[]>([]);
-  const [currentDrillItem, setCurrentDrillItem] = useState<DrillQueueItem | null>(null);
-  const [isQueueLoading, setIsQueueLoading] = useState<boolean>(true);
-  const isRefillingRef = useRef<boolean>(false);
+  // Background Anki Card Generation Queue
+  const [bgQueue, setBgQueue] = useState<VocabMasterItem[]>([]);
+  const [bgProcessedCount, setBgProcessedCount] = useState<number>(0);
+  const isProcessingRef = useRef<boolean>(false);
 
-  const [userAnswer, setUserAnswer] = useState<string>('');
-  const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
-  const [evalResult, setEvalResult] = useState<EvaluateDrillResult | null>(null);
-  const [isSavedToAnki, setIsSavedToAnki] = useState<boolean>(false);
-  const [lastSavedCardIds, setLastSavedCardIds] = useState<{ id1: string; id2: string } | null>(null);
+  // Session summary counters
+  const [sessionStats, setSessionStats] = useState<{
+    mastered: number;
+    lapsed: number;
+    exposed: number;
+  }>({ mastered: 0, lapsed: 0, exposed: 0 });
 
-  const [sessionCorrectCount, setSessionCorrectCount] = useState<number>(0);
-  const [sessionTotalCount, setSessionTotalCount] = useState<number>(0);
-  const [currentStreak, setCurrentStreak] = useState<number>(0);
-  const [levelCompletionNotice, setLevelCompletionNotice] = useState<string | null>(null);
-
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // 音声読み上げ
-  const speakText = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
-  };
-
-  // 出題候補プールを取得する関数
-  const getCandidatePool = useCallback(
-    (cefr: CefrLevel, mode: DrillFilterMode, type: 'assembly' | 'comprehension', scope: DrillTargetScope) => {
-      const state = loadMasteryState();
-      const patternList = (scope === 'all' || scope === 'pattern') ? getPatternsByLevel(cefr) : [];
-      const vocabList = (scope === 'all' || scope === 'vocab') ? getVocabMasterByLevel(cefr) : [];
-
-      const filteredPatterns: PatternMasterItem[] = [];
-      const filteredVocabs: VocabMasterItem[] = [];
-
-      // 構文のフィルタリング
-      patternList.forEach((p) => {
-        const m = state.patterns[p.id];
-        const status = type === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
-        if (mode === 'unseen') {
-          if (!m || !status || status === 'unseen') filteredPatterns.push(p);
-        } else if (mode === 'lapsed') {
-          if (m && (status === 'lapsed' || ((m.mistakeCount || 0) > 0 && status !== 'mastered'))) {
-            filteredPatterns.push(p);
-          }
-        } else {
-          filteredPatterns.push(p);
-        }
-      });
-
-      // 単語のフィルタリング
-      vocabList.forEach((v) => {
-        const m = state.vocabs[v.id.toLowerCase()] || state.vocabs[v.phrase.toLowerCase()];
-        const status = type === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
-        if (mode === 'unseen') {
-          if (!m || !status || status === 'unseen') filteredVocabs.push(v);
-        } else if (mode === 'lapsed') {
-          if (m && (status === 'lapsed' || ((m.mistakeCount || 0) > 0 && status !== 'mastered'))) {
-            filteredVocabs.push(v);
-          }
-        } else {
-          filteredVocabs.push(v);
-        }
-      });
-
-      // 該当なしの場合は全体プールにフォールバック
-      const finalPatterns = filteredPatterns.length > 0 ? filteredPatterns : patternList;
-      const finalVocabs = filteredVocabs.length > 0 ? filteredVocabs : vocabList;
-
-      return {
-        patterns: finalPatterns,
-        vocabs: finalVocabs,
-        isLevelCompleted:
-          mode === 'unseen' &&
-          filteredPatterns.length === 0 &&
-          filteredVocabs.length === 0 &&
-          (patternList.length > 0 || vocabList.length > 0),
-      };
-    },
-    []
-  );
-
-  // バックグラウンド先行生成キューの補充ワーカー
-  const refillQueue = useCallback(async () => {
-    if (isRefillingRef.current) return;
-    isRefillingRef.current = true;
-
-    try {
-      let currentQueue = [...drillQueue];
-
-      while (currentQueue.length < QUEUE_TARGET_SIZE) {
-        const { patterns, vocabs, isLevelCompleted } = getCandidatePool(
-          selectedCefr,
-          filterMode,
-          drillType,
-          targetScope
-        );
-
-        if (isLevelCompleted) {
-          setLevelCompletionNotice(`🎉 おめでとうございます！ ${selectedCefr} レベルの対象項目はすべて確認済みです！`);
-        } else {
-          setLevelCompletionNotice(null);
-        }
-
-        if (patterns.length === 0 && vocabs.length === 0) {
-          break;
-        }
-
-        // キュー内・出題中にあるIDを除外して候補を抽出
-        const activeIds = new Set<string>();
-        if (currentDrillItem) activeIds.add(currentDrillItem.item.id);
-        currentQueue.forEach((q) => activeIds.add(q.item.id));
-
-        const availablePatterns = patterns.filter((p) => !activeIds.has(p.id));
-        const availableVocabs = vocabs.filter((v) => !activeIds.has(v.id));
-
-        const usePatterns = availablePatterns.length > 0 ? availablePatterns : patterns;
-        const useVocabs = availableVocabs.length > 0 ? availableVocabs : vocabs;
-
-        // 構文か単語かをランダムに選択
-        let chooseType: 'pattern' | 'vocab' = 'pattern';
-        if (targetScope === 'pattern') chooseType = 'pattern';
-        else if (targetScope === 'vocab') chooseType = 'vocab';
-        else {
-          chooseType = usePatterns.length > 0 && useVocabs.length > 0
-            ? Math.random() < 0.5 ? 'pattern' : 'vocab'
-            : usePatterns.length > 0 ? 'pattern' : 'vocab';
-        }
-
-        const pickedItem = chooseType === 'pattern'
-          ? usePatterns[Math.floor(Math.random() * usePatterns.length)]
-          : useVocabs[Math.floor(Math.random() * useVocabs.length)];
-
-        if (!pickedItem) break;
-
-        // Gemini AIで動的生成
-        try {
-          const question = await generateDynamicDrillQuestion({
-            targetType: chooseType,
-            pattern: chooseType === 'pattern' ? (pickedItem as PatternMasterItem) : undefined,
-            vocab: chooseType === 'vocab' ? (pickedItem as VocabMasterItem) : undefined,
-            apiKey,
-            model: selectedModel,
-          });
-
-          const queueItem: DrillQueueItem = {
-            queueId: 'q_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-            targetType: chooseType,
-            item: pickedItem,
-            question,
-            generatedAt: Date.now(),
-          };
-
-          currentQueue = [...currentQueue, queueItem];
-          setDrillQueue(currentQueue);
-
-          // 画面に問題が表示されていない場合は即座にセット
-          setCurrentDrillItem((prev) => {
-            if (!prev) {
-              setIsQueueLoading(false);
-              return queueItem;
-            }
-            return prev;
-          });
-        } catch (genErr) {
-          LiveLogger.warn('quiz_drill', 'QUEUE_REFILL_ERROR', '先読み生成中にエラーが発生しました', { error: String(genErr) });
-          break;
-        }
-      }
-    } finally {
-      isRefillingRef.current = false;
-      setIsQueueLoading(false);
-    }
-  }, [drillQueue, currentDrillItem, selectedCefr, filterMode, drillType, targetScope, apiKey, selectedModel, getCandidatePool]);
-
-  // 設定やレベル変更時にキューをリセット（AI通信は開始ボタンを押すまで保留）
-  useEffect(() => {
-    setIsSessionActive(false);
-    setDrillQueue([]);
-    setCurrentDrillItem(null);
-    setIsQueueLoading(false);
-    setUserAnswer('');
-    setEvalResult(null);
-    setIsSavedToAnki(false);
-    setLastSavedCardIds(null);
-  }, [selectedCefr, filterMode, drillType, targetScope]);
-
-  // キューが少なくなった時に自動補充（セッション実行中のみ！）
-  useEffect(() => {
-    if (isSessionActive && drillQueue.length < QUEUE_TARGET_SIZE) {
-      refillQueue();
-    }
-  }, [isSessionActive, drillQueue.length, refillQueue]);
-
-  // 入力フォーカス
-  useEffect(() => {
-    if (!isEvaluating && !evalResult && currentDrillItem) {
-      inputRef.current?.focus();
-    }
-  }, [currentDrillItem, isEvaluating, evalResult]);
-
-  // 次の問題へ進む
-  const handleNext = useCallback(() => {
-    setUserAnswer('');
-    setEvalResult(null);
-    setIsSavedToAnki(false);
-    setLastSavedCardIds(null);
-
-    setDrillQueue((prevQueue) => {
-      if (prevQueue.length > 0) {
-        // 現在の問題を除去し、キューの先頭を次の問題に設定
-        const remaining = prevQueue.filter((q) => q.queueId !== currentDrillItem?.queueId);
-        if (remaining.length > 0) {
-          const next = remaining[0];
-          setCurrentDrillItem(next);
-          setIsQueueLoading(false);
-          return remaining.slice(1);
-        }
-      }
-      // キューが空の場合はローディング
-      setCurrentDrillItem(null);
-      setIsQueueLoading(true);
-      return [];
-    });
-  }, [currentDrillItem]);
-
-  // 判定実行
-  const handleSubmitAnswer = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!userAnswer.trim() || !currentDrillItem || isEvaluating) return;
-
-    setIsEvaluating(true);
-    const { item, targetType, question } = currentDrillItem;
-    const isPattern = targetType === 'pattern';
-    const pattern = isPattern ? (item as PatternMasterItem) : undefined;
-    const vocab = !isPattern ? (item as VocabMasterItem) : undefined;
-
-    try {
-      const promptJa = question.translationJa;
-      const modelSentence = question.sentenceEn;
-
-      const result = await evaluateDrillAnswerWithGemini({
-        promptJa,
-        targetItem: {
-          id: item.id,
-          name: isPattern ? pattern!.name : vocab!.phrase,
-          meaning: isPattern ? pattern!.meaning : vocab!.meaning,
-          focus: isPattern ? pattern!.focus : (vocab!.partOfSpeech || '単語'),
-          sampleSentences: [modelSentence],
-        },
-        drillType,
-        userAnswer: userAnswer.trim(),
-        apiKey,
-        model: selectedModel,
-      });
-
-      setEvalResult(result);
-      setSessionTotalCount((prev) => prev + 1);
-
-      if (result.result === 'correct') {
-        playCorrectSound();
-        setSessionCorrectCount((prev) => prev + 1);
-        setCurrentStreak((prev) => prev + 1);
-        speakText(result.correctedSentence || question.sentenceEn);
-
-        recordDrillResult({
-          itemId: item.id,
-          itemType: targetType,
-          drillType,
-          cefr: selectedCefr,
-          result: 'correct',
-          userResponse: userAnswer.trim(),
-          feedback: result.feedback,
-          correctedSentence: result.correctedSentence,
-        });
-      } else {
-        // 不正解または惜しい場合
-        playWrongSound();
-        setCurrentStreak(0);
-        speakText(result.correctedSentence || question.sentenceEn);
-
-        recordDrillResult({
-          itemId: item.id,
-          itemType: targetType,
-          drillType,
-          cefr: selectedCefr,
-          result: 'wrong',
-          userResponse: userAnswer.trim(),
-          feedback: result.feedback,
-          correctedSentence: result.correctedSentence,
-          errorReason: result.errorReason,
-        });
-
-        // 💡 間違えた場合は自動でAnki復習カード（1文）に登録！
-        try {
-          const cardPair = saveSentenceCardWithSiblings({
-            sentence: result.correctedSentence || question.sentenceEn,
-            translation: question.translationJa,
-            focusType: isPattern ? 'pattern' : 'word',
-            focusWord: isPattern ? pattern!.name : vocab!.phrase,
-            focusMeaning: isPattern ? pattern!.meaning : vocab!.meaning,
-            corePatterns: isPattern ? [{
-              patternName: pattern!.name,
-              formula: pattern!.focus,
-              meaningTemplate: pattern!.meaning,
-              highlightTokens: question.targetTokens,
-              briefNote: pattern!.meaning,
-            }] : [],
-          });
-          setIsSavedToAnki(true);
-          setLastSavedCardIds({ id1: cardPair.card1.id, id2: cardPair.card2.id });
-        } catch (saveErr) {
-          console.error('Failed to auto-save to Anki', saveErr);
-        }
-      }
-    } catch (err) {
-      console.error('Drill evaluation failed', err);
-    } finally {
-      setIsEvaluating(false);
-    }
-  };
-
-  // わからない（ギブアップ）
-  const handleGiveUp = () => {
-    if (!currentDrillItem || isEvaluating) return;
-
-    setIsEvaluating(true);
-    const { item, targetType, question } = currentDrillItem;
-    const isPattern = targetType === 'pattern';
-    const pattern = isPattern ? (item as PatternMasterItem) : undefined;
-    const vocab = !isPattern ? (item as VocabMasterItem) : undefined;
-
-    const modelSentence = question.sentenceEn;
-    const result: EvaluateDrillResult = {
-      result: 'wrong',
-      feedback: isPattern
-        ? `正解の構文は【${pattern!.name}】です。公式: ${pattern!.focus}。模範解答を確認してAnkiに登録しましょう！`
-        : `ターゲット語彙は【${vocab!.phrase}】(${vocab!.meaning})です。模範解答を確認して復習しましょう！`,
-      correctedSentence: modelSentence,
-      errorReason: '未習得・ギブアップ',
-    };
-
-    setEvalResult(result);
-    setSessionTotalCount((prev) => prev + 1);
-    setCurrentStreak(0);
-    playWrongSound();
-    speakText(modelSentence);
-
-    recordDrillResult({
-      itemId: item.id,
-      itemType: targetType,
-      drillType,
-      cefr: selectedCefr,
-      result: 'wrong',
-      userResponse: '（ギブアップ）',
-      feedback: result.feedback,
-      correctedSentence: modelSentence,
-      errorReason: '未習得・ギブアップ',
-    });
-
-    // 自動でAnki復習カード（1文）に登録
-    try {
-      const cardPair = saveSentenceCardWithSiblings({
-        sentence: modelSentence,
-        translation: question.translationJa,
-        focusType: isPattern ? 'pattern' : 'word',
-        focusWord: isPattern ? pattern!.name : vocab!.phrase,
-        focusMeaning: isPattern ? pattern!.meaning : vocab!.meaning,
-        corePatterns: isPattern ? [{
-          patternName: pattern!.name,
-          formula: pattern!.focus,
-          meaningTemplate: pattern!.meaning,
-          highlightTokens: question.targetTokens,
-          briefNote: pattern!.meaning,
-        }] : [],
-      });
-      setIsSavedToAnki(true);
-      setLastSavedCardIds({ id1: cardPair.card1.id, id2: cardPair.card2.id });
-    } catch (saveErr) {
-      console.error('Failed to auto-save to Anki on give up', saveErr);
-    }
-
-    setIsEvaluating(false);
-  };
-
-  // 自動保存の取り消し
-  const handleUndoAnkiSave = () => {
-    if (!lastSavedCardIds) return;
-    try {
-      const currentVocabs = loadVocabs();
-      const filtered = currentVocabs.filter(
-        (v) => v.id !== lastSavedCardIds.id1 && v.id !== lastSavedCardIds.id2
-      );
-      saveVocabsBatch(filtered);
-      setIsSavedToAnki(false);
-      setLastSavedCardIds(null);
-    } catch (e) {
-      console.error('Failed to undo Anki save', e);
-    }
-  };
-
-  // キーボードショートカット (Enterで送信または次へ)
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      if (evalResult && (evalResult.result === 'correct' || evalResult.result === 'wrong')) {
-        handleNext();
-      }
-    }
-  };
-
-  const handleStartSession = () => {
-    setIsSessionActive(true);
-    setIsQueueLoading(true);
-    refillQueue();
-  };
-
-  const handleStopSession = () => {
-    setIsSessionActive(false);
-    setDrillQueue([]);
-    setCurrentDrillItem(null);
-    setIsQueueLoading(false);
-    setUserAnswer('');
-    setEvalResult(null);
-  };
-
-  // 全体進捗のサマリー計算
-  const masteryProgress = useMemo(() => {
+  // 1. Load Vocab Pool based on Level and Filter
+  const filteredVocabs = useMemo(() => {
+    const all = getVocabMasterByLevel(selectedCefr);
     const state = loadMasteryState();
-    const patterns = getPatternsByLevel(selectedCefr);
-    const vocabs = getVocabMasterByLevel(selectedCefr);
-    const total = (targetScope === 'vocab' ? 0 : patterns.length) + (targetScope === 'pattern' ? 0 : vocabs.length);
-    if (total === 0) return { mastered: 0, total: 0, percentage: 0 };
 
-    let mastered = 0;
-    if (targetScope === 'all' || targetScope === 'pattern') {
-      mastered += patterns.filter((p) => {
-        const m = state.patterns[p.id];
-        const status = drillType === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
-        return status === 'mastered' || m?.status === 'mastered';
-      }).length;
+    if (filterMode === 'unseen') {
+      return all.filter(v => {
+        const s = state.vocabs[v.phrase.toLowerCase()]?.status || state.vocabs[v.id]?.status;
+        return !s || s === 'unseen';
+      });
+    } else if (filterMode === 'lapsed') {
+      return all.filter(v => {
+        const s = state.vocabs[v.phrase.toLowerCase()]?.status || state.vocabs[v.id]?.status;
+        return s === 'lapsed';
+      });
+    }
+    return all;
+  }, [selectedCefr, filterMode, masteryStateVersion]);
+
+  // Reset index when level or filter changes
+  useEffect(() => {
+    setCurrentIndex(0);
+    setIsRevealed(false);
+  }, [selectedCefr, filterMode]);
+
+  const currentVocab: VocabMasterItem | undefined = filteredVocabs[currentIndex];
+
+  // Play audio for current word
+  const playWordAudio = useCallback((phrase?: string) => {
+    const target = phrase || currentVocab?.phrase;
+    if (target) {
+      speakText(target, 1.0, 'en-US');
+    }
+  }, [currentVocab]);
+
+  // Auto-play audio when a new word is shown
+  useEffect(() => {
+    if (currentVocab) {
+      playWordAudio(currentVocab.phrase);
+    }
+  }, [currentIndex, currentVocab?.id]);
+
+  // 2. Background Anki Card Generator Worker
+  useEffect(() => {
+    if (bgQueue.length === 0 || isProcessingRef.current || !apiKey) {
+      return;
     }
 
-    if (targetScope === 'all' || targetScope === 'vocab') {
-      mastered += vocabs.filter((v) => {
-        const m = state.vocabs[v.id.toLowerCase()] || state.vocabs[v.phrase.toLowerCase()];
-        const status = drillType === 'assembly' ? m?.assemblyStatus : m?.comprehensionStatus;
-        return status === 'mastered' || m?.status === 'mastered';
-      }).length;
-    }
+    const processNextBatch = async () => {
+      isProcessingRef.current = true;
 
-    return {
-      mastered,
-      total,
-      percentage: Math.round((mastered / total) * 100),
+      const batch = bgQueue.slice(0, 4);
+      try {
+        const reqItems = batch.map(v => ({
+          phrase: v.phrase,
+          partOfSpeech: v.partOfSpeech || '単語',
+          meaning: v.meaning,
+          cefr: v.cefr,
+        }));
+
+        const result = await generateVocabCardsBatchWithGemini(reqItems, apiKey, selectedModel);
+
+        if (result.cards && result.cards.length > 0) {
+          result.cards.forEach(card => {
+            saveSentenceCardWithSiblings({
+              sentence: card.sentence,
+              translation: card.translation,
+              focusType: 'word',
+              focusWord: card.phrase,
+              focusMeaning: card.meaning,
+              corePatterns: card.corePatterns,
+              importance: card.importance || 4,
+            });
+          });
+
+          setBgProcessedCount(prev => prev + result.cards.length);
+          if (onUpdateVocabs) {
+            onUpdateVocabs();
+          }
+        }
+      } catch (err) {
+        console.warn('Background Anki card generation error:', err);
+      } finally {
+        setBgQueue(prev => prev.slice(batch.length));
+        isProcessingRef.current = false;
+      }
     };
-  }, [selectedCefr, drillType, targetScope, evalResult]);
+
+    processNextBatch();
+  }, [bgQueue, apiKey, selectedModel, onUpdateVocabs]);
+
+  // 3. Handle Rating & Triage
+  const handleRate = useCallback((status: MasteryStatus, enqueueToAnki: boolean = false) => {
+    if (!currentVocab) return;
+
+    const state = loadMasteryState();
+    const prevStatus: MasteryStatus = state.vocabs[currentVocab.phrase.toLowerCase()]?.status || 'unseen';
+
+    // Update mastery status in storage
+    recordVocabMasteryStatus(currentVocab.phrase, status);
+    recordVocabMasteryStatus(currentVocab.id, status);
+
+    // If "🔴 もう一度" or "🟡 難しい", enqueue for background Anki card generation
+    if (enqueueToAnki) {
+      setBgQueue(prev => {
+        if (prev.some(v => v.id === currentVocab.id || v.phrase.toLowerCase() === currentVocab.phrase.toLowerCase())) {
+          return prev;
+        }
+        return [...prev, currentVocab];
+      });
+    }
+
+    // Record undo history
+    setHistory(prev => [
+      { vocab: currentVocab, prevStatus, newStatus: status, index: currentIndex },
+      ...prev.slice(0, 30),
+    ]);
+
+    // Update session stats
+    setSessionStats(prev => ({
+      mastered: status === 'mastered' ? prev.mastered + 1 : prev.mastered,
+      lapsed: status === 'lapsed' ? prev.lapsed + 1 : prev.lapsed,
+      exposed: status === 'exposed' ? prev.exposed + 1 : prev.exposed,
+    }));
+
+    // Advance to next word
+    setIsRevealed(false);
+    setCurrentIndex(prev => prev + 1);
+    setMasteryStateVersion(v => v + 1);
+  }, [currentVocab, currentIndex]);
+
+  // 4. Handle Undo (巻き戻し)
+  const handleUndo = useCallback(() => {
+    if (history.length === 0) return;
+
+    const [lastAction, ...restHistory] = history;
+    setHistory(restHistory);
+
+    // Revert status in storage
+    recordVocabMasteryStatus(lastAction.vocab.phrase, lastAction.prevStatus);
+    recordVocabMasteryStatus(lastAction.vocab.id, lastAction.prevStatus);
+
+    // Remove from bgQueue if pending
+    setBgQueue(prev => prev.filter(v => v.id !== lastAction.vocab.id && v.phrase !== lastAction.vocab.phrase));
+
+    // Revert index & state
+    setCurrentIndex(lastAction.index);
+    setIsRevealed(true);
+    setMasteryStateVersion(v => v + 1);
+  }, [history]);
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.code === 'Space' || e.code === 'Numpad0' || e.code === 'Digit0') {
+        e.preventDefault();
+        // ⚡ 絶対わかる (Instant skip from front, or rate mastered from back)
+        handleRate('mastered', false);
+      } else if (e.code === 'Enter' || e.code === 'ArrowDown') {
+        e.preventDefault();
+        setIsRevealed(prev => !prev);
+      } else if (e.code === 'Digit1' || e.code === 'Numpad1') {
+        e.preventDefault();
+        handleRate('lapsed', true); // 🔴 もう一度 (Ankiキューへ)
+      } else if (e.code === 'Digit2' || e.code === 'Numpad2') {
+        e.preventDefault();
+        handleRate('exposed', true); // 🟡 難しい (Ankiキューへ)
+      } else if (e.code === 'Digit3' || e.code === 'Numpad3') {
+        e.preventDefault();
+        handleRate('exposed', false); // 🔵 覚えた
+      } else if (e.code === 'Digit4' || e.code === 'Numpad4') {
+        e.preventDefault();
+        handleRate('exposed', false); // 🟢 簡単
+      } else if (e.code === 'KeyZ' || e.code === 'Backspace') {
+        e.preventDefault();
+        handleUndo();
+      } else if (e.code === 'KeyR') {
+        e.preventDefault();
+        playWordAudio();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleRate, handleUndo, playWordAudio]);
+
+  const totalCount = filteredVocabs.length;
+  const progressPercent = totalCount > 0 ? Math.round((currentIndex / totalCount) * 100) : 100;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-20 px-3 sm:px-4 animate-fadeIn">
-      {/* 1. Header & Quick Controls */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="max-w-3xl mx-auto space-y-5 py-4 sm:py-6 animate-fadeIn pb-32">
+      {/* 1. Top Control & Mode Selector Bar */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-2xl backdrop-blur-xl space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center space-x-3">
-            <div className="p-3 bg-gradient-to-tr from-amber-500 to-orange-500 rounded-2xl shadow-lg shadow-orange-500/20 text-white">
-              <Zap className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 via-orange-600 to-rose-500 flex items-center justify-center text-white shadow-lg shadow-amber-500/20">
+              <Flame className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                  瞬間英作文・構文スピードドリル
+              <div className="flex items-center gap-2">
+                <h1 className="text-base sm:text-lg font-bold text-white">
+                  高速単語ドリル
                 </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                  {selectedCefr}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                  未知潰し特化
                 </span>
-                {drillQueue.length > 0 && (
-                  <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <Sparkles className="w-2.5 h-2.5" />
-                    {drillQueue.length + 1}問待機中
-                  </span>
-                )}
               </div>
-              <p className="text-xs sm:text-sm text-slate-400 font-medium">
-                {drillType === 'assembly' ? '日本語を見て瞬時に英語を組み立てる' : '英文を見て意味を即座に理解する'}
+              <p className="text-xs text-slate-400">
+                単語を高速トリアージ。知らん単語は裏でAnkiに自動生成蓄積！
               </p>
             </div>
           </div>
 
-          {/* Streak & Score */}
-          <div className="flex items-center space-x-3">
-            {sessionTotalCount > 0 && (
-              <span className="text-xs text-slate-400 font-bold bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
-                {sessionCorrectCount} / {sessionTotalCount} 問正解
-              </span>
-            )}
-
-            {currentStreak > 1 && (
-              <div className="flex items-center space-x-1 px-3 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-amber-400 text-xs font-bold animate-pulse">
-                <Flame className="w-3.5 h-3.5" />
-                <span>{currentStreak} 連問正解!</span>
+          {/* Background Anki Queue Indicator */}
+          <div className="flex items-center gap-2">
+            {bgQueue.length > 0 ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/80 border border-purple-500/40 text-purple-300 text-xs font-bold animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Anki生成中: 残り {bgQueue.length} 語</span>
               </div>
-            )}
+            ) : bgProcessedCount > 0 ? (
+              <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 text-xs font-bold rounded-xl">
+                <Check className="w-3.5 h-3.5" />
+                <span>Anki {bgProcessedCount} 語 蓄積済</span>
+              </div>
+            ) : null}
 
-            <button
-              type="button"
-              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-colors border border-slate-700"
-              title="設定"
-            >
-              <Settings2 className="w-4 h-4" />
-            </button>
+            {onNavigateToAnki && (
+              <button
+                onClick={onNavigateToAnki}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition-all cursor-pointer"
+              >
+                <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Ankiへ</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Collapsible Settings Drawer */}
-        {isSettingsOpen && (
-          <div className="pt-3 border-t border-slate-800 space-y-3 animate-fadeIn">
-            <div className="flex flex-wrap items-center gap-3">
-              {/* CEFR Level Tabs */}
-              <div className="flex items-center space-x-1">
-                {(['A1', 'A2', 'B1', 'B2', 'C1'] as CefrLevel[]).map((lvl) => (
-                  <button
-                    key={lvl}
-                    type="button"
-                    onClick={() => setSelectedCefr(lvl)}
-                    className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                      selectedCefr === lvl
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    {lvl}
-                  </button>
-                ))}
-              </div>
-
-              {/* Mode Toggle */}
-              <div className="flex items-center space-x-1 border-l border-slate-800 pl-3">
-                <button
-                  type="button"
-                  onClick={() => setDrillType('assembly')}
-                  className={`flex items-center space-x-1 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                    drillType === 'assembly'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-                  }`}
-                >
-                  <PenTool className="w-3 h-3" />
-                  <span>✍️ 組立</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDrillType('comprehension')}
-                  className={`flex items-center space-x-1 px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                    drillType === 'comprehension'
-                      ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
-                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-                  }`}
-                >
-                  <BookOpen className="w-3 h-3" />
-                  <span>📖 理解</span>
-                </button>
-              </div>
-
-              {/* Target Scope Toggle */}
-              <div className="flex items-center space-x-1 border-l border-slate-800 pl-3">
-                <span className="text-xs font-bold text-slate-400 mr-1">対象:</span>
-                <select
-                  value={targetScope}
-                  onChange={(e) => setTargetScope(e.target.value as DrillTargetScope)}
-                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-1 font-semibold focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="all">⚡ 構文 ＋ 重要単語 (総合)</option>
-                  <option value="pattern">📐 構文・文法ルールのみ</option>
-                  <option value="vocab">📚 重要単語・表現のみ</option>
-                </select>
-              </div>
-
-              {/* Filter */}
-              <div className="flex items-center space-x-1.5 border-l border-slate-800 pl-3">
-                <span className="text-xs font-bold text-slate-400 mr-1">出題:</span>
-                <select
-                  value={filterMode}
-                  onChange={(e) => setFilterMode(e.target.value as DrillFilterMode)}
-                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-1 font-semibold focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="unseen">🚀 未着手を高速仕分け（推奨）</option>
-                  <option value="lapsed">🔥 苦手・ミスを再挑戦</option>
-                  <option value="all">🎲 おまかせ出題</option>
-                </select>
-              </div>
-            </div>
+        {/* Level & Filter Selector Grid */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-800/80">
+          {/* CEFR Level Tabs */}
+          <div className="flex items-center space-x-1 p-1 bg-slate-950 rounded-2xl border border-slate-800">
+            {(['A1', 'A2', 'B1', 'B2'] as CefrLevel[]).map(lvl => (
+              <button
+                key={lvl}
+                onClick={() => setSelectedCefr(lvl)}
+                className={`px-3 py-1 rounded-xl text-xs font-bold font-mono transition-all cursor-pointer ${
+                  selectedCefr === lvl
+                    ? 'bg-amber-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {lvl}
+              </button>
+            ))}
           </div>
-        )}
+
+          {/* Filter Mode Tabs */}
+          <div className="flex items-center space-x-1 p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs">
+            {[
+              { key: 'unseen', label: '未遭遇のみ (未知潰し)' },
+              { key: 'lapsed', label: '要復習のみ' },
+              { key: 'all', label: '全単語' },
+            ].map(f => (
+              <button
+                key={f.key}
+                onClick={() => setFilterMode(f.key as DrillFilterMode)}
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                  filterMode === f.key
+                    ? 'bg-slate-800 text-amber-300 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Level Completion Notice */}
-      {levelCompletionNotice && (
-        <div className="bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/30 rounded-2xl p-4 text-emerald-300 text-xs font-semibold flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{levelCompletionNotice}</span>
-        </div>
-      )}
-
-      {/* 2. Main Question Arena */}
-      {!isSessionActive ? (
-        /* Start Setup Card (No AI communication until user clicks button!) */
-        <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-6 shadow-2xl animate-fadeIn">
-          <div className="w-20 h-20 bg-gradient-to-tr from-amber-500/20 to-orange-500/20 text-amber-400 border border-amber-500/30 rounded-3xl flex items-center justify-center mx-auto shadow-xl shadow-amber-500/10">
-            <Zap className="w-10 h-10 fill-amber-400" />
+      {/* 2. Main Flashcard Area */}
+      {!currentVocab || currentIndex >= totalCount ? (
+        /* Completion Screen */
+        <div className="bg-slate-900/95 border border-amber-500/30 rounded-3xl p-8 sm:p-12 text-center shadow-2xl space-y-6">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-amber-500 via-orange-500 to-emerald-500 flex items-center justify-center mx-auto shadow-xl shadow-amber-500/20">
+            <Trophy className="w-8 h-8 text-white" />
           </div>
 
-          <div className="space-y-2 max-w-lg mx-auto">
+          <div className="space-y-2">
+            <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-xs">
+              {selectedCefr} {filterMode === 'unseen' ? '未遭遇単語' : ''} ドリル完了
+            </span>
             <h2 className="text-2xl sm:text-3xl font-black text-white">
-              瞬間英作文・構文スピードドリル
+              すべての単語を仕分け切りました！🎉
             </h2>
-            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              あなたの習熟度マスターデータから、{selectedCefr} レベルの
-              <strong className="text-amber-300 ml-1">
-                {targetScope === 'pattern' ? '構文マスター' : targetScope === 'vocab' ? '重要語彙' : '構文＆単語'}
-              </strong>
-              を出題します。下のボタンを押すとAIが出題を生成・開始します。
+            <p className="text-sm text-slate-300 max-w-md mx-auto">
+              今回のセッションで「⚡ 絶対わかる」にした単語は完全に卒業し、分からなかった単語は裏でAnkiデッキに自動蓄積されています。
             </p>
           </div>
 
-          {/* Quick Config Summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg mx-auto pt-2">
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-              <span className="text-[11px] text-slate-400 font-bold">対象レベル</span>
-              <div className="text-lg font-black text-white font-mono">{selectedCefr}</div>
+          <div className="grid grid-cols-3 gap-3 max-w-sm mx-auto p-4 bg-slate-950/80 rounded-2xl border border-slate-800 text-xs">
+            <div className="text-center">
+              <span className="text-slate-400 block text-[10px]">⚡ 卒業</span>
+              <span className="text-lg font-black text-amber-300 font-mono">{sessionStats.mastered}</span>
             </div>
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-              <span className="text-[11px] text-slate-400 font-bold">ドリル形式</span>
-              <div className="text-lg font-black text-indigo-300 font-mono">
-                {drillType === 'assembly' ? '瞬間英作文' : '英語読解'}
-              </div>
+            <div className="text-center">
+              <span className="text-slate-400 block text-[10px]">🔴 要復習(Anki)</span>
+              <span className="text-lg font-black text-rose-400 font-mono">{sessionStats.lapsed}</span>
             </div>
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 col-span-2 sm:col-span-1">
-              <span className="text-[11px] text-slate-400 font-bold">習得進捗</span>
-              <div className="text-lg font-black text-emerald-400 font-mono">
-                {masteryProgress.percentage}%
-              </div>
+            <div className="text-center">
+              <span className="text-slate-400 block text-[10px]">🔵 覚えた/簡単</span>
+              <span className="text-lg font-black text-cyan-400 font-mono">{sessionStats.exposed}</span>
             </div>
           </div>
 
-          {/* Start CTA Button */}
-          <div className="pt-3">
+          <div className="pt-2 flex flex-wrap justify-center gap-3">
             <button
-              type="button"
-              onClick={handleStartSession}
-              className="flex items-center space-x-2.5 px-8 py-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 rounded-2xl text-base sm:text-lg font-black shadow-xl shadow-orange-500/25 transition-all mx-auto active:scale-95 cursor-pointer"
+              onClick={() => {
+                setCurrentIndex(0);
+                setIsRevealed(false);
+                setFilterMode('all');
+              }}
+              className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
             >
-              <Zap className="w-5 h-5 fill-slate-950" />
-              <span>▶️ ドリルを開始する（AI問題生成）</span>
+              全単語で再挑戦
             </button>
+            {onNavigateToAnki && (
+              <button
+                onClick={onNavigateToAnki}
+                className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black shadow-lg shadow-cyan-600/30 transition-all cursor-pointer"
+              >
+                Ankiで無心フラッシュカード復習へ 🚀
+              </button>
+            )}
           </div>
         </div>
-      ) : isQueueLoading && !currentDrillItem ? (
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-12 shadow-2xl text-center space-y-4">
-          <RefreshCw className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
-          <div className="space-y-1">
-            <h3 className="text-lg font-bold text-white">AI先行出題キューを準備中...</h3>
-            <p className="text-xs text-slate-400">
-              未遭遇の{targetScope === 'vocab' ? '単語' : targetScope === 'pattern' ? '構文' : '構文・単語'}から自然な会話問題をバックグラウンド生成しています
-            </p>
-          </div>
-        </div>
-      ) : currentDrillItem ? (
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-          {/* Card Category Header */}
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-            <div className="flex items-center space-x-2">
-              <span className="px-2.5 py-0.5 rounded-lg bg-indigo-950/80 text-indigo-300 text-xs font-bold border border-indigo-500/30 flex items-center gap-1">
-                {currentDrillItem.targetType === 'pattern' ? (
-                  <>
-                    <Layers className="w-3 h-3 text-indigo-400" />
-                    <span>{(currentDrillItem.item as PatternMasterItem).categoryLabel || '文法・構文'}</span>
-                  </>
-                ) : (
-                  <>
-                    <BookOpen className="w-3 h-3 text-emerald-400" />
-                    <span>重要単語・イディオム</span>
-                  </>
-                )}
+      ) : (
+        /* Active Card */
+        <div className="space-y-4">
+          {/* Progress Bar & Counter */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 shadow-lg space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-300 flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-mono font-bold">
+                  {currentIndex + 1} / {totalCount} 語
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  ({selectedCefr} レベル)
+                </span>
               </span>
 
-              <span className="text-xs font-semibold text-slate-400">
-                {currentDrillItem.targetType === 'pattern'
-                  ? (currentDrillItem.item as PatternMasterItem).name
-                  : (currentDrillItem.item as VocabMasterItem).phrase}
-              </span>
+              <div className="flex items-center gap-3">
+                {history.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleUndo}
+                    className="flex items-center space-x-1 text-slate-400 hover:text-amber-300 transition-colors cursor-pointer text-[11px]"
+                    title="直前の判定を取り消す (Zキー)"
+                  >
+                    <Undo2 className="w-3.5 h-3.5" />
+                    <span>1つ戻る (Z)</span>
+                  </button>
+                )}
+                <span className="text-[11px] text-amber-300 font-mono font-bold">
+                  {progressPercent}%
+                </span>
+              </div>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <span className="text-xs text-slate-500 font-medium hidden sm:inline">
-                {selectedCefr} レベル
+            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+              <div
+                className="bg-gradient-to-r from-amber-400 via-orange-500 to-rose-400 h-full transition-all duration-200"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Big Flashcard Body */}
+          <div
+            onClick={() => setIsRevealed(prev => !prev)}
+            className="bg-slate-950/90 border border-slate-800 hover:border-slate-700 rounded-3xl p-6 sm:p-10 space-y-6 text-center shadow-2xl relative overflow-hidden min-h-[300px] flex flex-col justify-center cursor-pointer transition-all group"
+          >
+            {/* Top info row */}
+            <div className="flex items-center justify-between">
+              <span className="px-2.5 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-800 text-[11px] font-mono">
+                {currentVocab.partOfSpeech || '単語'}
               </span>
+
               <button
                 type="button"
-                onClick={handleStopSession}
-                className="px-3 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-colors"
-                title="ドリルを中断して設定画面に戻る"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  playWordAudio();
+                }}
+                className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-cyan-400 border border-slate-800 transition-all cursor-pointer shadow-sm active:scale-95"
+                title="発音を再生 (Rキー)"
               >
-                ⏸️ 終了・設定へ
+                <Volume2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Front: English Word */}
+            <div className="space-y-2 py-4">
+              <h2 className="text-3xl sm:text-5xl font-black text-white font-serif tracking-wide group-hover:scale-[1.02] transition-transform">
+                {currentVocab.phrase}
+              </h2>
+            </div>
+
+            {/* Back: Japanese Meaning */}
+            {isRevealed ? (
+              <div className="p-5 sm:p-6 bg-slate-900/90 border border-amber-500/30 rounded-2xl space-y-2 animate-fadeIn shadow-lg">
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">
+                  【日本語の意味】
+                </span>
+                <p className="text-xl sm:text-2xl font-black text-amber-200">
+                  {currentVocab.meaning}
+                </p>
+              </div>
+            ) : (
+              <div className="py-4 text-xs font-bold text-slate-500 group-hover:text-slate-400 flex items-center justify-center gap-1.5 transition-colors">
+                <Eye className="w-4 h-4 text-slate-500" />
+                <span>タップ または Enter で訳を表示（知っていればそのまま Space でスキップ！）</span>
+              </div>
+            )}
+          </div>
+
+          {/* 3. Action Buttons */}
+          <div className="space-y-2.5">
+            {/* ⚡ 絶対わかる (Instant Master / Skip Button) - Full width, top prominence */}
+            <button
+              type="button"
+              onClick={() => handleRate('mastered', false)}
+              className="w-full flex items-center justify-center space-x-2 py-3.5 px-6 rounded-2xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-400 text-slate-950 text-sm sm:text-base font-black shadow-xl shadow-amber-500/25 transition-all active:scale-[0.98] cursor-pointer"
+            >
+              <Zap className="w-5 h-5 fill-slate-950" />
+              <span>⚡ 絶対わかる（完全習得・今後出題不要） [Space / 0]</span>
+            </button>
+
+            {/* 4-grade Anki buttons */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => handleRate('lapsed', true)}
+                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-rose-950/50 hover:bg-rose-900/60 border border-rose-500/40 text-rose-300 hover:text-white text-xs font-bold transition-all active:scale-95 cursor-pointer space-y-1 shadow-md"
+              >
+                <div className="flex items-center gap-1">
+                  <span>🔴 もう一度</span>
+                  <span className="font-mono text-[10px] text-rose-400">[1]</span>
+                </div>
+                <span className="text-[10px] text-rose-400/80 font-normal">Ankiカード自動生成</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleRate('exposed', true)}
+                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 text-amber-300 hover:text-white text-xs font-bold transition-all active:scale-95 cursor-pointer space-y-1 shadow-md"
+              >
+                <div className="flex items-center gap-1">
+                  <span>🟡 難しい</span>
+                  <span className="font-mono text-[10px] text-amber-400">[2]</span>
+                </div>
+                <span className="text-[10px] text-amber-400/80 font-normal">Ankiカード自動生成</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleRate('exposed', false)}
+                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-sky-950/50 hover:bg-sky-900/60 border border-sky-500/40 text-sky-300 hover:text-white text-xs font-bold transition-all active:scale-95 cursor-pointer space-y-1 shadow-md"
+              >
+                <div className="flex items-center gap-1">
+                  <span>🔵 覚えた</span>
+                  <span className="font-mono text-[10px] text-sky-400">[3]</span>
+                </div>
+                <span className="text-[10px] text-sky-400/80 font-normal">定期復習へ</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleRate('exposed', false)}
+                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 hover:text-white text-xs font-bold transition-all active:scale-95 cursor-pointer space-y-1 shadow-md"
+              >
+                <div className="flex items-center gap-1">
+                  <span>🟢 簡単</span>
+                  <span className="font-mono text-[10px] text-emerald-400">[4]</span>
+                </div>
+                <span className="text-[10px] text-emerald-400/80 font-normal">間隔延長</span>
               </button>
             </div>
           </div>
-
-          {/* Question Prompt */}
-          <div className="space-y-3 text-center py-5">
-            <span className="text-xs font-bold text-slate-400 tracking-wider block">
-              {drillType === 'assembly'
-                ? '【この日本語を英語で表現してください】'
-                : '【この英文の意味を理解できますか？】'}
-            </span>
-            <div className="text-2xl sm:text-3xl font-extrabold text-white leading-snug tracking-tight min-h-[48px] flex items-center justify-center">
-              「{drillType === 'assembly'
-                ? currentDrillItem.question.translationJa.replace(/^[「『]|["』]$/g, '').trim()
-                : currentDrillItem.question.sentenceEn.replace(/^["']|["']$/g, '').trim()}」
-            </div>
-            {drillType === 'comprehension' && (
-              <div className="flex justify-center pt-1">
-                <button
-                  type="button"
-                  onClick={() => speakText(currentDrillItem.question.sentenceEn)}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full text-xs font-semibold transition-all"
-                >
-                  <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>発音を聴く</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Input & Action Section */}
-          {!evalResult ? (
-            <form onSubmit={handleSubmitAnswer} className="space-y-4">
-              <div className="relative">
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={userAnswer}
-                  onChange={(e) => setUserAnswer(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    drillType === 'assembly'
-                      ? '英語を入力（例: I used to live here...）'
-                      : '日本語の意味を入力、または頭の中で理解できたら「正解確認」'
-                  }
-                  disabled={isEvaluating}
-                  className="w-full bg-slate-950 border-2 border-slate-700 focus:border-indigo-500 rounded-2xl px-5 py-4 text-white placeholder-slate-500 text-base sm:text-lg font-medium outline-none transition-all shadow-inner"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleGiveUp}
-                  disabled={isEvaluating}
-                  className="px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 rounded-2xl text-xs sm:text-sm font-bold transition-all border border-slate-700"
-                >
-                  わからない（模範解答・Anki登録）
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={!userAnswer.trim() || isEvaluating}
-                  className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-2xl text-sm sm:text-base font-extrabold shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
-                >
-                  {isEvaluating ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>AI添削中...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>回答を判定</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          ) : (
-            /* Result Feedback Card */
-            <div
-              className={`rounded-2xl p-5 sm:p-6 space-y-4 border animate-fadeIn ${
-                evalResult.result === 'correct'
-                  ? 'bg-emerald-950/20 border-emerald-500/40'
-                  : 'bg-red-950/20 border-red-500/40'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center space-x-2.5">
-                  {evalResult.result === 'correct' ? (
-                    <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30">
-                      <CheckCircle2 className="w-6 h-6" />
-                    </div>
-                  ) : (
-                    <div className="p-2 bg-red-500/20 text-red-400 rounded-xl border border-red-500/30">
-                      <AlertCircle className="w-6 h-6" />
-                    </div>
-                  )}
-                  <div>
-                    <h3
-                      className={`text-lg font-black tracking-tight ${
-                        evalResult.result === 'correct' ? 'text-emerald-400' : 'text-red-400'
-                      }`}
-                    >
-                      {evalResult.result === 'correct' ? '🎉 完全正解！' : '惜しい！もう一歩'}
-                    </h3>
-                    {evalResult.errorReason && (
-                      <span className="text-xs text-slate-400 font-semibold">
-                        タグ: {evalResult.errorReason}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => speakText(evalResult.correctedSentence || currentDrillItem.question.sentenceEn)}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-all border border-slate-700"
-                  title="模範発音を聴く"
-                >
-                  <Volume2 className="w-4 h-4 text-cyan-400" />
-                </button>
-              </div>
-
-              {/* Model Sentence & Breakdown */}
-              <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-4 space-y-2">
-                <div className="text-xs font-bold text-slate-400">模範解答:</div>
-                <div className="text-base sm:text-lg font-extrabold text-white font-mono">
-                  {evalResult.correctedSentence || currentDrillItem.question.sentenceEn}
-                </div>
-                <div className="text-xs text-slate-400">
-                  訳: {currentDrillItem.question.translationJa}
-                </div>
-              </div>
-
-              {/* Feedback text */}
-              {evalResult.feedback && (
-                <div className="text-xs sm:text-sm text-slate-300 leading-relaxed bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
-                  <span className="font-bold text-indigo-300 mr-1.5">💡 AI解説:</span>
-                  {evalResult.feedback}
-                </div>
-              )}
-
-              {/* Auto Anki Registration Badge / Button */}
-              {evalResult.result === 'wrong' && (
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
-                  {isSavedToAnki ? (
-                    <div className="flex items-center gap-2 text-xs text-emerald-400 font-bold bg-emerald-950/40 border border-emerald-500/30 px-3 py-1.5 rounded-xl">
-                      <Check className="w-3.5 h-3.5" />
-                      <span>復習リスト（Anki）に自動登録しました</span>
-                      <button
-                        type="button"
-                        onClick={handleUndoAnkiSave}
-                        className="text-[11px] text-slate-400 hover:text-red-300 underline ml-2"
-                      >
-                        取り消す
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const { item, targetType, question } = currentDrillItem;
-                        const isPattern = targetType === 'pattern';
-                        const p = isPattern ? (item as PatternMasterItem) : undefined;
-                        const v = !isPattern ? (item as VocabMasterItem) : undefined;
-                        const pair = saveSentenceCardWithSiblings({
-                          sentence: evalResult.correctedSentence || question.sentenceEn,
-                          translation: question.translationJa,
-                          focusType: isPattern ? 'pattern' : 'word',
-                          focusWord: isPattern ? p!.name : v!.phrase,
-                          focusMeaning: isPattern ? p!.meaning : v!.meaning,
-                        });
-                        setIsSavedToAnki(true);
-                        setLastSavedCardIds({ id1: pair.card1.id, id2: pair.card2.id });
-                      }}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-bold transition-all"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Anki復習カードに手動保存</span>
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Next Action Bar */}
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={handleNext}
-                  className="flex items-center space-x-2 px-8 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-sm sm:text-base font-extrabold shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
-                >
-                  <span>次の問題へ (Enter)</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
         </div>
-      ) : null}
-
-      {/* 3. Progress Stats Footer */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between text-xs text-slate-400 font-semibold">
-        <div className="flex items-center space-x-2">
-          <Brain className="w-4 h-4 text-indigo-400" />
-          <span>{selectedCefr} 習得進捗:</span>
-          <span className="text-white font-mono">{masteryProgress.mastered} / {masteryProgress.total}</span>
-          <span className="text-indigo-400 font-mono">({masteryProgress.percentage}%)</span>
-        </div>
-
-        {onNavigateToAnki && (
-          <button
-            type="button"
-            onClick={onNavigateToAnki}
-            className="text-indigo-400 hover:text-indigo-300 hover:underline flex items-center gap-1"
-          >
-            <span>Anki復習デッキを開く</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
+      )}
     </div>
   );
 };

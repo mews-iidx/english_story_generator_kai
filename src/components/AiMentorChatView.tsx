@@ -1,23 +1,62 @@
-import { MarkdownRenderer } from './MarkdownRenderer';
-import React, { useState, useRef, useEffect } from 'react';
-import { enqueueMasteryScanTask } from '../services/cefrScanner';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ChatMessage, ChatSuggestedVocab } from '../types/chat';
-import { Bot, User, Send, Sparkles, RefreshCw, Trash2, Plus, Check, X } from 'lucide-react';
+import { MarkdownRenderer } from './MarkdownRenderer';
+import {
+  Send, Bot, User, Sparkles, Trash2, X, Plus, Check,
+  RefreshCw, Puzzle
+} from 'lucide-react';
 import { chatWithAiMentor } from '../services/gemini';
 import { loadDailySnapshots, loadMyGoal, computeLevelProgress, getWeakestPatterns } from '../services/storage';
+import { enqueueMasteryScanTask } from '../services/cefrScanner';
 
 interface AiMentorChatViewProps {
   apiKey: string;
   model?: string;
   messages: ChatMessage[];
   onSendMessage: (userText: string, replyText: string, suggestedVocabs: ChatSuggestedVocab[]) => void;
-  onAddToVocab: (phrase: string, meaning: string, contextSentence?: string) => void;
-  onClearChat: () => void;
+  onAddToVocab: (phrase: string, meaning: string, sentence?: string, note?: string) => void;
+  onSaveSentenceCard?: (params: {
+    sentence: string;
+    translation: string;
+    focusType: 'word' | 'pattern' | 'sentence';
+    focusWord?: string;
+    focusMeaning?: string;
+    importance?: number;
+  }) => void;
+  onClearChat?: () => void;
   onRecordTokenUsage: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases?: Set<string>;
   initialInput?: string;
   isOverlayMode?: boolean;
   onClose?: () => void;
+}
+
+// Extract primary English sentences from AI text for quick assembly card creation
+function extractEnglishSentenceCandidate(text: string): { sentence: string; translation: string } | null {
+  if (!text) return null;
+
+  // Match quotes with English sentence pattern
+  const quoteMatch = text.match(/["“']([A-Za-z0-9\s,.'!?-]{6,})["”']/);
+  if (quoteMatch && quoteMatch[1].trim().split(/\s+/).length >= 3) {
+    return {
+      sentence: quoteMatch[1].trim(),
+      translation: 'AIメンター相談フレーズ',
+    };
+  }
+
+  // Match English lines
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.replace(/^[-*•0-9.]+\s*/, '').replace(/[*_`]/g, '').trim();
+    if (/^[A-Z][A-Za-z0-9\s,.'!?-]{10,}[.!?]$/.test(trimmed)) {
+      return {
+        sentence: trimmed,
+        translation: 'AIメンター相談フレーズ',
+      };
+    }
+  }
+
+  return null;
 }
 
 export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
@@ -26,6 +65,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
   messages,
   onSendMessage,
   onAddToVocab,
+  onSaveSentenceCard,
   onClearChat,
   onRecordTokenUsage,
   savedVocabPhrases = new Set(),
@@ -35,6 +75,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 }) => {
   const [inputText, setInputText] = useState(initialInput);
   const [isLoading, setIsLoading] = useState(false);
+  const [savedCardMessageIds, setSavedCardMessageIds] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -54,7 +95,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     if (!inputText.trim() || isLoading) return;
 
     if (!apiKey) {
-      alert('Gemini APIキーが設定されていません。右上の「設定」からAPIキーを入力してください。');
+      alert('Gemini APIキーを設定してください。');
       return;
     }
 
@@ -118,22 +159,39 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
           text: `${query} ${res.replyText}`,
           userUtterances: [query],
         });
-      } catch (err) {
-        console.error('Failed to enqueue mentor scan task', err);
-      }
-    } catch (e: any) {
-      alert(`AIメンターエラー: ${e.message || e}`);
+      } catch (_) {}
+    } catch (err) {
+      console.error('Chat error:', err);
+      alert('AIとの通信中にエラーが発生しました。');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit();
     }
   };
+
+  // Quick save as Assembly Card (瞬間英作文・組立カード)
+  const handleSaveAssemblyCard = useCallback((messageId: string, aiText: string, userQueryText?: string) => {
+    if (!onSaveSentenceCard) return;
+
+    const candidate = extractEnglishSentenceCandidate(aiText);
+    const englishSentence = candidate?.sentence || aiText.split('\n')[0].replace(/[*_`]/g, '').trim();
+    const japanesePrompt = userQueryText || 'この表現を英語で組み立てる';
+
+    onSaveSentenceCard({
+      sentence: englishSentence,
+      translation: japanesePrompt,
+      focusType: 'sentence',
+      importance: 5,
+    });
+
+    setSavedCardMessageIds(prev => new Set([...prev, messageId]));
+  }, [onSaveSentenceCard]);
 
   return (
     <div className={`flex flex-col h-full ${isOverlayMode ? 'bg-slate-950' : 'max-w-4xl mx-auto px-2 sm:px-4 py-4 sm:py-6 h-[calc(100vh-4rem)]'}`}>
@@ -150,15 +208,15 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
                 パーソナル指導
               </span>
             </h1>
-            <p className="text-xs text-slate-400">文法・ニュアンス相談、苦手構文の特訓、学習ペースの相談</p>
+            <p className="text-xs text-slate-400">「〜ってどう言う？」相談 ➔ 瞬間英作文カードに即時登録</p>
           </div>
         </div>
 
         <div className="flex items-center space-x-1">
-          {messages.length > 0 && (
+          {messages.length > 0 && onClearChat && (
             <button
               onClick={onClearChat}
-              className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors"
+              className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
               title="チャット履歴をクリア"
             >
               <Trash2 className="w-4 h-4" />
@@ -167,7 +225,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
           {isOverlayMode && onClose && (
             <button
               onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
               title="閉じる"
             >
               <X className="w-5 h-5" />
@@ -186,14 +244,14 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
             <div className="space-y-1 max-w-sm">
               <h3 className="text-sm font-semibold text-slate-300">英語の疑問を何でも質問してください</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                「この構文のニュアンスの違いは？」「俺の苦手な構文って何？」「英語で〜ってどう言う？」など、AIメンターが親身に回答します。
+                「〜って言いたい時どう言う？」「このニュアンスの違いは？」と相談すると、AIが回答し、ワンタップでAnkiの瞬間英作文カードに登録できます。
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-2 pt-2 max-w-md">
               {[
-                '俺の苦手な構文って何だっけ？',
+                '「〜の予約を取りたいのですが」って英語でどう言う？',
                 '「used to」と「be used to」の違いを教えて',
-                '英語を頭から瞬時に読むコツは？',
+                '「念のため確認させてください」を自然に言いたい',
               ].map((suggestion, idx) => (
                 <button
                   key={idx}
@@ -201,7 +259,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
                     setInputText(suggestion);
                     inputRef.current?.focus();
                   }}
-                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs rounded-xl transition-colors text-left"
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs rounded-xl transition-colors text-left cursor-pointer"
                 >
                   💡 {suggestion}
                 </button>
@@ -209,85 +267,128 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
             </div>
           </div>
         ) : (
-          messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex items-start gap-3 ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              {m.sender === 'assistant' && (
-                <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shrink-0 mt-0.5">
-                  <Bot className="w-4 h-4" />
-                </div>
-              )}
+          messages.map((m, mIdx) => {
+            const prevUserMessage = mIdx > 0 && messages[mIdx - 1]?.sender === 'user' ? messages[mIdx - 1]?.text : undefined;
+            const isSavedAsAssembly = savedCardMessageIds.has(m.id);
 
+            return (
               <div
-                className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed space-y-2 ${
-                  m.sender === 'user'
-                    ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/20'
-                    : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
-                }`}
+                key={m.id}
+                className={`flex items-start gap-3 ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                {m.sender === 'user' ? (
-                  <div className="whitespace-pre-wrap">{m.text}</div>
-                ) : (
-                  <MarkdownRenderer content={m.text} />
+                {m.sender === 'assistant' && (
+                  <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shrink-0 mt-0.5">
+                    <Bot className="w-4 h-4" />
+                  </div>
                 )}
 
-                {/* AI回答から抽出された重要表現カード */}
-                {m.suggestedVocabs && m.suggestedVocabs.length > 0 && (
-                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
-                    <span className="text-[11px] font-bold text-amber-300 flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" />
-                      Anki・単語帳に登録推奨:
-                    </span>
-                    <div className="space-y-1">
-                      {m.suggestedVocabs.map((sv, idx) => {
-                        const isSaved = savedVocabPhrases.has(sv.phrase.trim().toLowerCase());
-                        return (
-                          <div
-                            key={idx}
-                            className="flex items-center justify-between p-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs"
-                          >
-                            <div>
-                              <span className="font-bold text-white font-mono">{sv.phrase}</span>
-                              <span className="text-slate-400 ml-2">{sv.meaning}</span>
-                            </div>
-                            <button
-                              onClick={() => onAddToVocab(sv.phrase, sv.meaning, m.text)}
-                              disabled={isSaved}
-                              className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors ${
-                                isSaved
-                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm'
-                              }`}
-                            >
-                              {isSaved ? (
-                                <>
-                                  <Check className="w-3 h-3" />
-                                  <span>登録済</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Plus className="w-3 h-3" />
-                                  <span>登録</span>
-                                </>
-                              )}
-                            </button>
+                <div
+                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed space-y-3 ${
+                    m.sender === 'user'
+                      ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/20'
+                      : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
+                  }`}
+                >
+                  {m.sender === 'user' ? (
+                    <div className="whitespace-pre-wrap">{m.text}</div>
+                  ) : (
+                    <MarkdownRenderer content={m.text} />
+                  )}
+
+                  {/* Assistant Action Buttons: Assembly Card & Vocab Suggestion */}
+                  {m.sender === 'assistant' && (
+                    <div className="pt-2 border-t border-slate-800 space-y-2">
+                      {/* 1. 🧩 瞬間英作文（組立カード）登録ボタン */}
+                      {onSaveSentenceCard && (
+                        <div className="flex items-center justify-between p-2 rounded-xl bg-gradient-to-r from-purple-950/60 to-indigo-950/60 border border-purple-500/30 text-xs">
+                          <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                            <Puzzle className="w-4 h-4 text-purple-400 shrink-0" />
+                            <span className="text-[11px] font-bold text-purple-200 truncate">
+                              瞬間英作文（組立カード）
+                            </span>
                           </div>
-                        );
-                      })}
+                          <button
+                            onClick={() => handleSaveAssemblyCard(m.id, m.text, prevUserMessage)}
+                            disabled={isSavedAsAssembly}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+                              isSavedAsAssembly
+                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 cursor-default'
+                                : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md active:scale-95'
+                            }`}
+                          >
+                            {isSavedAsAssembly ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Anki登録済</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Anki（日本語➔英語）に登録</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* 2. 単語帳登録推奨 */}
+                      {m.suggestedVocabs && m.suggestedVocabs.length > 0 && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            単語登録:
+                          </span>
+                          <div className="space-y-1">
+                            {m.suggestedVocabs.map((sv, idx) => {
+                              const isSaved = savedVocabPhrases.has(sv.phrase.trim().toLowerCase());
+                              return (
+                                <div
+                                  key={idx}
+                                  className="flex items-center justify-between p-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs"
+                                >
+                                  <div>
+                                    <span className="font-bold text-white font-mono">{sv.phrase}</span>
+                                    <span className="text-slate-400 ml-2">{sv.meaning}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => onAddToVocab(sv.phrase, sv.meaning, m.text)}
+                                    disabled={isSaved}
+                                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                                      isSaved
+                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                        : 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm'
+                                    }`}
+                                  >
+                                    {isSaved ? (
+                                      <>
+                                        <Check className="w-3.5 h-3.5" />
+                                        <span>登録済</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Plus className="w-3.5 h-3.5" />
+                                        <span>登録</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
+                  )}
+                </div>
+
+                {m.sender === 'user' && (
+                  <div className="w-8 h-8 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 shrink-0 mt-0.5">
+                    <User className="w-4 h-4" />
                   </div>
                 )}
               </div>
-
-              {m.sender === 'user' && (
-                <div className="w-8 h-8 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 shrink-0 mt-0.5">
-                  <User className="w-4 h-4" />
-                </div>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
 
         {isLoading && (
@@ -321,7 +422,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
           <button
             type="submit"
             disabled={!inputText.trim() || isLoading}
-            className="p-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 transition-all flex items-center justify-center shrink-0"
+            className="p-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 transition-all flex items-center justify-center shrink-0 cursor-pointer"
           >
             <Send className="w-4 h-4" />
           </button>
