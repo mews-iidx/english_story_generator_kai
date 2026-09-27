@@ -45,6 +45,8 @@ export interface VocabItem {
   targetSpeedRate?: number;   // 固定再生速度 (例: 0.8, 0.9, 1.0, 1.1, 1.2)
   markedTokens?: string[];    // 聞き取れずマークした単語・フレーズ
   englishExplanation?: string;// AIによる英語ニュアンス・音声変化の解説
+  speechPracticeCount?: number;   // 累計発話（オーバーラッピング/シャドーイング）回数
+  lastSpeechPracticedAt?: string;// 最終発話日時
 
   // Anki 兄弟カード (Sibling Cards) & 同日重複防止 (Burying)
   cardDirection?: 'en_to_ja' | 'ja_to_en'; // 'en_to_ja' (読解コンパイル) | 'ja_to_en' (瞬間英作文)

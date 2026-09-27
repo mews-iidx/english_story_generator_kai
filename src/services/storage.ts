@@ -2450,3 +2450,33 @@ export function saveListeningCard(params: SaveListeningCardParams): VocabItem {
   saveVocabsBatch(vocabs);
   return card;
 }
+
+export function recordAnkiSpeechPractice(params: {
+  vocabId: string;
+  subStep: 'overlapping' | 'shadowing';
+  sentenceText?: string;
+}): void {
+  const vocabs = loadVocabs();
+  const idx = vocabs.findIndex(v => v.id === params.vocabId);
+  const now = new Date().toISOString();
+
+  let sentence = params.sentenceText || '';
+  if (idx >= 0) {
+    vocabs[idx] = {
+      ...vocabs[idx],
+      speechPracticeCount: (vocabs[idx].speechPracticeCount || 0) + 1,
+      lastSpeechPracticedAt: now,
+    };
+    sentence = vocabs[idx].sentence || vocabs[idx].exampleSentence || vocabs[idx].phrase;
+    saveVocabsBatch(vocabs);
+  }
+
+  // Record into common speech practice log
+  recordSpeechPracticeEvent({
+    storyId: params.vocabId || 'anki_deck',
+    storyTitle: 'Ankiリスニングカード',
+    sentenceIdx: 0,
+    subStep: params.subStep,
+    sentenceText: sentence,
+  });
+}
