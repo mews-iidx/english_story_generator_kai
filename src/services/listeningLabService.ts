@@ -5,6 +5,7 @@ import {
   LabQuestionRecord,
   LabAnalyticsSummary,
   WordCountStat,
+  DailyLPHistory,
 } from '../types/listeningLab';
 import { LiveLogger } from './liveLogger';
 
@@ -63,6 +64,32 @@ export function splitIntoSmartChunks(sentenceEn: string, translationJa: string =
   ];
 }
 
+/**
+ * リスニング処理パワー (Listening Power: LP) の計算
+ * 式: 有効既知単語数 × 速度倍率 × (聞き取れた単語数 / 有効既知単語数)^2 × (10 / sqrt(再生回数))
+ * 未知語（isVocabGap）の場合はnullを返しベンチマーク対象外とする
+ */
+export function calculateListeningPower(params: {
+  wordCount: number;
+  speedRate: number;
+  missedSoundCount: number;
+  unknownVocabCount: number;
+  playCount: number;
+  isVocabGap?: boolean;
+}): number | null {
+  if (params.isVocabGap) {
+    return null; // 未知語による除外
+  }
+
+  const effectiveKnownWords = Math.max(1, params.wordCount - params.unknownVocabCount);
+  const heardWords = Math.max(0, effectiveKnownWords - params.missedSoundCount);
+  const accuracy = heardWords / effectiveKnownWords;
+  const playPenalty = Math.sqrt(Math.max(1, params.playCount));
+
+  const score = effectiveKnownWords * params.speedRate * Math.pow(accuracy, 2) * (10 / playPenalty);
+  return Math.round(score * 10) / 10;
+}
+
 export async function generateLabBatch(params: GenerateLabBatchParams): Promise<LabQuestion[]> {
   const {
     wordCount,
@@ -76,7 +103,6 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
     return getFallbackBatch(wordCount, count, cefrLevel);
   }
 
-  // シャッフルして異なるシチュエーションを抽出
   const shuffledSeeds = [...SITUATION_SEEDS].sort(() => Math.random() - 0.5);
   const selectedSituations = shuffledSeeds.slice(0, count);
 
@@ -242,20 +268,64 @@ export function calculateLabAnalytics(): LabAnalyticsSummary {
   const perfectCount = records.filter(r => r.isPerfect).length;
   const perfectPassRate = totalQuestions > 0 ? Math.round((perfectCount / totalQuestions) * 100) : 0;
 
-  // 直近20問の単語処理能力移動平均（完全理解時の単語数平均）
+  // 日付の計算
+  const todayStr = new Date().toISOString().split('T')[0];
+  const yesterday = new Date(Date.now() - 86400000);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+  // LPスコアを持つ有効レコード（未知語除外でないもの）
+  const validLPRecords = records.filter(r => typeof r.listeningPowerScore === 'number' && !r.isVocabGap);
+
+  // 日別のLP集計
+  const dailyMap: Record<string, { sumLP: number; count: number }> = {};
+  validLPRecords.forEach(r => {
+    const d = r.dateString || r.timestamp.split('T')[0];
+    if (!dailyMap[d]) {
+      dailyMap[d] = { sumLP: 0, count: 0 };
+    }
+    dailyMap[d].sumLP += (r.listeningPowerScore || 0);
+    dailyMap[d].count++;
+  });
+
+  const dailyHistory: DailyLPHistory[] = Object.entries(dailyMap)
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, 14)
+    .map(([dateString, stat]) => ({
+      dateString,
+      avgLP: stat.count > 0 ? Math.round((stat.sumLP / stat.count) * 10) / 10 : 0,
+      questionCount: stat.count,
+    }));
+
+  const todayStat = dailyMap[todayStr];
+  const todayAverageLP = todayStat && todayStat.count > 0 ? Math.round((todayStat.sumLP / todayStat.count) * 10) / 10 : 0;
+
+  const yesterdayStat = dailyMap[yesterdayStr];
+  const yesterdayAverageLP = yesterdayStat && yesterdayStat.count > 0 ? Math.round((yesterdayStat.sumLP / yesterdayStat.count) * 10) / 10 : 0;
+
+  const deltaVsYesterday = yesterdayAverageLP > 0 && todayAverageLP > 0
+    ? Math.round((todayAverageLP - yesterdayAverageLP) * 10) / 10
+    : 0;
+
+  // 直近7日間のLP移動平均 (最新の有効20問または直近7日の平均)
+  const recent7DayRecords = validLPRecords.slice(0, 30);
+  const movingAverageLP7Days = recent7DayRecords.length > 0
+    ? Math.round((recent7DayRecords.reduce((acc, r) => acc + (r.listeningPowerScore || 0), 0) / recent7DayRecords.length) * 10) / 10
+    : 0;
+
+  // 直近20問の単語処理能力移動平均
   const recent20 = records.slice(0, 20);
   let movingAverageWordCapacity = 0;
   if (recent20.length > 0) {
-    const sum = recent20.reduce((acc, r) => acc + (r.isPerfect ? r.wordCount : Math.max(0, r.wordCount - r.markedTokens.length)), 0);
+    const sum = recent20.reduce((acc, r) => acc + (r.isPerfect ? r.wordCount : Math.max(0, r.wordCount - (r.markedTokens?.length || 0))), 0);
     movingAverageWordCapacity = Math.round((sum / recent20.length) * 10) / 10;
   }
 
-  // 単語数別の達成率
+  // 単語数別の達成率 & 平均LP
   const wordCountStats: Record<number, WordCountStat> = {};
   for (const r of records) {
     const wc = r.wordCount;
     if (!wordCountStats[wc]) {
-      wordCountStats[wc] = { wordCount: wc, attempts: 0, perfectCount: 0, passRate: 0 };
+      wordCountStats[wc] = { wordCount: wc, attempts: 0, perfectCount: 0, passRate: 0, avgLP: 0 };
     }
     wordCountStats[wc].attempts++;
     if (r.isPerfect) {
@@ -264,15 +334,26 @@ export function calculateLabAnalytics(): LabAnalyticsSummary {
   }
 
   for (const wc of Object.keys(wordCountStats)) {
-    const s = wordCountStats[Number(wc)];
+    const numWc = Number(wc);
+    const s = wordCountStats[numWc];
     s.passRate = s.attempts > 0 ? Math.round((s.perfectCount / s.attempts) * 100) : 0;
+
+    const wcLPs = validLPRecords.filter(r => r.wordCount === numWc);
+    s.avgLP = wcLPs.length > 0
+      ? Math.round((wcLPs.reduce((a, r) => a + (r.listeningPowerScore || 0), 0) / wcLPs.length) * 10) / 10
+      : 0;
   }
 
   return {
     totalQuestions,
     perfectCount,
     perfectPassRate,
+    todayAverageLP,
+    yesterdayAverageLP,
+    deltaVsYesterday,
+    movingAverageLP7Days,
     movingAverageWordCapacity,
+    dailyHistory,
     wordCountStats,
     recentRecords: records.slice(0, 30),
   };

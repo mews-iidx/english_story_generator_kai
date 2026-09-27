@@ -8,6 +8,7 @@ import {
   deleteSpeechPracticeLog,
 } from '../services/storage';
 import { ReadingSessionLog, DailySnapshot, SpeechPracticeLog } from '../types/mastery';
+import { calculateLabAnalytics } from '../services/listeningLabService';
 import { VocabItem } from '../types/vocab';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
@@ -78,6 +79,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   stories = [],
 }) => {
   const [progressMode, setProgressMode] = useState<CefrProgressMode>('comprehension');
+  const labAnalytics = useMemo(() => calculateLabAnalytics(), []);
   const [timelineView, setTimelineView] = useState<CefrTimelineView>('realtime');
   const [isReadingLogOpen, setIsReadingLogOpen] = useState<boolean>(false);
   const [readingLogs, setReadingLogs] = useState<ReadingSessionLog[]>(() => loadReadingSessionLogs());
@@ -753,6 +755,121 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             )}
           </div>
         )}
+      </div>
+
+      {/* =================================================================
+          🎧 新生リスニング集中ラボ（帯域パワー & ベンチマーク分析）
+          ================================================================= */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+              <Headphones className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
+                <span>🎧 リスニング処理パワー (Listening Power: LP)</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
+                  純粋聴覚帯域
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                未知語（語彙不足）を除外し、純粋な音声変化知覚・ワーキングメモリのリアルタイム処理能力を計測
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Listening Lab Power KPIs */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">今日の平均パワー</span>
+            <div className="flex items-baseline space-x-1.5">
+              <span className="text-2xl font-black text-amber-300 font-mono">
+                {labAnalytics.todayAverageLP > 0 ? `${labAnalytics.todayAverageLP}` : '-'}
+              </span>
+              {labAnalytics.todayAverageLP > 0 && <span className="text-xs text-slate-400 font-normal">LP</span>}
+              {labAnalytics.deltaVsYesterday !== 0 && (
+                <span className={`text-[10px] font-bold ${labAnalytics.deltaVsYesterday > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {labAnalytics.deltaVsYesterday > 0 ? `+${labAnalytics.deltaVsYesterday}` : labAnalytics.deltaVsYesterday}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">7日間移動平均</span>
+            <div className="flex items-baseline space-x-1.5">
+              <span className="text-2xl font-black text-cyan-300 font-mono">
+                {labAnalytics.movingAverageLP7Days > 0 ? `${labAnalytics.movingAverageLP7Days}` : '-'}
+              </span>
+              {labAnalytics.movingAverageLP7Days > 0 && <span className="text-xs text-slate-400 font-normal">LP</span>}
+              <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">処理可能単語数 (移動平均)</span>
+            <div className="text-2xl font-black text-indigo-300 font-mono">
+              {labAnalytics.movingAverageWordCapacity > 0 ? `${labAnalytics.movingAverageWordCapacity}` : '-'}
+              <span className="text-xs font-normal text-slate-400 ml-1">語</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 font-bold">完全突破率 (マーク0)</span>
+            <div className="text-2xl font-black text-emerald-400 font-mono">
+              {labAnalytics.totalQuestions > 0 ? `${labAnalytics.perfectPassRate}%` : '-'}
+            </div>
+          </div>
+        </div>
+
+        {/* Word Length Breakdown & Daily Trend Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* A. 文長別の突破率 & 平均LP */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
+            <span className="text-xs font-bold text-slate-300 block">文長別の完全突破率 ＆ 平均パワー:</span>
+            {Object.keys(labAnalytics.wordCountStats).length > 0 ? (
+              <div className="space-y-2">
+                {Object.entries(labAnalytics.wordCountStats).map(([wc, stat]) => (
+                  <div key={wc} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
+                    <span className="font-mono font-bold text-cyan-300 w-16">{wc} 語文</span>
+                    <div className="flex-1 mx-3 h-2 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full"
+                        style={{ width: `${stat.passRate}%` }}
+                      />
+                    </div>
+                    <div className="text-right font-mono space-x-2">
+                      <span className="text-slate-400 text-[11px]">{stat.passRate}%</span>
+                      <strong className="text-amber-300">{stat.avgLP > 0 ? `${stat.avgLP} LP` : '-'}</strong>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 py-4 text-center">特訓を実施すると文長ごとのデータが表示されます</p>
+            )}
+          </div>
+
+          {/* B. 日次パワー推移 */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
+            <span className="text-xs font-bold text-slate-300 block">日次パワー推移（直近）:</span>
+            {labAnalytics.dailyHistory.length > 0 ? (
+              <div className="space-y-2">
+                {labAnalytics.dailyHistory.slice(0, 5).map(d => (
+                  <div key={d.dateString} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
+                    <span className="font-mono text-slate-300 font-bold">{d.dateString}</span>
+                    <span className="text-slate-400 font-mono">{d.questionCount} 問</span>
+                    <strong className="font-mono text-amber-300">{d.avgLP} LP</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 py-4 text-center">日別のパワーデータが蓄積されると推移が表示されます</p>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* 4. 🎧 初見リスニング・実効バンド幅 ＆ 要復習ボトルネック */}

@@ -7,11 +7,12 @@ import {
   BarChart3,
   Minus,
   Plus,
-  Zap,
   Volume2,
   BookmarkPlus,
   RefreshCw,
   Eye,
+  HelpCircle,
+  TrendingUp,
   X
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
@@ -20,8 +21,13 @@ import {
   generateLabBatch,
   saveLabQuestionRecord,
   calculateLabAnalytics,
+  calculateListeningPower,
 } from '../services/listeningLabService';
-import { saveListeningCard } from '../services/storage';
+import {
+  saveListeningCard,
+  saveSentenceCardWithSiblings,
+  enqueueBgVocabItem,
+} from '../services/storage';
 import { speakText, stopSpeech } from '../utils/speech';
 import confetti from 'canvas-confetti';
 
@@ -61,13 +67,15 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
 
   // Card Progress State
   const [isRevealed, setIsRevealed] = useState<boolean>(false);
-  const [markedIndices, setMarkedIndices] = useState<Set<number>>(new Set());
+  const [soundMissIndices, setSoundMissIndices] = useState<Set<number>>(new Set()); // 🔴 音の脱落
+  const [unknownVocabIndices, setUnknownVocabIndices] = useState<Set<number>>(new Set()); // 🟣 未知語
   const [playCount, setPlayCount] = useState<number>(0);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
 
   // Session Stats
   const [sessionPerfectCount, setSessionPerfectCount] = useState<number>(0);
-  const [sessionSavedCount, setSessionSavedCount] = useState<number>(0);
+  const [sessionSavedListeningCount, setSessionSavedListeningCount] = useState<number>(0);
+  const [sessionSavedVocabCount, setSessionSavedVocabCount] = useState<number>(0);
 
   // Analytics & Modal State
   const [analytics, setAnalytics] = useState<LabAnalyticsSummary>(() => calculateLabAnalytics());
@@ -75,14 +83,15 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
 
   const currentQuestion: LabQuestion | undefined = questions[currentIndex];
 
-  // 1. Fetch / Generate batch
+  // 1. Fetch / Generate batch (明示的にクリックされた時のみ実行)
   const handleGenerateBatch = useCallback(async (count = 5) => {
     stopSpeech();
     setIsGenerating(true);
     setIsSessionCompleted(false);
     setCurrentIndex(0);
     setIsRevealed(false);
-    setMarkedIndices(new Set());
+    setSoundMissIndices(new Set());
+    setUnknownVocabIndices(new Set());
     setPlayCount(0);
 
     try {
@@ -97,7 +106,6 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
 
       setQuestions(newQuestions);
       if (newQuestions.length > 0) {
-        // Auto play first question
         setTimeout(() => {
           speakText(newQuestions[0].sentenceEn, targetSpeedRate, 'en-US', () => setIsPlayingAudio(false));
           setIsPlayingAudio(true);
@@ -111,8 +119,6 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     }
   }, [targetWordCount, targetSpeedRate, targetCefrLevel, apiKey, selectedModel]);
 
-  // No auto-generation on mount (avoids token waste on tab preview)
-
   // 2. Play Audio
   const handlePlayAudio = useCallback((rate = targetSpeedRate) => {
     if (!currentQuestion) return;
@@ -124,30 +130,61 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     });
   }, [currentQuestion, targetSpeedRate]);
 
-  // 3. Toggle Word Marking
+  // 3. 3-State Word Chip Toggle: None -> 🔴 Sound Miss -> 🟣 Unknown Vocab -> None
   const handleToggleWordMark = (wordIdx: number) => {
-    setMarkedIndices(prev => {
-      const next = new Set(prev);
-      if (next.has(wordIdx)) {
+    if (soundMissIndices.has(wordIdx)) {
+      // 🔴 -> 🟣
+      setSoundMissIndices(prev => {
+        const next = new Set(prev);
         next.delete(wordIdx);
-      } else {
-        next.add(wordIdx);
-      }
-      return next;
-    });
+        return next;
+      });
+      setUnknownVocabIndices(prev => new Set(prev).add(wordIdx));
+    } else if (unknownVocabIndices.has(wordIdx)) {
+      // 🟣 -> None
+      setUnknownVocabIndices(prev => {
+        const next = new Set(prev);
+        next.delete(wordIdx);
+        return next;
+      });
+    } else {
+      // None -> 🔴
+      setSoundMissIndices(prev => new Set(prev).add(wordIdx));
+    }
   };
 
-  // 4. Complete Question Action
-  const handleCompleteQuestion = useCallback((isPerfect: boolean) => {
+  // 4. Action Handlers:
+  // A. 🟢 完璧に聴き取れた (100% LP)
+  // B. 🔴 音が聴き取れなかった (LP計算 + リスニング専用Anki)
+  // C. ❓ 単語を知らなかった (LP計算除外 + 通常単語Anki例文セット)
+  const handleCompleteQuestion = useCallback((actionType: 'perfect' | 'sound_miss' | 'unknown_vocab') => {
     if (!currentQuestion) return;
     stopSpeech();
 
-    const markedTokensList = Array.from(markedIndices)
+    const isVocabGap = actionType === 'unknown_vocab' || unknownVocabIndices.size > 0;
+    const isPerfect = actionType === 'perfect';
+
+    const soundMissList = Array.from(soundMissIndices)
       .sort((a, b) => a - b)
       .map(idx => currentQuestion.words[idx])
       .filter(Boolean);
 
-    // Save record to persistent storage
+    const unknownVocabList = Array.from(unknownVocabIndices)
+      .sort((a, b) => a - b)
+      .map(idx => currentQuestion.words[idx])
+      .filter(Boolean);
+
+    // LP (Listening Power) の算出（未知語除外時はnull）
+    const lpScore = calculateListeningPower({
+      wordCount: currentQuestion.words.length,
+      speedRate: targetSpeedRate,
+      missedSoundCount: soundMissList.length,
+      unknownVocabCount: unknownVocabList.length,
+      playCount: Math.max(1, playCount),
+      isVocabGap: actionType === 'unknown_vocab',
+    });
+
+    // 記録を永続ストレージに保存
     saveLabQuestionRecord({
       id: `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
@@ -157,26 +194,30 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       wordCount: currentQuestion.words.length,
       speedRate: targetSpeedRate,
       cefrLevel: targetCefrLevel,
-      markedTokens: markedTokensList,
+      markedTokens: soundMissList,
+      unknownVocabTokens: unknownVocabList,
+      isVocabGap,
+      playCount: Math.max(1, playCount),
+      listeningPowerScore: lpScore,
       isPerfect,
-      savedToAnki: !isPerfect,
+      savedToAnki: actionType !== 'perfect',
     });
 
-    if (isPerfect) {
+    if (actionType === 'perfect') {
       setSessionPerfectCount(prev => prev + 1);
-    } else {
-      // Save directly to Anki (Dedicated Listening Card)
+    } else if (actionType === 'sound_miss') {
+      // 🎧 リスニング専用Ankiへ保存（速度固定）
       saveListeningCard({
         sentence: currentQuestion.sentenceEn,
         translation: currentQuestion.translationJa,
-        markedTokens: markedTokensList,
+        markedTokens: soundMissList,
         targetSpeedRate: targetSpeedRate,
         englishExplanation: currentQuestion.englishExplanation || (currentQuestion.phoneticPoints ? `音声変化: ${currentQuestion.phoneticPoints}` : undefined),
         cefrLevel: targetCefrLevel,
         wordCount: currentQuestion.words.length,
       });
 
-      setSessionSavedCount(prev => prev + 1);
+      setSessionSavedListeningCount(prev => prev + 1);
       if (onListeningCardSaved) {
         onListeningCardSaved();
       }
@@ -184,6 +225,35 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       confetti({
         particleCount: 20,
         spread: 45,
+        origin: { y: 0.8 },
+      });
+    } else if (actionType === 'unknown_vocab') {
+      // 📖 通常Ankiへ例文セットで保存 (ドリル同様に即時保存 + BGキュー)
+      const primaryWord = unknownVocabList[0] || currentQuestion.words[0] || 'Unknown word';
+      saveSentenceCardWithSiblings({
+        sentence: currentQuestion.sentenceEn,
+        translation: currentQuestion.translationJa,
+        focusType: 'word',
+        focusWord: primaryWord,
+        focusMeaning: currentQuestion.translationJa,
+      });
+
+      // BG AI例文生成キューにも登録
+      enqueueBgVocabItem({
+        phrase: primaryWord,
+        partOfSpeech: '単語・表現',
+        meaning: currentQuestion.translationJa,
+        cefr: targetCefrLevel,
+      });
+
+      setSessionSavedVocabCount(prev => prev + 1);
+      if (onListeningCardSaved) {
+        onListeningCardSaved();
+      }
+
+      confetti({
+        particleCount: 25,
+        spread: 50,
         origin: { y: 0.8 },
       });
     }
@@ -196,7 +266,8 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       const nextIdx = currentIndex + 1;
       setCurrentIndex(nextIdx);
       setIsRevealed(false);
-      setMarkedIndices(new Set());
+      setSoundMissIndices(new Set());
+      setUnknownVocabIndices(new Set());
       setPlayCount(0);
 
       // Auto play next question
@@ -215,7 +286,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
         origin: { y: 0.6 },
       });
     }
-  }, [currentQuestion, markedIndices, targetSpeedRate, targetCefrLevel, currentIndex, questions, onListeningCardSaved]);
+  }, [currentQuestion, soundMissIndices, unknownVocabIndices, targetSpeedRate, targetCefrLevel, playCount, currentIndex, questions, onListeningCardSaved]);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -230,20 +301,26 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
         if (!isRevealed) {
           setIsRevealed(true);
         } else {
-          // If revealed, Enter triggers complete
-          handleCompleteQuestion(markedIndices.size === 0);
+          // If revealed, Enter triggers appropriate complete
+          if (unknownVocabIndices.size > 0) {
+            handleCompleteQuestion('unknown_vocab');
+          } else if (soundMissIndices.size > 0) {
+            handleCompleteQuestion('sound_miss');
+          } else {
+            handleCompleteQuestion('perfect');
+          }
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isRevealed, markedIndices, handlePlayAudio, handleCompleteQuestion]);
+  }, [isRevealed, soundMissIndices, unknownVocabIndices, handlePlayAudio, handleCompleteQuestion]);
 
   return (
     <div className="max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-6 pb-28 animate-fadeIn">
-      {/* 1. Header & Live Word Capacity Metrics */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+      {/* 1. Top Power & Benchmark KPI Card (常時表示) */}
+      <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
@@ -255,37 +332,68 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                   リスニング集中ラボ
                 </h1>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                  帯域筋トレ
+                  帯域パワー特訓
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                単語数 × 難易度 × 速度で聴覚ワーキングメモリを拡張する
+                純粋な聴覚ワーキングメモリ・音声知覚パワー（LP）を拡張する
               </p>
             </div>
           </div>
 
-          {/* Quick Metrics Badge */}
-          <div className="flex items-center space-x-2">
-            <div className="px-3 py-1.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center space-x-2 text-xs">
-              <Zap className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-slate-400">処理能力:</span>
-              <strong className="text-amber-300 font-mono">
-                {analytics.movingAverageWordCapacity > 0 ? `${analytics.movingAverageWordCapacity}語` : '測定中'}
-              </strong>
-            </div>
+          <button
+            onClick={() => setIsAnalyticsOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-2xl bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-colors text-xs self-start sm:self-auto"
+            title="詳細分析を見る"
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="font-bold">分析詳細</span>
+          </button>
+        </div>
 
-            <button
-              onClick={() => setIsAnalyticsOpen(true)}
-              className="p-2 rounded-2xl bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800 transition-colors"
-              title="詳細分析を見る"
-            >
-              <BarChart3 className="w-4 h-4 text-cyan-400" />
-            </button>
+        {/* Live Power Metrics Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+          <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl">
+            <span className="text-[10px] text-slate-400 block font-bold">今日の平均パワー</span>
+            <div className="flex items-baseline space-x-1.5 mt-0.5">
+              <strong className="text-lg sm:text-xl font-black text-amber-300 font-mono">
+                {analytics.todayAverageLP > 0 ? `${analytics.todayAverageLP} LP` : '-'}
+              </strong>
+              {analytics.deltaVsYesterday !== 0 && (
+                <span className={`text-[10px] font-bold ${analytics.deltaVsYesterday > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {analytics.deltaVsYesterday > 0 ? `+${analytics.deltaVsYesterday}` : analytics.deltaVsYesterday}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl">
+            <span className="text-[10px] text-slate-400 block font-bold">7日間移動平均</span>
+            <div className="flex items-baseline space-x-1.5 mt-0.5">
+              <strong className="text-lg sm:text-xl font-black text-cyan-300 font-mono">
+                {analytics.movingAverageLP7Days > 0 ? `${analytics.movingAverageLP7Days} LP` : '-'}
+              </strong>
+              <TrendingUp className="w-3 h-3 text-cyan-400" />
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl">
+            <span className="text-[10px] text-slate-400 block font-bold">処理可能単語数</span>
+            <strong className="text-lg sm:text-xl font-black text-indigo-300 font-mono block mt-0.5">
+              {analytics.movingAverageWordCapacity > 0 ? `${analytics.movingAverageWordCapacity} 語` : '-'}
+            </strong>
+          </div>
+
+          <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl">
+            <span className="text-[10px] text-slate-400 block font-bold">完全突破率</span>
+            <strong className="text-lg sm:text-xl font-black text-emerald-300 font-mono block mt-0.5">
+              {analytics.perfectPassRate}%
+            </strong>
           </div>
         </div>
 
         {/* 2. Control Bar: Word Count Spinner + CEFR + Speed Rate */}
-        <div className="pt-3 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div className="pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
           {/* A. Word Count Selector & Stepper */}
           <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2">
             <div className="flex items-center justify-between">
@@ -409,28 +517,34 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               セッション完了！ 🎉
             </h2>
             <p className="text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
-              目標 {targetWordCount} 語（{targetCefrLevel}）の特訓を完走しました！
+              目標 {targetWordCount} 語（{targetCefrLevel} / {targetSpeedRate}x）の特訓を完走しました！
             </p>
           </div>
 
           {/* Session Summary Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg mx-auto text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-xl mx-auto text-center">
             <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-              <span className="text-[11px] text-slate-400 block font-bold">一発クリア</span>
+              <span className="text-[11px] text-slate-400 block font-bold">完全突破</span>
               <strong className="text-xl sm:text-2xl font-black text-emerald-300 font-mono">
                 {sessionPerfectCount} / {questions.length}
               </strong>
             </div>
             <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-              <span className="text-[11px] text-slate-400 block font-bold">Anki保存</span>
+              <span className="text-[11px] text-slate-400 block font-bold">リスニングAnki</span>
               <strong className="text-xl sm:text-2xl font-black text-rose-300 font-mono">
-                {sessionSavedCount} 語
+                {sessionSavedListeningCount}
               </strong>
             </div>
-            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl col-span-2 sm:col-span-1">
-              <span className="text-[11px] text-slate-400 block font-bold">現在処理能力</span>
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
+              <span className="text-[11px] text-slate-400 block font-bold">単語Anki (未知語)</span>
+              <strong className="text-xl sm:text-2xl font-black text-purple-300 font-mono">
+                {sessionSavedVocabCount}
+              </strong>
+            </div>
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
+              <span className="text-[11px] text-slate-400 block font-bold">今日の平均パワー</span>
               <strong className="text-xl sm:text-2xl font-black text-amber-300 font-mono">
-                {analytics.movingAverageWordCapacity} 語
+                {analytics.todayAverageLP > 0 ? `${analytics.todayAverageLP} LP` : '-'}
               </strong>
             </div>
           </div>
@@ -588,9 +702,11 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               {/* English Sentence Word Tokens */}
               <div className="p-5 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-3 text-left">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-cyan-400">
-                    聞き取れなかった単語・リンキングをタップ選択:
-                  </span>
+                  <div className="text-[11px] font-bold text-slate-300 flex items-center space-x-3">
+                    <span>タップで分類:</span>
+                    <span className="text-rose-400">🔴 音の脱落</span>
+                    <span className="text-purple-400">🟣 未知語</span>
+                  </div>
                   <div className="flex items-center space-x-1.5">
                     <button
                       onClick={() => handlePlayAudio(0.8)}
@@ -612,16 +728,21 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 {/* Word Chips */}
                 <div className="flex flex-wrap gap-2 py-2">
                   {currentQuestion.words.map((word, wIdx) => {
-                    const isMarked = markedIndices.has(wIdx);
+                    const isSoundMiss = soundMissIndices.has(wIdx);
+                    const isUnknownVocab = unknownVocabIndices.has(wIdx);
+
                     return (
                       <button
                         key={wIdx}
                         onClick={() => handleToggleWordMark(wIdx)}
                         className={`px-3 py-1.5 rounded-xl text-base sm:text-lg font-serif font-bold transition-all ${
-                          isMarked
+                          isUnknownVocab
+                            ? 'bg-purple-950/90 text-purple-200 border-2 border-purple-500 shadow-lg shadow-purple-500/20 scale-105'
+                            : isSoundMiss
                             ? 'bg-rose-950/90 text-rose-200 border-2 border-rose-500 shadow-lg shadow-rose-500/20 scale-105'
                             : 'bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-800'
                         }`}
+                        title="タップで切替: 🔴音抜け ➔ 🟣未知語 ➔ 解除"
                       >
                         {word}
                       </button>
@@ -629,15 +750,22 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                   })}
                 </div>
 
-                {markedIndices.size > 0 ? (
-                  <p className="text-xs text-rose-400 font-bold animate-pulse">
-                    ⚠️ {markedIndices.size} 語の聞き取り弱点をマーク中 ➔ Ankiに登録されます
-                  </p>
-                ) : (
-                  <p className="text-xs text-emerald-400">
-                    ✨ すべて聞き取れた場合はマーク不要です（そのまま完璧ボタンへ）
-                  </p>
-                )}
+                {/* Marking Legend & Status */}
+                <div className="text-xs space-y-1">
+                  {unknownVocabIndices.size > 0 ? (
+                    <p className="text-purple-300 font-bold">
+                      🟣 未知語 {unknownVocabIndices.size} 語マーク中（★パワー計算から除外され、通常単語Ankiに登録されます）
+                    </p>
+                  ) : soundMissIndices.size > 0 ? (
+                    <p className="text-rose-400 font-bold animate-pulse">
+                      🔴 音声変化・聞き取り弱点 {soundMissIndices.size} 語マーク中 ➔ 🎧 リスニングAnkiに登録されます
+                    </p>
+                  ) : (
+                    <p className="text-emerald-400">
+                      ✨ すべて聞き取れた場合はマーク不要です（そのまま完璧ボタンへ）
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Japanese Translation Box */}
@@ -666,25 +794,34 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 </div>
               )}
 
-              {/* Bottom Actions */}
-              <div className="pt-2">
-                {markedIndices.size === 0 ? (
-                  <button
-                    onClick={() => handleCompleteQuestion(true)}
-                    className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center space-x-2"
-                  >
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span>🟢 完璧に聴き取れた！ (Enter)</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleCompleteQuestion(false)}
-                    className="w-full py-4 bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-xl shadow-rose-600/30 transition-all flex items-center justify-center space-x-2"
-                  >
-                    <BookmarkPlus className="w-5 h-5" />
-                    <span>🔴 リスニングAnkiに登録して次へ ({markedIndices.size}語マーク)</span>
-                  </button>
-                )}
+              {/* 3 Action Buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+                {/* 1. 🟢 完璧に聴き取れた */}
+                <button
+                  onClick={() => handleCompleteQuestion('perfect')}
+                  className="py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.98] text-white rounded-2xl text-xs sm:text-sm font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center space-x-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>🟢 完璧 (100% LP)</span>
+                </button>
+
+                {/* 2. 🔴 音が聴き取れなかった */}
+                <button
+                  onClick={() => handleCompleteQuestion('sound_miss')}
+                  className="py-3.5 px-4 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 active:scale-[0.98] text-white rounded-2xl text-xs sm:text-sm font-bold shadow-lg shadow-rose-600/20 transition-all flex items-center justify-center space-x-1.5"
+                >
+                  <BookmarkPlus className="w-4 h-4" />
+                  <span>🔴 音が聴き取れず (🎧Anki)</span>
+                </button>
+
+                {/* 3. ❓ 単語を知らなかった */}
+                <button
+                  onClick={() => handleCompleteQuestion('unknown_vocab')}
+                  className="py-3.5 px-4 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 active:scale-[0.98] text-white rounded-2xl text-xs sm:text-sm font-bold shadow-lg shadow-purple-600/20 transition-all flex items-center justify-center space-x-1.5"
+                >
+                  <HelpCircle className="w-4 h-4" />
+                  <span>❓ 未知語 (除外＆通常Anki)</span>
+                </button>
               </div>
             </div>
           )}
@@ -698,7 +835,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <BarChart3 className="w-5 h-5 text-cyan-400" />
-                <h2 className="text-lg font-bold text-white">リスニング処理能力 分析</h2>
+                <h2 className="text-lg font-bold text-white">リスニング処理パワー 分析</h2>
               </div>
               <button
                 onClick={() => setIsAnalyticsOpen(false)}
@@ -709,24 +846,52 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
             </div>
 
             {/* Summary Metrics */}
-            <div className="grid grid-cols-3 gap-2.5 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
-                <span className="text-[10px] text-slate-400 block font-bold">総回答数</span>
-                <strong className="text-lg font-black text-white font-mono">{analytics.totalQuestions}</strong>
+                <span className="text-[10px] text-slate-400 block font-bold">今日</span>
+                <strong className="text-base sm:text-lg font-black text-amber-300 font-mono">
+                  {analytics.todayAverageLP > 0 ? `${analytics.todayAverageLP} LP` : '-'}
+                </strong>
+              </div>
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
+                <span className="text-[10px] text-slate-400 block font-bold">7日移動平均</span>
+                <strong className="text-base sm:text-lg font-black text-cyan-300 font-mono">
+                  {analytics.movingAverageLP7Days > 0 ? `${analytics.movingAverageLP7Days} LP` : '-'}
+                </strong>
               </div>
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
                 <span className="text-[10px] text-slate-400 block font-bold">完全突破率</span>
-                <strong className="text-lg font-black text-emerald-300 font-mono">{analytics.perfectPassRate}%</strong>
+                <strong className="text-base sm:text-lg font-black text-emerald-300 font-mono">
+                  {analytics.perfectPassRate}%
+                </strong>
               </div>
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
-                <span className="text-[10px] text-slate-400 block font-bold">移動平均単語数</span>
-                <strong className="text-lg font-black text-amber-300 font-mono">{analytics.movingAverageWordCapacity}語</strong>
+                <span className="text-[10px] text-slate-400 block font-bold">総回答数</span>
+                <strong className="text-base sm:text-lg font-black text-white font-mono">
+                  {analytics.totalQuestions}
+                </strong>
               </div>
             </div>
 
+            {/* Daily History Table */}
+            {analytics.dailyHistory.length > 0 && (
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-slate-300">日次パワー推移（直近）:</span>
+                <div className="space-y-1.5">
+                  {analytics.dailyHistory.slice(0, 7).map(d => (
+                    <div key={d.dateString} className="p-2.5 bg-slate-950 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs">
+                      <span className="font-mono text-slate-300 font-bold">{d.dateString}</span>
+                      <span className="text-slate-400 font-mono">{d.questionCount} 問</span>
+                      <strong className="font-mono text-amber-300">{d.avgLP} LP</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Word Count Breakdown Table */}
             <div className="space-y-2">
-              <span className="text-xs font-bold text-slate-300">文長別の完全突破率:</span>
+              <span className="text-xs font-bold text-slate-300">文長別の完全突破率 & 平均パワー:</span>
               <div className="space-y-1.5">
                 {Object.entries(analytics.wordCountStats).map(([wc, stat]) => (
                   <div key={wc} className="p-2.5 bg-slate-950 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs">
@@ -737,9 +902,10 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                         style={{ width: `${stat.passRate}%` }}
                       />
                     </div>
-                    <span className="font-mono text-slate-300 w-16 text-right">
-                      {stat.perfectCount}/{stat.attempts} ({stat.passRate}%)
-                    </span>
+                    <div className="text-right font-mono space-x-2">
+                      <span className="text-slate-400 text-[11px]">{stat.passRate}%</span>
+                      <strong className="text-amber-300">{stat.avgLP > 0 ? `${stat.avgLP} LP` : '-'}</strong>
+                    </div>
                   </div>
                 ))}
               </div>
