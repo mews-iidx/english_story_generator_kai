@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, Headphones, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool, Sliders, X, Check } from 'lucide-react';
+import { Volume2, Headphones, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool, Sliders, X, Check, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { speakText } from '../utils/speech';
+import { speakText, stopSpeech } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS, getSiblingGroupKey, areSiblings } from '../utils/srs';
-import { cleanTranslationText, loadSettings, saveSettings } from '../services/storage';
+import { cleanTranslationText, loadSettings, saveSettings, recordAnkiSpeechPractice } from '../services/storage';
 
 export type AnkiCardFilter = 'all' | 'word' | 'pattern' | 'en_to_ja' | 'ja_to_en' | 'listening';
 
@@ -232,6 +232,8 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
   const [isFlipped, setIsFlipped] = useState(false);
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [isEnglishMaskedOnBack, setIsEnglishMaskedOnBack] = useState(false);
   const [graduatedIds, setGraduatedIds] = useState<Set<string>>(new Set());
   const [backlogCount, setBacklogCount] = useState(0);
 
@@ -397,7 +399,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
           handleFlip();
         }
       } else {
-        if (e.key === '1') {
+        if (e.code === 'KeyR' || e.key === 'r' || e.key === 'R') {
+          e.preventDefault();
+          const s = activeCard.sentence || activeCard.exampleSentence || activeCard.phrase;
+          if (s) {
+            handlePracticeShadowing(s);
+          }
+        } else if (e.code === 'KeyV' || e.key === 'v' || e.key === 'V') {
+          e.preventDefault();
+          setIsEnglishMaskedOnBack(prev => !prev);
+        } else if (e.key === '1') {
           e.preventDefault();
           handleRate('again');
         } else if (e.key === '2') {
@@ -420,8 +431,10 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFlipped, activeCard, reviewQueue, learningPool, historyStack]);
 
-  // リスニングカード出題時の音声自動再生
+  // カード切り替え時の状態リセット & リスニングカード音声自動再生
   useEffect(() => {
+    setIsEnglishMaskedOnBack(false);
+    setIsPlayingAudio(false);
     if (activeCard && activeCard.focusType === 'listening') {
       const text = activeCard.sentence || activeCard.exampleSentence || activeCard.phrase;
       if (text) {
@@ -429,6 +442,35 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       }
     }
   }, [activeCard?.id]);
+
+  // 発話・シャドーイング特訓ハンドラー (発話回数をカウント＆記録)
+  const handlePracticeShadowing = useCallback((sentence: string) => {
+    if (!activeCard || !sentence) return;
+    stopSpeech();
+    setIsPlayingAudio(true);
+
+    const speed = activeCard.targetSpeedRate || 1.0;
+    speakText(sentence, speed, 'en-US', () => {
+      setIsPlayingAudio(false);
+    });
+
+    // 発話ログの記録＆カードの累計発話数カウントアップ
+    recordAnkiSpeechPractice({
+      vocabId: activeCard.id,
+      subStep: 'shadowing',
+      sentenceText: sentence,
+    });
+
+    // 画面上の累計発話バッジを即座にインクリメント
+    setActiveCard(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        speechPracticeCount: (prev.speechPracticeCount || 0) + 1,
+        lastSpeechPracticedAt: new Date().toISOString(),
+      };
+    });
+  }, [activeCard]);
 
   const handleFlip = () => {
     setIsFlipped(true);
@@ -902,21 +944,61 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
               {isFlipped ? (
                 <div className="space-y-3 pt-3 border-t border-slate-800 animate-fadeIn text-left">
-                  <div className="p-4 bg-slate-950/80 border border-indigo-500/30 rounded-2xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-indigo-400">英語の正解 (模範例文):</span>
-                      <button
-                        onClick={() => speakText(displaySentence)}
-                        className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors"
-                        title="発音を再生"
-                      >
-                        <Volume2 className="w-4 h-4" />
-                      </button>
+                  {/* English Model Sentence (Visible or Masked) */}
+                  {!isEnglishMaskedOnBack ? (
+                    <div className="p-4 bg-slate-950/80 border border-indigo-500/30 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-indigo-400">英語の正解 (模範例文):</span>
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setIsEnglishMaskedOnBack(true)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-300 hover:bg-slate-850 rounded-xl transition-colors text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                            title="英文を隠して耳だけでシャドーイング (Vキー)"
+                          >
+                            <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                            <span>隠す (V)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => speakText(displaySentence)}
+                            className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors cursor-pointer"
+                            title="発音を再生 (通常リスニング・発話カウント対象外)"
+                          >
+                            <Volume2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
+                        {isWordCard ? highlightWordInSentence(displaySentence, displayWord) : displaySentence}
+                      </div>
                     </div>
-                    <div className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
-                      {isWordCard ? highlightWordInSentence(displaySentence, displayWord) : displaySentence}
+                  ) : (
+                    <div
+                      onClick={() => setIsEnglishMaskedOnBack(false)}
+                      className="p-4 bg-slate-950/80 border-2 border-dashed border-indigo-500/40 hover:bg-slate-900/60 rounded-2xl space-y-1.5 text-center cursor-pointer transition-all group"
+                      title="クリックして英文を表示 (Vキー)"
+                    >
+                      <div className="flex items-center justify-between text-[11px] font-bold text-indigo-400">
+                        <span>🎧 英文は非表示です（耳だけでシャドーイング特訓中）</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            speakText(displaySentence);
+                          }}
+                          className="p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-950/70 rounded-xl transition-colors cursor-pointer"
+                          title="発音を再生 (通常リスニング)"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="text-xs font-bold text-indigo-300 group-hover:text-indigo-200 flex items-center justify-center gap-1.5 py-1">
+                        <Eye className="w-4 h-4" />
+                        <span>英文を表示・チラ見する (タップ または Vキー)</span>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {activeCard.contextNote && (
                     <div className="p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl text-xs text-slate-300">
@@ -936,6 +1018,57 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
                       ))}
                     </div>
                   )}
+
+                  {/* =========================================================================
+                      Dedicated Shadowing & Speech Training Control Box (裏面下部に統合)
+                     ========================================================================= */}
+                  <div className="p-3 sm:p-3.5 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/50 border border-indigo-500/30 rounded-2xl space-y-2.5 shadow-lg">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center space-x-2">
+                        <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold text-[10px] flex items-center gap-1">
+                          <Headphones className="w-3 h-3" />
+                          <span>発話・シャドーイング特訓</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          累計発話: <strong className="text-amber-300 font-bold">{activeCard.speechPracticeCount || 0}</strong> 回
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsEnglishMaskedOnBack(prev => !prev)}
+                        className="text-[10px] font-bold text-slate-400 hover:text-indigo-300 transition-colors flex items-center gap-1 cursor-pointer"
+                        title="英文の表示/非表示を切り替え (Vキー)"
+                      >
+                        {isEnglishMaskedOnBack ? (
+                          <>
+                            <Eye className="w-3 h-3 text-indigo-400" />
+                            <span>英文を表示 (V)</span>
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-3 h-3 text-slate-400" />
+                            <span>英文を隠す (V)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Prominent Large Training Button */}
+                    <button
+                      type="button"
+                      onClick={() => handlePracticeShadowing(displaySentence)}
+                      className={`w-full py-3.5 px-4 rounded-xl text-xs sm:text-sm font-black transition-all shadow-md active:scale-[0.98] cursor-pointer flex items-center justify-center space-x-2 ${
+                        isPlayingAudio
+                          ? 'bg-gradient-to-r from-purple-500 via-indigo-500 to-cyan-500 text-white shadow-purple-500/30 ring-2 ring-purple-400 animate-pulse'
+                          : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white shadow-indigo-600/25 ring-1 ring-indigo-400/40'
+                      }`}
+                      title="シャドーイング音声を再生して発話カウント (Rキー)"
+                    >
+                      <RotateCcw className={`w-4 h-4 ${isPlayingAudio ? 'animate-spin' : ''}`} />
+                      <span>🗣️ 発話・シャドーイング再生 (R)</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="py-4">
@@ -1000,6 +1133,33 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
                       ))}
                     </div>
                   )}
+
+                  {/* Dedicated Shadowing Control Box */}
+                  <div className="p-3 sm:p-3.5 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/50 border border-indigo-500/30 rounded-2xl space-y-2 shadow-lg">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold text-[10px] flex items-center gap-1">
+                        <Headphones className="w-3 h-3" />
+                        <span>発話・シャドーイング特訓</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        累計発話: <strong className="text-amber-300 font-bold">{activeCard.speechPracticeCount || 0}</strong> 回
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handlePracticeShadowing(displaySentence)}
+                      className={`w-full py-3 px-4 rounded-xl text-xs sm:text-sm font-black transition-all shadow-md active:scale-[0.98] cursor-pointer flex items-center justify-center space-x-2 ${
+                        isPlayingAudio
+                          ? 'bg-gradient-to-r from-purple-500 via-indigo-500 to-cyan-500 text-white shadow-purple-500/30 ring-2 ring-purple-400 animate-pulse'
+                          : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white shadow-indigo-600/25 ring-1 ring-indigo-400/40'
+                      }`}
+                      title="シャドーイング音声を再生して発話カウント (Rキー)"
+                    >
+                      <RotateCcw className={`w-4 h-4 ${isPlayingAudio ? 'animate-spin' : ''}`} />
+                      <span>🗣️ 発話・シャドーイング再生 (R)</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="py-4">
