@@ -631,6 +631,7 @@ export interface ChatMentorParams {
 export interface ChatMentorResult {
   replyText: string;
   suggestedVocabs: ChatSuggestedVocab[];
+  suggestedSentences?: import('../types/chat').SuggestedSentence[];
   tokenUsage?: { promptTokens: number; candidatesTokens: number };
 }
 
@@ -670,11 +671,11 @@ ${contextInfo.weakestPatterns.map(w => `- 構文: ${w.patternName} (${w.formula 
 ※ユーザーから「苦手な構文は？」「弱点を教えて」「苦手な文法を特訓して」と聞かれた場合、この弱点構文を具体的に提示し、なぜ間違えやすいのかの解説や、この構文を使った例文作成トレーニングを出題してあげてください。`;
   }
 
-  systemInstruction += `\n\n【★最重要ルール：重要フレーズの抽出】
-あなたの回答の最後に、ユーザーが語彙帳（Anki・ストーリー生成）に登録して定着させるべき「キー表現（単語・イディオム）」を1〜3個抽出してください。
+  systemInstruction += `\n\n【★最重要ルール：重要例文およびキー表現の抽出】
+あなたの回答の最後に、ユーザーが瞬間英作文・Ankiに登録して定着させるべき「キー例文（英語センテンスと日本語訳のペア）」および「重要単語・イディオム」を抽出してください。
 出力形式として、回答文の末尾に以下の形式でJSONタグを含めてください:
-<!--SUGGESTED_VOCABS:[{"phrase":"look forward to","meaning":"〜を楽しみに待つ"}]-->
-回答本文は通常の親切な日本語解説（Markdown記法可）で記述してください。`;
+<!--SUGGESTIONS:{"sentences":[{"english":"I work remotely, so I only go into the office about once a month.","japanese":"リモートで働いているので、会社に行くのは月に1回程度です。"}],"vocabs":[{"phrase":"work remotely","meaning":"リモートワークする"}]}-->
+回答本文は通常の親切で自然な日本語解説（Markdown記法可）で記述してください。`;
 
   const formattedContents = [
     ...messages,
@@ -710,21 +711,37 @@ ${contextInfo.weakestPatterns.map(w => `- 構文: ${w.patternName} (${w.formula 
 
         let replyText = rawReply;
         let suggestedVocabs: ChatSuggestedVocab[] = [];
+        let suggestedSentences: import('../types/chat').SuggestedSentence[] = [];
 
-        // <!--SUGGESTED_VOCABS:[...]--> を抽出
-        const match = rawReply.match(/<!--SUGGESTED_VOCABS:(.*?)-->/);
-        if (match && match[1]) {
+        // 1. <!--SUGGESTIONS:{...}--> を抽出
+        const suggestionsMatch = rawReply.match(/<!--SUGGESTIONS:(.*?)-->/s);
+        if (suggestionsMatch && suggestionsMatch[1]) {
           try {
-            suggestedVocabs = JSON.parse(match[1]);
-            replyText = rawReply.replace(/<!--SUGGESTED_VOCABS:.*?-->/, '').trim();
+            const parsed = JSON.parse(suggestionsMatch[1]);
+            if (Array.isArray(parsed.vocabs)) suggestedVocabs = parsed.vocabs;
+            if (Array.isArray(parsed.sentences)) suggestedSentences = parsed.sentences;
+            replyText = replyText.replace(/<!--SUGGESTIONS:.*?-->/s, '').trim();
           } catch (e) {
-            console.warn('Failed to parse suggested vocabs', e);
+            console.warn('Failed to parse suggestions JSON', e);
+          }
+        }
+
+        // 2. 互換用: <!--SUGGESTED_VOCABS:[...]--> を抽出
+        const legacyMatch = rawReply.match(/<!--SUGGESTED_VOCABS:(.*?)-->/s);
+        if (legacyMatch && legacyMatch[1]) {
+          try {
+            const legacyVocabs = JSON.parse(legacyMatch[1]);
+            if (suggestedVocabs.length === 0) suggestedVocabs = legacyVocabs;
+            replyText = replyText.replace(/<!--SUGGESTED_VOCABS:.*?-->/s, '').trim();
+          } catch (e) {
+            console.warn('Failed to parse legacy suggested vocabs', e);
           }
         }
 
         return {
           replyText,
           suggestedVocabs,
+          suggestedSentences,
           tokenUsage: {
             promptTokens: usage?.promptTokenCount || 0,
             candidatesTokens: usage?.candidatesTokenCount || 0,

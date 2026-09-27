@@ -714,7 +714,12 @@ export const App: React.FC = () => {
   };
 
   // AIメンターチャット メッセージ送信ハンドラー
-  const handleSendChatMessage = (userText: string, assistantReply: string, suggestedVocabs: ChatSuggestedVocab[]) => {
+  const handleSendChatMessage = (
+    userText: string,
+    assistantReply: string,
+    suggestedVocabs: ChatSuggestedVocab[],
+    suggestedSentences?: import('./types/chat').SuggestedSentence[]
+  ) => {
     const userMsg: ChatMessage = {
       id: 'msg_u_' + Date.now(),
       sender: 'user',
@@ -726,6 +731,7 @@ export const App: React.FC = () => {
       sender: 'assistant',
       text: assistantReply,
       suggestedVocabs,
+      suggestedSentences,
       createdAt: new Date().toISOString(),
     };
 
