@@ -111,12 +111,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
     }
   }, [targetWordCount, targetSpeedRate, targetCefrLevel, apiKey, selectedModel]);
 
-  // Initial load
-  useEffect(() => {
-    if (questions.length === 0 && !isGenerating) {
-      handleGenerateBatch(5);
-    }
-  }, []);
+  // No auto-generation on mount (avoids token waste on tab preview)
 
   // 2. Play Audio
   const handlePlayAudio = useCallback((rate = targetSpeedRate) => {
@@ -452,6 +447,53 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               className="w-full sm:w-auto px-6 py-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-2xl font-bold transition-all"
             >
               📊 分析データを確認
+            </button>
+          </div>
+        </div>
+      ) : questions.length === 0 ? (
+        /* Ready to Start Card */
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-12 shadow-2xl text-center space-y-6 animate-fadeIn">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center mx-auto shadow-xl shadow-cyan-500/25">
+            <Headphones className="w-8 h-8 text-white" />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+              リスニング集中特訓をスタート
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
+              単語数・難易度・再生速度を設定して「特訓を開始」を押すと、AIが5問の短文を生成します。
+            </p>
+            <p className="text-[11px] text-slate-500">
+              ※ボタンを押すまでAPIトークンは一切消費されません。
+            </p>
+          </div>
+
+          <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl max-w-sm mx-auto flex items-center justify-around text-xs">
+            <div>
+              <span className="text-[10px] text-slate-400 block font-bold">文長</span>
+              <span className="text-sm font-black text-cyan-300 font-mono">{targetWordCount} 語</span>
+            </div>
+            <div className="w-px h-6 bg-slate-800" />
+            <div>
+              <span className="text-[10px] text-slate-400 block font-bold">難易度</span>
+              <span className="text-sm font-black text-blue-400 font-mono">{targetCefrLevel}</span>
+            </div>
+            <div className="w-px h-6 bg-slate-800" />
+            <div>
+              <span className="text-[10px] text-slate-400 block font-bold">速度</span>
+              <span className="text-sm font-black text-indigo-300 font-mono">{targetSpeedRate}x</span>
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <button
+              onClick={() => handleGenerateBatch(5)}
+              disabled={isGenerating}
+              className="px-8 py-4 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 active:scale-95 text-white rounded-2xl font-bold shadow-xl shadow-cyan-600/30 transition-all text-sm sm:text-base flex items-center space-x-2 mx-auto"
+            >
+              <Sparkles className="w-5 h-5" />
+              <span>✨ 特訓を開始する（5問生成）</span>
             </button>
           </div>
         </div>
