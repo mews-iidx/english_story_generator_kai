@@ -673,6 +673,9 @@ ${contextInfo.weakestPatterns.map(w => `- 構文: ${w.patternName} (${w.formula 
 
   systemInstruction += `\n\n【★最重要ルール：重要例文およびキー表現の抽出】
 あなたの回答の最後に、ユーザーが瞬間英作文・Ankiに登録して定着させるべき「キー例文（英語センテンスと日本語訳のペア）」および「重要単語・イディオム」を抽出してください。
+【厳守事項】
+1. 必ず「今回の最新の質問に対する今回の回答」で新しく提示したキー例文・単語のみ（1〜2個程度を厳選）を抽出してください。過去の会話ターンの古い例文や、前回の質問の回答に含まれていた候補は絶対に再出力・重複させないでください。
+2. ユーザーの質問が単なる挨拶や学習相談など、新しく覚えるべき英語例文を提示していない場合は空配列 {"sentences":[], "vocabs":[]} としてください。
 出力形式として、回答文の末尾に以下の形式でJSONタグを含めてください:
 <!--SUGGESTIONS:{"sentences":[{"english":"I work remotely, so I only go into the office about once a month.","japanese":"リモートで働いているので、会社に行くのは月に1回程度です。"}],"vocabs":[{"phrase":"work remotely","meaning":"リモートワークする"}]}-->
 回答本文は通常の親切で自然な日本語解説（Markdown記法可）で記述してください。`;

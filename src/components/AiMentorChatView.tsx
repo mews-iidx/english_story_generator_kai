@@ -229,7 +229,26 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         onRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
       }
 
-      onSendMessage(query, res.replyText, res.suggestedVocabs || [], res.suggestedSentences || []);
+      // 過去のターンで既に提示された文・単語の重複を除外（常に最新ターンの新規候補のみに絞り込む）
+      const pastSentences = new Set<string>();
+      const pastVocabs = new Set<string>();
+      messages.forEach(m => {
+        if (m.suggestedSentences) {
+          m.suggestedSentences.forEach(s => pastSentences.add(s.english.trim().toLowerCase()));
+        }
+        if (m.suggestedVocabs) {
+          m.suggestedVocabs.forEach(v => pastVocabs.add(v.phrase.trim().toLowerCase()));
+        }
+      });
+
+      const freshSentences = (res.suggestedSentences || []).filter(
+        s => !pastSentences.has(s.english.trim().toLowerCase())
+      );
+      const freshVocabs = (res.suggestedVocabs || []).filter(
+        v => !pastVocabs.has(v.phrase.trim().toLowerCase())
+      );
+
+      onSendMessage(query, res.replyText, freshVocabs, freshSentences);
 
       try {
         enqueueMasteryScanTask({
