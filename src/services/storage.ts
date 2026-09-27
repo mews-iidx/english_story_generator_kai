@@ -1626,7 +1626,7 @@ export interface SaveSentenceCardParams {
   corePatterns?: ExtractedCorePattern[];
   sourceStoryId?: string;
   importance?: number;
-  cardDirection?: 'en_to_ja' | 'ja_to_en';
+  cardDirection?: 'en_to_ja' | 'ja_to_en' | 'both';
 }
 
 /**
@@ -1671,13 +1671,10 @@ export function extractSingleSentence(text: string, focusToken?: string): string
   return sentences[0];
 }
 
-export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { card1: VocabItem; card2: VocabItem } {
+export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { card1: VocabItem; card2?: VocabItem } {
   const vocabs = loadVocabs();
   const now = new Date().toISOString();
   const today = getTodayDateString();
-
-  const id1 = 'voc_en_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const srs1 = calculateLapseSRS();
 
   const cleanSentence = extractSingleSentence(params.sentence, params.focusWord);
   const isWord = params.focusType === 'word';
@@ -1698,49 +1695,60 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
 
   const direction = params.cardDirection || 'en_to_ja';
 
-  // Card 1: 読解 (en_to_ja) または 瞬間英作文 (ja_to_en)
-  const card1: VocabItem = {
-    id: id1,
-    phrase: phraseText,
-    meaning: meaningText,
-    partOfSpeech: isWord ? '単語・イディオム' : (params.focusType === 'pattern' ? '構文・文法' : '1文・表現'),
-    contextNote: primaryNote,
-    exampleSentence: cleanSentence,
-    sentence: cleanSentence,
-    translation: cleanTranslationText(params.translation),
-    focusType: params.focusType,
-    focusWord: isWord ? params.focusWord?.trim() : undefined,
-    focusMeaning: isWord ? meaningText : undefined,
-    corePatterns: params.corePatterns || [],
-    cardDirection: direction,
-    ...srs1,
-    nextReviewDate: today,
-    createdAt: now,
-    lastReviewedAt: now,
-    sourceStoryId: params.sourceStoryId,
-    importance: params.importance || (params.focusType === 'pattern' ? 4 : 3),
-    cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
+  // Helper to upsert a card for a specific direction
+  const upsertCard = (dir: 'en_to_ja' | 'ja_to_en', siblingId?: string): VocabItem => {
+    const srs = calculateLapseSRS();
+    const id = 'voc_' + (dir === 'ja_to_en' ? 'ja_' : 'en_') + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+
+    const card: VocabItem = {
+      id,
+      phrase: phraseText,
+      meaning: meaningText,
+      partOfSpeech: isWord ? '単語・イディオム' : (params.focusType === 'pattern' ? '構文・文法' : '1文・表現'),
+      contextNote: primaryNote,
+      exampleSentence: cleanSentence,
+      sentence: cleanSentence,
+      translation: cleanTranslationText(params.translation),
+      focusType: params.focusType,
+      focusWord: isWord ? params.focusWord?.trim() : undefined,
+      focusMeaning: isWord ? meaningText : undefined,
+      corePatterns: params.corePatterns || [],
+      cardDirection: dir,
+      siblingId: siblingId,
+      ...srs,
+      nextReviewDate: today,
+      createdAt: now,
+      lastReviewedAt: now,
+      sourceStoryId: params.sourceStoryId,
+      importance: params.importance || (params.focusType === 'pattern' ? 4 : 3),
+      cardType: params.focusType === 'pattern' ? 'pattern' : 'vocab',
+    };
+
+    const matchFn = isWord
+      ? (v: VocabItem) => v.phrase.toLowerCase() === card.phrase.toLowerCase() && v.cardDirection === dir
+      : (v: VocabItem) => v.sentence === card.sentence && v.cardDirection === dir;
+
+    const existingIdx = vocabs.findIndex(matchFn);
+    if (existingIdx >= 0) {
+      card.id = vocabs[existingIdx].id;
+      vocabs[existingIdx] = { ...vocabs[existingIdx], ...card };
+    } else {
+      vocabs.unshift(card);
+    }
+    return card;
   };
 
-  // 重複チェック:
-  // 単語カードの場合は phrase + cardDirection でチェック
-  // 文・構文カードの場合は sentence + cardDirection でチェック
-  const matchFn1 = isWord
-    ? (v: VocabItem) => v.phrase.toLowerCase() === card1.phrase.toLowerCase() && v.cardDirection === direction
-    : (v: VocabItem) => v.sentence === card1.sentence && v.cardDirection === direction;
-
-  const existingIdx1 = vocabs.findIndex(matchFn1);
-  const finalId1 = existingIdx1 >= 0 ? vocabs[existingIdx1].id : id1;
-  card1.id = finalId1;
-
-  if (existingIdx1 >= 0) {
-    vocabs[existingIdx1] = { ...vocabs[existingIdx1], ...card1 };
+  if (direction === 'both') {
+    const card1 = upsertCard('en_to_ja');
+    const card2 = upsertCard('ja_to_en', card1.id);
+    card1.siblingId = card2.id;
+    saveVocabsBatch(vocabs);
+    return { card1, card2 };
   } else {
-    vocabs.unshift(card1);
+    const card1 = upsertCard(direction);
+    saveVocabsBatch(vocabs);
+    return { card1 };
   }
-
-  saveVocabsBatch(vocabs);
-  return { card1, card2: card1 };
 }
 
 // ===================== DRILL LOGS & PROGRESS RECORDING =====================

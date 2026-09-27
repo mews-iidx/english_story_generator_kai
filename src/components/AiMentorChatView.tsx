@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, User, Sparkles, X, Plus, Check, Loader2, Trash2, Puzzle } from 'lucide-react';
+import { Send, Bot, User, Sparkles, X, Plus, Check, Loader2, Trash2, Puzzle, BookOpen, PenTool, Repeat } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { ChatMessage, ChatSuggestedVocab, SuggestedSentence } from '../types/chat';
-import { SaveSentenceCardParams } from '../services/storage';
+import { SaveSentenceCardParams, loadVocabs } from '../services/storage';
 import { chatWithAiMentor } from '../services/gemini';
 import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import {
@@ -28,9 +28,26 @@ interface AiMentorChatViewProps {
 }
 
 /**
+ * ユーザーの質問文から、和英（瞬間英作文）か英和（読解）かの意図を自動判定
+ */
+export function detectQueryDirection(query?: string): 'ja_to_en' | 'en_to_ja' {
+  if (!query) return 'ja_to_en';
+  const q = query.toLowerCase().trim();
+
+  // 英和・読解パターンの検出 (英語の意味・ニュアンス・解説を尋ねる)
+  if (
+    /意味|ニュアンス|どういうこと|使い方|訳し|訳|違い|とは|explain|mean/.test(q) ||
+    /^[a-zA-Z\s,.'!?-]{4,}/.test(q)
+  ) {
+    return 'en_to_ja';
+  }
+
+  // デフォルトは和英・瞬間英作文 (「〜はどう言う？」「〜を英語で」)
+  return 'ja_to_en';
+}
+
+/**
  * 英語センテンスとしての妥当性を厳格にチェック
- * - 3単語以上
- * - 8文字以上のラテン文字を含み、日本語文字を含まない
  */
 function isValidEnglishSentence(s: string): boolean {
   const trimmed = s.trim();
@@ -121,7 +138,24 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 }) => {
   const [inputText, setInputText] = useState(initialInput);
   const [isLoading, setIsLoading] = useState(false);
-  const [savedSentenceKeys, setSavedSentenceKeys] = useState<Set<string>>(new Set());
+
+  // Track saved cards per sentence text and direction
+  const [savedDirectionsMap, setSavedDirectionsMap] = useState<Map<string, Set<'en_to_ja' | 'ja_to_en'>>>(() => {
+    const map = new Map<string, Set<'en_to_ja' | 'ja_to_en'>>();
+    try {
+      const vocabs = loadVocabs();
+      vocabs.forEach(v => {
+        const text = (v.sentence || v.phrase || '').trim().toLowerCase();
+        if (text) {
+          if (!map.has(text)) map.set(text, new Set());
+          const dir = v.cardDirection || 'en_to_ja';
+          map.get(text)!.add(dir);
+        }
+      });
+    } catch (_) {}
+    return map;
+  });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -220,8 +254,11 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     }
   };
 
-  // Quick save as Assembly Card (瞬間英作文・和英カード)
-  const handleSaveAssemblyCard = useCallback((sentenceItem: SuggestedSentence) => {
+  // Quick save with specific direction
+  const handleSaveCardWithDirection = useCallback((
+    sentenceItem: SuggestedSentence,
+    direction: 'ja_to_en' | 'en_to_ja' | 'both'
+  ) => {
     if (!onSaveSentenceCard) return;
     const cleanEn = sentenceItem.english.trim();
     const cleanJa = sentenceItem.japanese.trim() || '瞬間英作文';
@@ -236,10 +273,25 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       translation: cleanJa,
       focusType: 'sentence',
       importance: 5,
+      cardDirection: direction,
     });
 
     confetti({ particleCount: 25, spread: 50, origin: { y: 0.8 } });
-    setSavedSentenceKeys(prev => new Set([...prev, cleanEn.toLowerCase()]));
+
+    // Update local state map
+    const key = cleanEn.toLowerCase();
+    setSavedDirectionsMap(prev => {
+      const next = new Map(prev);
+      const set = new Set(next.get(key) || []);
+      if (direction === 'both') {
+        set.add('ja_to_en');
+        set.add('en_to_ja');
+      } else {
+        set.add(direction);
+      }
+      next.set(key, set);
+      return next;
+    });
   }, [onSaveSentenceCard]);
 
   return (
@@ -257,7 +309,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
                 パーソナル指導
               </span>
             </h1>
-            <p className="text-xs text-slate-400">「〜ってどう言う？」相談 ➔ 瞬間英作文カードに即時登録</p>
+            <p className="text-xs text-slate-400">「〜ってどう言う？」相談 ➔ 瞬間英作文・読解カードに即時登録</p>
           </div>
         </div>
 
@@ -293,7 +345,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
             <div className="space-y-1 max-w-sm">
               <h3 className="text-sm font-semibold text-slate-300">英語の疑問を何でも質問してください</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                「〜って言いたい時どう言う？」「このニュアンスの違いは？」と相談すると、AIが回答し、ワンタップでAnkiの瞬間英作文カードに登録できます。
+                「〜って言いたい時どう言う？」「このニュアンスの違いは？」と相談すると、AIが回答し、ワンタップでAnkiの瞬間英作文・読解カードに登録できます。
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-2 pt-2 max-w-md">
@@ -318,7 +370,8 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         ) : (
           messages.map((m, mIdx) => {
             const prevUserMessage = mIdx > 0 && messages[mIdx - 1]?.sender === 'user' ? messages[mIdx - 1]?.text : undefined;
-            
+            const primaryIntent = detectQueryDirection(prevUserMessage);
+
             // Extract sentences from structured payload or fallback parser
             const candidateSentences = m.suggestedSentences && m.suggestedSentences.length > 0
               ? m.suggestedSentences
@@ -336,7 +389,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
                 )}
 
                 <div
-                  className={`max-w-[90%] sm:max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed space-y-3 ${
+                  className={`max-w-[92%] sm:max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed space-y-3 ${
                     m.sender === 'user'
                       ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/20'
                       : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
@@ -350,52 +403,97 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 
                   {/* Assistant Action Buttons: Assembly Cards & Vocab Suggestions */}
                   {m.sender === 'assistant' && (
-                    <div className="pt-2 border-t border-slate-800 space-y-2.5">
-                      {/* 1. 🧩 瞬間英作文（和英・組立カード）登録ボックス群 */}
+                    <div className="pt-2 border-t border-slate-800 space-y-3">
+                      {/* 1. 🧩 例文Anki登録ボックス群（和英・英和・双方向） */}
                       {onSaveSentenceCard && candidateSentences.length > 0 && (
                         <div className="space-y-2">
-                          <span className="text-[10px] font-bold text-purple-300 flex items-center gap-1">
-                            <Puzzle className="w-3.5 h-3.5 text-purple-400" />
-                            瞬間英作文（和英カード）に登録:
-                          </span>
-                          <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-bold">
+                            <span className="text-purple-300 flex items-center gap-1">
+                              <Puzzle className="w-3.5 h-3.5 text-purple-400" />
+                              おすすめ例文をAnkiに登録:
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {primaryIntent === 'ja_to_en' ? '🎯 和英（作文）推奨' : '🎯 英和（読解）推奨'}
+                            </span>
+                          </div>
+
+                          <div className="space-y-2">
                             {candidateSentences.map((sent, sIdx) => {
-                              const isSaved = savedSentenceKeys.has(sent.english.trim().toLowerCase());
+                              const sentKey = sent.english.trim().toLowerCase();
+                              const savedSet = savedDirectionsMap.get(sentKey) || new Set();
+                              const isJaToEnSaved = savedSet.has('ja_to_en');
+                              const isEnToJaSaved = savedSet.has('en_to_ja');
+                              const isBothSaved = isJaToEnSaved && isEnToJaSaved;
+
                               return (
                                 <div
                                   key={sIdx}
-                                  className="p-2.5 rounded-xl bg-gradient-to-r from-purple-950/60 to-indigo-950/60 border border-purple-500/30 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm"
+                                  className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/40 via-indigo-950/40 to-slate-950/60 border border-purple-500/30 text-xs space-y-2.5 shadow-md"
                                 >
-                                  <div className="space-y-0.5 min-w-0 pr-1">
-                                    <p className="font-serif font-bold text-white leading-snug">
+                                  {/* Sentence Display */}
+                                  <div className="space-y-1 min-w-0 pr-1">
+                                    <p className="font-serif font-bold text-white text-sm leading-snug">
                                       "{sent.english}"
                                     </p>
-                                    <p className="text-[11px] text-purple-200/80">
+                                    <p className="text-[11px] text-purple-200/90 font-medium">
                                       {sent.japanese}
                                     </p>
                                   </div>
 
-                                  <button
-                                    onClick={() => handleSaveAssemblyCard(sent)}
-                                    disabled={isSaved}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer ${
-                                      isSaved
-                                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 cursor-default'
-                                        : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md active:scale-95'
-                                    }`}
-                                  >
-                                    {isSaved ? (
-                                      <>
-                                        <Check className="w-3.5 h-3.5" />
-                                        <span>Anki登録済</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Plus className="w-3.5 h-3.5" />
-                                        <span>Anki（和英）に登録</span>
-                                      </>
-                                    )}
-                                  </button>
+                                  {/* Action Buttons: 和英 / 英和 / 双方向 */}
+                                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-purple-500/20">
+                                    {/* 1. 和英（瞬間英作文）ボタン */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveCardWithDirection(sent, 'ja_to_en')}
+                                      disabled={isJaToEnSaved}
+                                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                        isJaToEnSaved
+                                          ? 'bg-purple-900/40 text-purple-300 border border-purple-500/30 cursor-default'
+                                          : primaryIntent === 'ja_to_en'
+                                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-600/30 ring-1 ring-purple-400/40 active:scale-95'
+                                          : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700 active:scale-95'
+                                      }`}
+                                      title="日本語を見て英語を瞬時に組み立てる訓練 (JA ➔ EN)"
+                                    >
+                                      {isJaToEnSaved ? <Check className="w-3.5 h-3.5 text-purple-400" /> : <PenTool className="w-3.5 h-3.5 text-purple-300" />}
+                                      <span>{isJaToEnSaved ? '和英済' : '✍️ 和英 (作文)'}</span>
+                                    </button>
+
+                                    {/* 2. 英和（読解コンパイル）ボタン */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveCardWithDirection(sent, 'en_to_ja')}
+                                      disabled={isEnToJaSaved}
+                                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                        isEnToJaSaved
+                                          ? 'bg-blue-900/40 text-blue-300 border border-blue-500/30 cursor-default'
+                                          : primaryIntent === 'en_to_ja'
+                                          ? 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white shadow-md shadow-blue-600/30 ring-1 ring-blue-400/40 active:scale-95'
+                                          : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700 active:scale-95'
+                                      }`}
+                                      title="英語を見て頭から瞬時に意味を理解する訓練 (EN ➔ JA)"
+                                    >
+                                      {isEnToJaSaved ? <Check className="w-3.5 h-3.5 text-blue-400" /> : <BookOpen className="w-3.5 h-3.5 text-blue-300" />}
+                                      <span>{isEnToJaSaved ? '英和済' : '📖 英和 (読解)'}</span>
+                                    </button>
+
+                                    {/* 3. 双方向（兄弟カード）ボタン */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveCardWithDirection(sent, 'both')}
+                                      disabled={isBothSaved}
+                                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                        isBothSaved
+                                          ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-500/30 cursor-default'
+                                          : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:border-slate-600 active:scale-95'
+                                      }`}
+                                      title="和英（作文）と英和（読解）の2枚を兄弟カードとして同時作成"
+                                    >
+                                      {isBothSaved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Repeat className="w-3.5 h-3.5 text-emerald-400" />}
+                                      <span>{isBothSaved ? '双方向済' : '🔄 双方向 (2枚)'}</span>
+                                    </button>
+                                  </div>
                                 </div>
                               );
                             })}
@@ -405,7 +503,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 
                       {/* 2. 単語帳登録推奨 */}
                       {m.suggestedVocabs && m.suggestedVocabs.length > 0 && (
-                        <div className="space-y-1 pt-1 border-t border-slate-800/60">
+                        <div className="space-y-1.5 pt-2 border-t border-slate-800/60">
                           <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
                             <Sparkles className="w-3 h-3" />
                             重要単語・表現:
