@@ -1626,6 +1626,7 @@ export interface SaveSentenceCardParams {
   corePatterns?: ExtractedCorePattern[];
   sourceStoryId?: string;
   importance?: number;
+  cardDirection?: 'en_to_ja' | 'ja_to_en';
 }
 
 /**
@@ -1695,7 +1696,9 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     ? (params.corePatterns[0].briefNote || params.corePatterns[0].meaningTemplate)
     : (params.focusMeaning ? cleanTranslationText(params.focusMeaning) : '');
 
-  // Card 1: 英 ➔ 和 (読解・インプット認識用: 片方向)
+  const direction = params.cardDirection || 'en_to_ja';
+
+  // Card 1: 読解 (en_to_ja) または 瞬間英作文 (ja_to_en)
   const card1: VocabItem = {
     id: id1,
     phrase: phraseText,
@@ -1709,7 +1712,7 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
     focusWord: isWord ? params.focusWord?.trim() : undefined,
     focusMeaning: isWord ? meaningText : undefined,
     corePatterns: params.corePatterns || [],
-    cardDirection: 'en_to_ja',
+    cardDirection: direction,
     ...srs1,
     nextReviewDate: today,
     createdAt: now,
@@ -1723,8 +1726,8 @@ export function saveSentenceCardWithSiblings(params: SaveSentenceCardParams): { 
   // 単語カードの場合は phrase + cardDirection でチェック
   // 文・構文カードの場合は sentence + cardDirection でチェック
   const matchFn1 = isWord
-    ? (v: VocabItem) => v.phrase.toLowerCase() === card1.phrase.toLowerCase() && v.cardDirection === 'en_to_ja'
-    : (v: VocabItem) => v.sentence === card1.sentence && v.cardDirection === 'en_to_ja';
+    ? (v: VocabItem) => v.phrase.toLowerCase() === card1.phrase.toLowerCase() && v.cardDirection === direction
+    : (v: VocabItem) => v.sentence === card1.sentence && v.cardDirection === direction;
 
   const existingIdx1 = vocabs.findIndex(matchFn1);
   const finalId1 = existingIdx1 >= 0 ? vocabs[existingIdx1].id : id1;
