@@ -135,14 +135,14 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   const [showEnglishInShadowing, setShowEnglishInShadowing] = useState<boolean>(false);
   const [isCardListOpen, setIsCardListOpen] = useState<boolean>(false);
 
-  // 鮮度優先（Hot & Fresh Priority）でソートされたAnkiカード群
+  // リスニング専用Ankiカードのみを抽出し、未練習優先＆鮮度優先（Hot & Fresh Priority）でソート
   const ankiCards = useMemo(() => {
     return allVocabs
-      .filter(v => v.focusType === 'listening' || Boolean(v.sentence || v.exampleSentence))
+      .filter(v => v.focusType === 'listening')
       .sort((a, b) => {
-        // Listeningカードを最優先
-        if (a.focusType === 'listening' && b.focusType !== 'listening') return -1;
-        if (b.focusType === 'listening' && a.focusType !== 'listening') return 1;
+        // 未発話または発話回数が少ないものを優先
+        const practiceDiff = (a.speechPracticeCount || 0) - (b.speechPracticeCount || 0);
+        if (practiceDiff !== 0) return practiceDiff;
         // 最新作成日時順（Hot Priority）
         const timeA = new Date(a.createdAt || a.lastReviewedAt || 0).getTime();
         const timeB = new Date(b.createdAt || b.lastReviewedAt || 0).getTime();
@@ -929,9 +929,9 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
                 <Mic className="w-8 h-8" />
               </div>
               <div className="space-y-1">
-                <h2 className="text-xl font-bold text-white">Ankiカードがまだありません</h2>
+                <h2 className="text-xl font-bold text-white">リスニング専用Ankiカードがまだありません</h2>
                 <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto">
-                  「AI新規文で帯域特訓」で聞き取れなかった文や、Ankiに登録された英文がここにストックされます。
+                  「AI無制限特訓」で聞き取れなかった文を「🔴 リスニングAnkiに保存」すると、ここにストックされて無限に発話練習できます。
                 </p>
               </div>
               <button
@@ -1111,7 +1111,7 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
             <div className="flex items-center justify-between">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <List className="w-4 h-4 text-indigo-400" />
-                <span>Ankiカード一覧 ({ankiCards.length}枚)</span>
+                <span>リスニングAnkiカード一覧 ({ankiCards.length}枚)</span>
               </h2>
               <button
                 onClick={() => setIsCardListOpen(false)}
