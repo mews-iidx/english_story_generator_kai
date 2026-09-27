@@ -1,1516 +1,714 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  FlaskConical,
-  Play,
-  RotateCcw,
-  Sparkles,
-  ArrowRight,
-  CheckCircle2,
-  AlertCircle,
-  Brain,
-  Layers,
-  Activity,
-  Download,
-  Trash2,
-  RefreshCw,
   Headphones,
-  Zap,
-  Check,
+  Play,
+  Sparkles,
+  CheckCircle2,
   BarChart3,
   Minus,
   Plus,
-  ChevronDown,
-  ChevronRight,
-  TrendingUp,
-  Scissors,
-  Pause,
-  SkipForward
+  Zap,
+  Volume2,
+  BookmarkPlus,
+  RefreshCw,
+  Eye,
+  X
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
-import {
-  LabQuestion,
-  LabChunk,
-  LabDiagnosisResult,
-  LabQuestionRecord,
-  LabAnalyticsSummary,
-  LabBottleneckType
-} from '../types/listeningLab';
+import { LabQuestion, LabAnalyticsSummary } from '../types/listeningLab';
 import {
   generateLabBatch,
-  diagnoseUserResponse,
-  saveLabRecord,
+  saveLabQuestionRecord,
   calculateLabAnalytics,
-  clearLabRecords,
-  exportLabRecordsJson,
-  splitIntoSmartChunks
 } from '../services/listeningLabService';
+import { saveListeningCard } from '../services/storage';
+import { speakText, stopSpeech } from '../utils/speech';
+import confetti from 'canvas-confetti';
 
 interface ListeningLabViewProps {
   apiKey: string;
   selectedModel?: string;
   userLevel?: CefrLevel;
+  onListeningCardSaved?: () => void;
 }
 
-const WORD_COUNT_OPTIONS = [4, 6, 8, 12, 16, 20] as const;
-
-type ActiveTab = 'training' | 'analytics';
-type DisplayMode = 'chunk_step_pause' | 'audio_only' | 'rsvp_chunk' | 'rsvp_word' | 'text_reveal';
-type StepStatus = 'idle' | 'playing_chunk' | 'paused_at_boundary' | 'all_chunks_done';
+const WORD_COUNT_PRESETS = [4, 6, 8, 10, 12, 14, 16, 20] as const;
+const CEFR_LEVELS: CefrLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1'];
+const SPEED_RATES = [
+  { label: '0.8x', value: 0.8 },
+  { label: '0.9x', value: 0.9 },
+  { label: '1.0x', value: 1.0 },
+  { label: '1.1x', value: 1.1 },
+  { label: '1.2x', value: 1.2 },
+];
 
 export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   apiKey,
   selectedModel = 'gemini-2.0-flash',
   userLevel = 'A2',
+  onListeningCardSaved,
 }) => {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('training');
-
   // Configuration State
-  const [targetWordCount, setTargetWordCount] = useState<number>(4);
-  const [targetSpeedWpm, setTargetSpeedWpm] = useState<number>(60);
-  const [displayMode, setDisplayMode] = useState<DisplayMode>('chunk_step_pause');
-  const cefrLevel = userLevel;
+  const [targetWordCount, setTargetWordCount] = useState<number>(10);
+  const [targetSpeedRate, setTargetSpeedRate] = useState<number>(1.0);
+  const [targetCefrLevel, setTargetCefrLevel] = useState<CefrLevel>(userLevel);
 
-  // Batch Session State (Initially empty, user clicks to generate explicitly)
-  const [currentSessionId, setCurrentSessionId] = useState<string>(() => 'sess_' + Date.now());
+  // Batch / Session State
   const [questions, setQuestions] = useState<LabQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const [isGeneratingBatch, setIsGeneratingBatch] = useState<boolean>(false);
-
-  // Playback & Continuous RSVP State
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [activeWordIndex, setActiveWordIndex] = useState<number>(-1);
-  const [activeChunkIndex, setActiveChunkIndex] = useState<number>(-1);
-  const playbackTimerRef = useRef<any>(null);
-
-  // Chunk-Step-Pause Interactive State
-  const [stepChunkIdx, setStepChunkIdx] = useState<number>(0);
-  const [stepWordIdx, setStepWordIdx] = useState<number>(-1);
-  const [stepStatus, setStepStatus] = useState<StepStatus>('idle');
-
-  // User Input & AI Diagnosis State
-  const [userResponse, setUserResponse] = useState<string>('');
-  const [isDiagnosing, setIsDiagnosing] = useState<boolean>(false);
-  const [diagnosisResult, setDiagnosisResult] = useState<LabDiagnosisResult | null>(null);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [isSessionCompleted, setIsSessionCompleted] = useState<boolean>(false);
 
-  // Analytics State
+  // Card Progress State
+  const [isRevealed, setIsRevealed] = useState<boolean>(false);
+  const [markedIndices, setMarkedIndices] = useState<Set<number>>(new Set());
+  const [playCount, setPlayCount] = useState<number>(0);
+  const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
+
+  // Session Stats
+  const [sessionPerfectCount, setSessionPerfectCount] = useState<number>(0);
+  const [sessionSavedCount, setSessionSavedCount] = useState<number>(0);
+
+  // Analytics & Modal State
   const [analytics, setAnalytics] = useState<LabAnalyticsSummary>(() => calculateLabAnalytics());
-  const [copiedExport, setCopiedExport] = useState<boolean>(false);
-  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [isAnalyticsOpen, setIsAnalyticsOpen] = useState<boolean>(false);
 
-  const currentQuestion = questions[currentIndex] || null;
+  const currentQuestion: LabQuestion | undefined = questions[currentIndex];
 
-  const currentChunks: LabChunk[] = useMemo(() => {
-    if (!currentQuestion) return [];
-    if (currentQuestion.chunks && currentQuestion.chunks.length > 0) {
-      return currentQuestion.chunks;
-    }
-    return splitIntoSmartChunks(currentQuestion.sentenceEn, currentQuestion.translationJa);
-  }, [currentQuestion]);
-
-  // Speed level guide helper
-  const speedGuide = useMemo(() => {
-    if (targetSpeedWpm <= 60) return { label: '超じっくり（1秒/語・音と文字の確認）', color: 'text-indigo-400 bg-indigo-950/60 border-indigo-500/30' };
-    if (targetSpeedWpm <= 90) return { label: 'ゆったり基礎（初心者向け・語順の意識）', color: 'text-sky-400 bg-sky-950/60 border-sky-500/30' };
-    if (targetSpeedWpm <= 130) return { label: '普通（標準的な日常会話・ニュース）', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-500/30' };
-    if (targetSpeedWpm <= 170) return { label: 'ネイティブ日常速度（ポッドキャスト）', color: 'text-amber-400 bg-amber-950/60 border-amber-500/30' };
-    if (targetSpeedWpm <= 200) return { label: 'ネイティブ実速度（映画・フリートーク）', color: 'text-orange-400 bg-orange-950/60 border-orange-500/30' };
-    return { label: 'ネイティブ早口（TED Talks・議論）', color: 'text-rose-400 bg-rose-950/60 border-rose-500/30' };
-  }, [targetSpeedWpm]);
-
-  // Refresh analytics
-  const refreshAnalytics = useCallback(() => {
-    setAnalytics(calculateLabAnalytics());
-  }, []);
-
-  // Stop playback on unmount or question change
-  const stopPlayback = useCallback(() => {
-    if (playbackTimerRef.current) {
-      clearTimeout(playbackTimerRef.current);
-      clearInterval(playbackTimerRef.current);
-      playbackTimerRef.current = null;
-    }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-    setIsPlaying(false);
-    setActiveWordIndex(-1);
-    setActiveChunkIndex(-1);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      stopPlayback();
-    };
-  }, [stopPlayback]);
-
-  // Reset interactive step state on question change
-  useEffect(() => {
-    setStepChunkIdx(0);
-    setStepWordIdx(-1);
-    setStepStatus('idle');
-  }, [currentIndex, questions]);
-
-  // Generate a batch of 5 questions (Triggered explicitly by user)
-  const handleGenerateBatch = useCallback(async () => {
-    if (isGeneratingBatch) return;
-    stopPlayback();
-    setIsGeneratingBatch(true);
-    const newSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    setCurrentSessionId(newSessionId);
-    setCurrentIndex(0);
-    setUserResponse('');
-    setDiagnosisResult(null);
+  // 1. Fetch / Generate batch
+  const handleGenerateBatch = useCallback(async (count = 5) => {
+    stopSpeech();
+    setIsGenerating(true);
     setIsSessionCompleted(false);
-    setActiveWordIndex(-1);
-    setActiveChunkIndex(-1);
-    setStepChunkIdx(0);
-    setStepWordIdx(-1);
-    setStepStatus('idle');
+    setCurrentIndex(0);
+    setIsRevealed(false);
+    setMarkedIndices(new Set());
+    setPlayCount(0);
 
     try {
-      const batch = await generateLabBatch({
+      const newQuestions = await generateLabBatch({
         wordCount: targetWordCount,
-        speedWpm: targetSpeedWpm,
-        count: 5,
-        cefrLevel,
+        speedRate: targetSpeedRate,
+        count,
+        cefrLevel: targetCefrLevel,
         apiKey,
         model: selectedModel,
       });
-      setQuestions(batch);
+
+      setQuestions(newQuestions);
+      if (newQuestions.length > 0) {
+        // Auto play first question
+        setTimeout(() => {
+          speakText(newQuestions[0].sentenceEn, targetSpeedRate, 'en-US', () => setIsPlayingAudio(false));
+          setIsPlayingAudio(true);
+          setPlayCount(1);
+        }, 400);
+      }
     } catch (e) {
-      console.error('Failed to generate batch', e);
+      console.error('Failed to generate lab batch', e);
     } finally {
-      setIsGeneratingBatch(false);
+      setIsGenerating(false);
     }
-  }, [targetWordCount, targetSpeedWpm, cefrLevel, apiKey, selectedModel, isGeneratingBatch, stopPlayback]);
+  }, [targetWordCount, targetSpeedRate, targetCefrLevel, apiKey, selectedModel]);
 
-  // ===================== PLAYBACK ENGINES =====================
-
-  // Interactive Chunk-Step-Pause: Play a single chunk with word flash and pause at boundary
-  const playStepChunk = useCallback((chunkIndex: number) => {
-    if (!currentQuestion || currentChunks.length === 0) return;
-    if (chunkIndex >= currentChunks.length) {
-      setStepStatus('all_chunks_done');
-      return;
+  // Initial load
+  useEffect(() => {
+    if (questions.length === 0 && !isGenerating) {
+      handleGenerateBatch(5);
     }
+  }, []);
 
-    stopPlayback();
-    setIsPlaying(true);
-    setStepChunkIdx(chunkIndex);
-    setStepStatus('playing_chunk');
-
-    const chunk = currentChunks[chunkIndex];
-    const chunkWords = chunk.text.trim().split(/\s+/).filter(Boolean);
-    let wordIdx = 0;
-    setStepWordIdx(0);
-
-    const speakAndStepWord = () => {
-      if (wordIdx >= chunkWords.length) {
-        if (playbackTimerRef.current) {
-          clearInterval(playbackTimerRef.current);
-          playbackTimerRef.current = null;
-        }
-        stopPlayback();
-        setStepWordIdx(-1);
-        setStepStatus('paused_at_boundary');
-        return;
-      }
-
-      const word = chunkWords[wordIdx];
-      setStepWordIdx(wordIdx);
-
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(word.replace(/[^a-zA-Z0-9'-]/g, ''));
-        utterance.lang = 'en-US';
-        const rateMultiplier = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 100));
-        utterance.rate = rateMultiplier;
-        window.speechSynthesis.speak(utterance);
-      }
-
-      wordIdx++;
-    };
-
-    speakAndStepWord();
-    const intervalMs = Math.round((60 / targetSpeedWpm) * 1000);
-    playbackTimerRef.current = setInterval(() => {
-      if (wordIdx < chunkWords.length) {
-        speakAndStepWord();
-      } else {
-        if (playbackTimerRef.current) {
-          clearInterval(playbackTimerRef.current);
-          playbackTimerRef.current = null;
-        }
-        stopPlayback();
-        setStepWordIdx(-1);
-        setStepStatus('paused_at_boundary');
-      }
-    }, intervalMs);
-  }, [currentQuestion, currentChunks, targetSpeedWpm, stopPlayback]);
-
-  // Advance to next chunk in step-pause mode
-  const handleAdvanceStepChunk = useCallback(() => {
-    if (stepChunkIdx + 1 < currentChunks.length) {
-      const nextIdx = stepChunkIdx + 1;
-      setStepChunkIdx(nextIdx);
-      playStepChunk(nextIdx);
-    } else {
-      setStepStatus('all_chunks_done');
-    }
-  }, [stepChunkIdx, currentChunks.length, playStepChunk]);
-
-  // Standard / Continuous Playback Engine (Audio-only / RSVP Continuous / Text Reveal)
-  const playContinuousQuestion = useCallback(() => {
+  // 2. Play Audio
+  const handlePlayAudio = useCallback((rate = targetSpeedRate) => {
     if (!currentQuestion) return;
-    stopPlayback();
-    setIsPlaying(true);
+    stopSpeech();
+    setIsPlayingAudio(true);
+    setPlayCount(prev => prev + 1);
+    speakText(currentQuestion.sentenceEn, rate, 'en-US', () => {
+      setIsPlayingAudio(false);
+    });
+  }, [currentQuestion, targetSpeedRate]);
 
-    const words = currentQuestion.words;
-    const chunks = currentChunks;
+  // 3. Toggle Word Marking
+  const handleToggleWordMark = (wordIdx: number) => {
+    setMarkedIndices(prev => {
+      const next = new Set(prev);
+      if (next.has(wordIdx)) {
+        next.delete(wordIdx);
+      } else {
+        next.add(wordIdx);
+      }
+      return next;
+    });
+  };
 
-    // 1. Chunk RSVP Continuous: Sequential flash of chunks without stopping
-    if (displayMode === 'rsvp_chunk') {
-      let cIdx = 0;
-      setActiveChunkIndex(0);
+  // 4. Complete Question Action
+  const handleCompleteQuestion = useCallback((isPerfect: boolean) => {
+    if (!currentQuestion) return;
+    stopSpeech();
 
-      const playNextContinuousChunk = () => {
-        if (cIdx >= chunks.length) {
-          stopPlayback();
-          return;
-        }
+    const markedTokensList = Array.from(markedIndices)
+      .sort((a, b) => a - b)
+      .map(idx => currentQuestion.words[idx])
+      .filter(Boolean);
 
-        const chunk = chunks[cIdx];
-        setActiveChunkIndex(cIdx);
+    // Save record to persistent storage
+    saveLabQuestionRecord({
+      id: `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toISOString().split('T')[0],
+      sentenceEn: currentQuestion.sentenceEn,
+      translationJa: currentQuestion.translationJa,
+      wordCount: currentQuestion.words.length,
+      speedRate: targetSpeedRate,
+      cefrLevel: targetCefrLevel,
+      markedTokens: markedTokensList,
+      isPerfect,
+      savedToAnki: !isPerfect,
+    });
 
-        if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(chunk.text);
-          utterance.lang = 'en-US';
-          const rateMultiplier = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 110));
-          utterance.rate = rateMultiplier;
-
-          utterance.onend = () => {
-            cIdx++;
-            if (cIdx < chunks.length) {
-              playbackTimerRef.current = setTimeout(playNextContinuousChunk, 200);
-            } else {
-              stopPlayback();
-            }
-          };
-
-          utterance.onerror = () => {
-            stopPlayback();
-          };
-
-          window.speechSynthesis.speak(utterance);
-        } else {
-          cIdx++;
-          playbackTimerRef.current = setTimeout(playNextContinuousChunk, 900);
-        }
-      };
-
-      playNextContinuousChunk();
-      return;
-    }
-
-    // 2. Word RSVP Continuous: Word by word interval reading
-    if (displayMode === 'rsvp_word') {
-      let currentWordIdx = 0;
-      setActiveWordIndex(0);
-
-      const speakNextWord = () => {
-        if (currentWordIdx >= words.length) {
-          stopPlayback();
-          return;
-        }
-
-        const word = words[currentWordIdx];
-        setActiveWordIndex(currentWordIdx);
-
-        if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(word.replace(/[^a-zA-Z0-9'-]/g, ''));
-          utterance.lang = 'en-US';
-          utterance.rate = Math.max(0.7, Math.min(1.8, targetSpeedWpm / 100));
-          window.speechSynthesis.speak(utterance);
-        }
-
-        currentWordIdx++;
-      };
-
-      speakNextWord();
-      const intervalMs = Math.round((60 / targetSpeedWpm) * 1000);
-      playbackTimerRef.current = setInterval(() => {
-        if (currentWordIdx < words.length) {
-          speakNextWord();
-        } else {
-          stopPlayback();
-        }
-      }, intervalMs);
-      return;
-    }
-
-    // 3. Standard Continuous Audio Stream
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(currentQuestion.sentenceEn);
-      utterance.lang = 'en-US';
-      const rateMultiplier = Math.max(0.6, Math.min(2.0, targetSpeedWpm / 120));
-      utterance.rate = rateMultiplier;
-
-      utterance.onend = () => {
-        setIsPlaying(false);
-      };
-
-      utterance.onerror = () => {
-        setIsPlaying(false);
-      };
-
-      window.speechSynthesis.speak(utterance);
+    if (isPerfect) {
+      setSessionPerfectCount(prev => prev + 1);
     } else {
-      setTimeout(() => {
-        setIsPlaying(false);
-      }, (words.length / (targetSpeedWpm / 60)) * 1000);
-    }
-  }, [currentQuestion, currentChunks, displayMode, targetSpeedWpm, stopPlayback]);
+      // Save directly to Anki (Dedicated Listening Card)
+      saveListeningCard({
+        sentence: currentQuestion.sentenceEn,
+        translation: currentQuestion.translationJa,
+        markedTokens: markedTokensList,
+        targetSpeedRate: targetSpeedRate,
+        englishExplanation: currentQuestion.englishExplanation || (currentQuestion.phoneticPoints ? `音声変化: ${currentQuestion.phoneticPoints}` : undefined),
+        cefrLevel: targetCefrLevel,
+        wordCount: currentQuestion.words.length,
+      });
 
-  // Space / Enter Keyboard Shortcut for step advancement
+      setSessionSavedCount(prev => prev + 1);
+      if (onListeningCardSaved) {
+        onListeningCardSaved();
+      }
+
+      confetti({
+        particleCount: 20,
+        spread: 45,
+        origin: { y: 0.8 },
+      });
+    }
+
+    // Update Analytics
+    setAnalytics(calculateLabAnalytics());
+
+    // Advance to next question
+    if (currentIndex + 1 < questions.length) {
+      const nextIdx = currentIndex + 1;
+      setCurrentIndex(nextIdx);
+      setIsRevealed(false);
+      setMarkedIndices(new Set());
+      setPlayCount(0);
+
+      // Auto play next question
+      setTimeout(() => {
+        if (questions[nextIdx]) {
+          speakText(questions[nextIdx].sentenceEn, targetSpeedRate, 'en-US', () => setIsPlayingAudio(false));
+          setIsPlayingAudio(true);
+          setPlayCount(1);
+        }
+      }, 300);
+    } else {
+      setIsSessionCompleted(true);
+      confetti({
+        particleCount: 60,
+        spread: 70,
+        origin: { y: 0.6 },
+      });
+    }
+  }, [currentQuestion, markedIndices, targetSpeedRate, targetCefrLevel, currentIndex, questions, onListeningCardSaved]);
+
+  // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (activeTab !== 'training') return;
-      // Do not capture if focused in input or textarea
-      const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-        return;
-      }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      if (e.code === 'Space' || e.code === 'Enter') {
-        if (displayMode === 'chunk_step_pause') {
-          e.preventDefault();
-          if (stepStatus === 'idle') {
-            playStepChunk(0);
-          } else if (stepStatus === 'paused_at_boundary') {
-            handleAdvanceStepChunk();
-          }
+      if (e.code === 'Space' || e.code === 'KeyR') {
+        e.preventDefault();
+        handlePlayAudio();
+      } else if (e.code === 'Enter') {
+        e.preventDefault();
+        if (!isRevealed) {
+          setIsRevealed(true);
+        } else {
+          // If revealed, Enter triggers complete
+          handleCompleteQuestion(markedIndices.size === 0);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, displayMode, stepStatus, playStepChunk, handleAdvanceStepChunk]);
-
-  // Adjust WPM by delta (+10 / -10)
-  const handleAdjustWpm = (delta: number) => {
-    setTargetSpeedWpm((prev) => {
-      const next = prev + delta;
-      return Math.min(250, Math.max(50, next));
-    });
-  };
-
-  // Handle User Reflection Submission & AI Diagnosis
-  const handleDiagnose = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!currentQuestion || isDiagnosing) return;
-
-    setIsDiagnosing(true);
-    stopPlayback();
-
-    try {
-      const diag = await diagnoseUserResponse({
-        question: currentQuestion,
-        userResponse: userResponse.trim() || '（無言または聞き取り不能）',
-        speedWpm: targetSpeedWpm,
-        wordCount: currentQuestion.wordCount,
-        apiKey,
-        model: selectedModel,
-      });
-
-      setDiagnosisResult(diag);
-
-      // Save Record to persistent storage
-      const record: LabQuestionRecord = {
-        id: 'rec_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-        sessionId: currentSessionId,
-        timestamp: new Date().toISOString(),
-        dateString: new Date().toLocaleDateString('ja-JP'),
-        sentenceEn: currentQuestion.sentenceEn,
-        translationJa: currentQuestion.translationJa,
-        wordCount: currentQuestion.wordCount,
-        speedWpm: targetSpeedWpm,
-        cefrLevel,
-        userResponse,
-        chunks: currentQuestion.chunks,
-        diagnosis: diag,
-      };
-
-      saveLabRecord(record);
-      refreshAnalytics();
-    } catch (err) {
-      console.error('Diagnosis failed', err);
-    } finally {
-      setIsDiagnosing(false);
-    }
-  };
-
-  // Move to Next Question in Batch
-  const handleNextQuestion = () => {
-    stopPlayback();
-    if (currentIndex < questions.length - 1) {
-      setCurrentIndex((prev) => prev + 1);
-      setUserResponse('');
-      setDiagnosisResult(null);
-      setActiveWordIndex(-1);
-      setActiveChunkIndex(-1);
-      setStepChunkIdx(0);
-      setStepWordIdx(-1);
-      setStepStatus('idle');
-    } else {
-      setIsSessionCompleted(true);
-    }
-  };
-
-  // Quick chip filler
-  const addQuickChip = (text: string) => {
-    setUserResponse((prev) => {
-      if (!prev) return text;
-      return prev + ' / ' + text;
-    });
-  };
-
-  // Copy records to clipboard
-  const handleCopyRecords = () => {
-    const json = exportLabRecordsJson();
-    navigator.clipboard.writeText(json);
-    setCopiedExport(true);
-    setTimeout(() => setCopiedExport(false), 2000);
-  };
-
-  // Clear all data
-  const handleClearData = () => {
-    if (window.confirm('実験室の全測定データを消去しますか？')) {
-      clearLabRecords();
-      refreshAnalytics();
-    }
-  };
-
-  // Bottleneck styling helper
-  const getBottleneckBadge = (type: LabBottleneckType) => {
-    switch (type) {
-      case 'perfect':
-        return { label: '完全理解（自動化完了）', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
-      case 'memory_overflow':
-        return { label: 'ワーキングメモリ（文長）パンク', color: 'bg-red-500/20 text-red-300 border-red-500/40' };
-      case 'backward_parsing':
-        return { label: '関係詞・前置詞の返り読み癖', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
-      case 'phonetic_linking':
-        return { label: '音声変化・リンキング脱落', color: 'bg-purple-500/20 text-purple-300 border-purple-500/40' };
-      case 'unknown_vocab':
-        return { label: '未知語・多義語での思考停止', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' };
-      default:
-        return { label: '分析中', color: 'bg-slate-700 text-slate-300 border-slate-600' };
-    }
-  };
-
-  const matrixWpmColumns = [60, 80, 100, 120, 150, 180, 200];
-
-  const getCellColor = (cell?: { avgScore: number; attempts: number }) => {
-    if (!cell || cell.attempts === 0) return 'bg-slate-900/50 text-slate-600 border-slate-800';
-    if (cell.avgScore >= 90) return 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40 font-bold';
-    if (cell.avgScore >= 70) return 'bg-amber-950/80 text-amber-300 border-amber-500/40 font-bold';
-    return 'bg-red-950/80 text-red-300 border-red-500/40 font-bold';
-  };
+  }, [isRevealed, markedIndices, handlePlayAudio, handleCompleteQuestion]);
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-16 animate-fadeIn">
-      {/* 1. Header Banner */}
-      <div className="bg-gradient-to-r from-indigo-950/80 via-slate-900/90 to-purple-950/80 border border-indigo-500/30 rounded-3xl p-6 sm:p-7 shadow-2xl backdrop-blur-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="flex flex-wrap items-center justify-between gap-4 relative z-10">
-          <div className="space-y-1">
-            <div className="flex items-center space-x-2.5">
-              <div className="p-2.5 bg-indigo-500/20 border border-indigo-500/40 rounded-2xl text-indigo-400 shadow-inner">
-                <FlaskConical className="w-6 h-6 animate-pulse" />
-              </div>
-              <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2">
-                <span>Listening Lab</span>
-                <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono">
-                  Beta
-                </span>
-              </h1>
+    <div className="max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-6 pb-28 animate-fadeIn">
+      {/* 1. Header & Live Word Capacity Metrics */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+              <Headphones className="w-5 h-5 text-white" />
             </div>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
-              単語数 × 速度（WPM）を調整し、<strong>「全文キャッシュ癖」</strong>を壊して<strong>「チャンクごとの即時情景パッキング」</strong>を身体化する実験室。
-            </p>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-lg sm:text-xl font-black text-white tracking-tight">
+                  リスニング集中ラボ
+                </h1>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  帯域筋トレ
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                単語数 × 難易度 × 速度で聴覚ワーキングメモリを拡張する
+              </p>
+            </div>
           </div>
 
-          {/* Tab Navigation */}
-          <div className="flex items-center p-1 bg-slate-950/80 border border-slate-800 rounded-2xl shadow-inner">
+          {/* Quick Metrics Badge */}
+          <div className="flex items-center space-x-2">
+            <div className="px-3 py-1.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center space-x-2 text-xs">
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-slate-400">処理能力:</span>
+              <strong className="text-amber-300 font-mono">
+                {analytics.movingAverageWordCapacity > 0 ? `${analytics.movingAverageWordCapacity}語` : '測定中'}
+              </strong>
+            </div>
+
             <button
-              type="button"
-              onClick={() => setActiveTab('training')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                activeTab === 'training'
-                  ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-lg'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+              onClick={() => setIsAnalyticsOpen(true)}
+              className="p-2 rounded-2xl bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800 transition-colors"
+              title="詳細分析を見る"
             >
-              <Zap className="w-3.5 h-3.5" />
-              <span>トレーニング</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                refreshAnalytics();
-                setActiveTab('analytics');
-              }}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                activeTab === 'analytics'
-                  ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-lg'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>分析 &amp; キャパシティ行列</span>
+              <BarChart3 className="w-4 h-4 text-cyan-400" />
             </button>
           </div>
         </div>
 
-        {/* Lab Controls Strip (When in Training Tab) */}
-        {activeTab === 'training' && (
-          <div className="mt-6 pt-5 border-t border-slate-800/80 grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Control 1: Word Count Selection */}
-            <div>
-              <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1">
-                <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                <span>文の長さ（単語数）</span>
-              </label>
-              <div className="grid grid-cols-6 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                {WORD_COUNT_OPTIONS.map((count) => (
+        {/* 2. Control Bar: Word Count Spinner + CEFR + Speed Rate */}
+        <div className="pt-3 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          {/* A. Word Count Selector & Stepper */}
+          <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-300">文長（目標単語数）:</span>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={() => setTargetWordCount(prev => Math.max(4, prev - 1))}
+                  className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors font-bold"
+                  title="1語減らす"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <span className="font-mono font-black text-cyan-300 px-1 text-sm">
+                  {targetWordCount} 語
+                </span>
+                <button
+                  onClick={() => setTargetWordCount(prev => Math.min(25, prev + 1))}
+                  className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors font-bold"
+                  title="1語増やす"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+
+            {/* Presets */}
+            <div className="flex flex-wrap gap-1">
+              {WORD_COUNT_PRESETS.map(count => (
+                <button
+                  key={count}
+                  onClick={() => setTargetWordCount(count)}
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                    targetWordCount === count
+                      ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                      : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  {count}語
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* B. CEFR Level Selector */}
+          <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2">
+            <span className="font-bold text-slate-300 block">難易度 (CEFR):</span>
+            <div className="grid grid-cols-5 gap-1">
+              {CEFR_LEVELS.map(level => (
+                <button
+                  key={level}
+                  onClick={() => setTargetCefrLevel(level)}
+                  className={`py-1 rounded-xl text-center text-xs font-bold transition-all ${
+                    targetCefrLevel === level
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* C. Speed Rate Selector */}
+          <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-2">
+            <span className="font-bold text-slate-300 block">再生速度 (TTS):</span>
+            <div className="grid grid-cols-5 gap-1">
+              {SPEED_RATES.map(rate => (
+                <button
+                  key={rate.value}
+                  onClick={() => setTargetSpeedRate(rate.value)}
+                  className={`py-1 rounded-xl text-center text-xs font-bold transition-all ${
+                    targetSpeedRate === rate.value
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                      : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  {rate.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Generate / New Batch Action */}
+        <div className="flex items-center justify-between pt-1">
+          <div className="text-[11px] text-slate-400">
+            {isGenerating ? (
+              <span className="flex items-center space-x-1.5 text-cyan-300 animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>AIが{targetWordCount}語（{targetCefrLevel}）の特訓文を生成中...</span>
+              </span>
+            ) : questions.length > 0 ? (
+              <span>
+                問題: <strong className="text-white">{currentIndex + 1}</strong> / {questions.length} 問
+              </span>
+            ) : null}
+          </div>
+
+          <button
+            onClick={() => handleGenerateBatch(5)}
+            disabled={isGenerating}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md shadow-cyan-600/20 transition-all active:scale-95"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>新規5問を生成</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 3. Main Training Area */}
+      {isSessionCompleted ? (
+        /* Session Complete Card */
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-10 shadow-2xl text-center space-y-6 animate-fadeIn">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/25">
+            <CheckCircle2 className="w-9 h-9 text-white" />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+              セッション完了！ 🎉
+            </h2>
+            <p className="text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
+              目標 {targetWordCount} 語（{targetCefrLevel}）の特訓を完走しました！
+            </p>
+          </div>
+
+          {/* Session Summary Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg mx-auto text-center">
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
+              <span className="text-[11px] text-slate-400 block font-bold">一発クリア</span>
+              <strong className="text-xl sm:text-2xl font-black text-emerald-300 font-mono">
+                {sessionPerfectCount} / {questions.length}
+              </strong>
+            </div>
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
+              <span className="text-[11px] text-slate-400 block font-bold">Anki保存</span>
+              <strong className="text-xl sm:text-2xl font-black text-rose-300 font-mono">
+                {sessionSavedCount} 語
+              </strong>
+            </div>
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl col-span-2 sm:col-span-1">
+              <span className="text-[11px] text-slate-400 block font-bold">現在処理能力</span>
+              <strong className="text-xl sm:text-2xl font-black text-amber-300 font-mono">
+                {analytics.movingAverageWordCapacity} 語
+              </strong>
+            </div>
+          </div>
+
+          <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => handleGenerateBatch(5)}
+              className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/30 transition-all active:scale-95"
+            >
+              🔄 次の5問に挑戦する
+            </button>
+            <button
+              onClick={() => setIsAnalyticsOpen(true)}
+              className="w-full sm:w-auto px-6 py-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-2xl font-bold transition-all"
+            >
+              📊 分析データを確認
+            </button>
+          </div>
+        </div>
+      ) : currentQuestion ? (
+        /* Active Question Card */
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 relative overflow-hidden animate-fadeIn">
+          {/* Card Top Info */}
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center space-x-2">
+              <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-bold">
+                Q {currentIndex + 1} of {questions.length}
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-bold">
+                {currentQuestion.words.length} 語 ({targetCefrLevel})
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-mono font-bold">
+                {targetSpeedRate}x
+              </span>
+            </div>
+
+            <div className="text-slate-500 text-[11px] font-mono">
+              再生回数: <strong className="text-slate-300">{playCount}</strong> 回
+            </div>
+          </div>
+
+          {/* Blind / Reveal Card Display */}
+          {!isRevealed ? (
+            /* Phase 1: Blind Audio Loop */
+            <div className="py-8 flex flex-col items-center justify-center space-y-6 text-center">
+              {/* Big Waveform / Headphone Pulse */}
+              <div 
+                onClick={() => handlePlayAudio()}
+                className={`w-24 h-24 rounded-full flex items-center justify-center cursor-pointer transition-all ${
+                  isPlayingAudio
+                    ? 'bg-gradient-to-tr from-cyan-500 to-blue-600 shadow-2xl shadow-cyan-500/50 scale-105 animate-pulse ring-4 ring-cyan-400/30'
+                    : 'bg-slate-950 hover:bg-slate-800 border-2 border-slate-700 shadow-xl hover:scale-105'
+                }`}
+                title="音声を再生 (Space / R)"
+              >
+                {isPlayingAudio ? (
+                  <Volume2 className="w-10 h-10 text-white animate-bounce" />
+                ) : (
+                  <Play className="w-10 h-10 text-cyan-400 ml-1" />
+                )}
+              </div>
+
+              <div className="space-y-1 max-w-sm">
+                <p className="text-sm font-bold text-white">
+                  英文は隠された状態です 🎧
+                </p>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  頭の中で英語と意味が鮮明に浮かぶまで、何度でも再生してください。
+                </p>
+              </div>
+
+              {/* Quick Playback Rate Options */}
+              <div className="flex items-center space-x-2 pt-2">
+                <button
+                  onClick={() => handlePlayAudio(0.8)}
+                  className="px-3 py-1 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-bold transition-colors"
+                >
+                  ▶ 0.8x
+                </button>
+                <button
+                  onClick={() => handlePlayAudio(1.0)}
+                  className="px-3 py-1 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-bold transition-colors"
+                >
+                  ▶ 1.0x
+                </button>
+                <button
+                  onClick={() => handlePlayAudio(1.2)}
+                  className="px-3 py-1 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-bold transition-colors"
+                >
+                  ▶ 1.2x
+                </button>
+              </div>
+
+              {/* Reveal Action Button */}
+              <div className="w-full pt-4">
+                <button
+                  onClick={() => setIsRevealed(true)}
+                  className="w-full py-4 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-xl shadow-cyan-600/30 transition-all flex items-center justify-center space-x-2"
+                >
+                  <Eye className="w-4 h-4" />
+                  <span>英文を表示して照合 (Enter)</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Phase 2: Interactive Word Marking & Review */
+            <div className="space-y-6 animate-fadeIn">
+              {/* English Sentence Word Tokens */}
+              <div className="p-5 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-3 text-left">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-cyan-400">
+                    聞き取れなかった単語・リンキングをタップ選択:
+                  </span>
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      onClick={() => handlePlayAudio(0.8)}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-colors"
+                      title="0.8x で再生"
+                    >
+                      ▶ 0.8x
+                    </button>
+                    <button
+                      onClick={() => handlePlayAudio(1.0)}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-colors"
+                      title="1.0x で再生"
+                    >
+                      ▶ 1.0x
+                    </button>
+                  </div>
+                </div>
+
+                {/* Word Chips */}
+                <div className="flex flex-wrap gap-2 py-2">
+                  {currentQuestion.words.map((word, wIdx) => {
+                    const isMarked = markedIndices.has(wIdx);
+                    return (
+                      <button
+                        key={wIdx}
+                        onClick={() => handleToggleWordMark(wIdx)}
+                        className={`px-3 py-1.5 rounded-xl text-base sm:text-lg font-serif font-bold transition-all ${
+                          isMarked
+                            ? 'bg-rose-950/90 text-rose-200 border-2 border-rose-500 shadow-lg shadow-rose-500/20 scale-105'
+                            : 'bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-800'
+                        }`}
+                      >
+                        {word}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {markedIndices.size > 0 ? (
+                  <p className="text-xs text-rose-400 font-bold animate-pulse">
+                    ⚠️ {markedIndices.size} 語の聞き取り弱点をマーク中 ➔ Ankiに登録されます
+                  </p>
+                ) : (
+                  <p className="text-xs text-emerald-400">
+                    ✨ すべて聞き取れた場合はマーク不要です（そのまま完璧ボタンへ）
+                  </p>
+                )}
+              </div>
+
+              {/* Japanese Translation Box */}
+              <div className="p-4 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-1 text-left">
+                <span className="text-[11px] font-bold text-slate-400 block">日本語訳:</span>
+                <p className="text-sm sm:text-base font-bold text-slate-200 leading-relaxed">
+                  {currentQuestion.translationJa}
+                </p>
+              </div>
+
+              {/* Phonetics / Key Points Guide */}
+              {(currentQuestion.phoneticPoints || currentQuestion.englishExplanation) && (
+                <div className="p-3 bg-purple-950/30 border border-purple-500/20 rounded-2xl space-y-1 text-xs text-left">
+                  {currentQuestion.phoneticPoints && (
+                    <div className="text-purple-200">
+                      <strong className="text-purple-300">🔊 音声変化: </strong>
+                      {currentQuestion.phoneticPoints}
+                    </div>
+                  )}
+                  {currentQuestion.englishExplanation && (
+                    <div className="text-slate-300">
+                      <strong className="text-slate-400">💡 ニュアンス: </strong>
+                      {currentQuestion.englishExplanation}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Bottom Actions */}
+              <div className="pt-2">
+                {markedIndices.size === 0 ? (
                   <button
-                    key={count}
-                    type="button"
-                    onClick={() => setTargetWordCount(count)}
-                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
-                      targetWordCount === count
-                        ? 'bg-indigo-600 text-white shadow'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
+                    onClick={() => handleCompleteQuestion(true)}
+                    className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center space-x-2"
                   >
-                    {count}語
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span>🟢 完璧に聴き取れた！ (Enter)</span>
                   </button>
+                ) : (
+                  <button
+                    onClick={() => handleCompleteQuestion(false)}
+                    className="w-full py-4 bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-xl shadow-rose-600/30 transition-all flex items-center justify-center space-x-2"
+                  >
+                    <BookmarkPlus className="w-5 h-5" />
+                    <span>🔴 リスニングAnkiに登録して次へ ({markedIndices.size}語マーク)</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* 4. Analytics Modal */}
+      {isAnalyticsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-xl w-full max-h-[90vh] overflow-y-auto space-y-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <BarChart3 className="w-5 h-5 text-cyan-400" />
+                <h2 className="text-lg font-bold text-white">リスニング処理能力 分析</h2>
+              </div>
+              <button
+                onClick={() => setIsAnalyticsOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Summary Metrics */}
+            <div className="grid grid-cols-3 gap-2.5 text-center">
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
+                <span className="text-[10px] text-slate-400 block font-bold">総回答数</span>
+                <strong className="text-lg font-black text-white font-mono">{analytics.totalQuestions}</strong>
+              </div>
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
+                <span className="text-[10px] text-slate-400 block font-bold">完全突破率</span>
+                <strong className="text-lg font-black text-emerald-300 font-mono">{analytics.perfectPassRate}%</strong>
+              </div>
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl">
+                <span className="text-[10px] text-slate-400 block font-bold">移動平均単語数</span>
+                <strong className="text-lg font-black text-amber-300 font-mono">{analytics.movingAverageWordCapacity}語</strong>
+              </div>
+            </div>
+
+            {/* Word Count Breakdown Table */}
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-slate-300">文長別の完全突破率:</span>
+              <div className="space-y-1.5">
+                {Object.entries(analytics.wordCountStats).map(([wc, stat]) => (
+                  <div key={wc} className="p-2.5 bg-slate-950 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs">
+                    <span className="font-mono font-bold text-cyan-300 w-16">{wc} 語文</span>
+                    <div className="flex-1 mx-3 h-2 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full"
+                        style={{ width: `${stat.passRate}%` }}
+                      />
+                    </div>
+                    <span className="font-mono text-slate-300 w-16 text-right">
+                      {stat.perfectCount}/{stat.attempts} ({stat.passRate}%)
+                    </span>
+                  </div>
                 ))}
               </div>
             </div>
 
-            {/* Control 2: 10-step WPM Spinner & Benchmark Guide */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
-                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>再生速度（WPM）</span>
-                </label>
-                <div className="flex items-center space-x-1">
-                  <button
-                    type="button"
-                    onClick={() => handleAdjustWpm(-10)}
-                    disabled={targetSpeedWpm <= 50}
-                    className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 border border-slate-700 transition-all active:scale-95"
-                    title="10 WPM 遅延"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <span className="text-xs font-mono font-black text-cyan-300 min-w-[54px] text-center bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                    {targetSpeedWpm} WPM
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleAdjustWpm(10)}
-                    disabled={targetSpeedWpm >= 250}
-                    className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 border border-slate-700 transition-all active:scale-95"
-                    title="10 WPM 加速"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Slider & Speed Guide Badge */}
-              <div className="space-y-1.5">
-                <input
-                  type="range"
-                  min="50"
-                  max="250"
-                  step="10"
-                  value={targetSpeedWpm}
-                  onChange={(e) => setTargetSpeedWpm(Number(e.target.value))}
-                  className="w-full accent-cyan-400 h-1.5 bg-slate-950 rounded-lg cursor-pointer"
-                />
-                <div className={`text-[10px] font-semibold px-2 py-0.5 rounded-lg border text-center transition-all ${speedGuide.color}`}>
-                  {speedGuide.label}
-                </div>
-              </div>
-            </div>
-
-            {/* Control 3: Display Mode */}
-            <div>
-              <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1">
-                <Headphones className="w-3.5 h-3.5 text-emerald-400" />
-                <span>表示・トレーニングモード</span>
-              </label>
-              <select
-                value={displayMode}
-                onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
-                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-1.5 font-semibold focus:outline-none focus:border-indigo-500"
-              >
-                <option value="chunk_step_pause">⏸️ チャンク一時停止（単語フラッシュ＋切れ目で停止して脳内圧縮） ⭐推奨</option>
-                <option value="audio_only">🎧 音声のみ（全文連続・耳に全集中）</option>
-                <option value="rsvp_chunk">⚡ 1チャンクRSVP（英語塊で連続フラッシュ）</option>
-                <option value="rsvp_word">🔤 1単語RSVP（1語ずつ連続フラッシュ）</option>
-                <option value="text_reveal">📖 全文テキスト表示</option>
-              </select>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="col-span-full flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
-              <span className="text-xs text-slate-400 font-medium">
-                設定: <strong className="text-indigo-300">{targetWordCount}単語</strong> × <strong className="text-cyan-300">{targetSpeedWpm} WPM</strong>
-              </span>
-
-              <button
-                type="button"
-                onClick={handleGenerateBatch}
-                disabled={isGeneratingBatch}
-                className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600/90 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isGeneratingBatch ? 'animate-spin' : ''}`} />
-                <span>{isGeneratingBatch ? '問題セットを生成中...' : '新しい5問を生成して開始'}</span>
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 2. Main Content: Training Mode */}
-      {activeTab === 'training' && (
-        <div className="space-y-6">
-          {/* Welcome Screen (When no questions generated yet) */}
-          {questions.length === 0 && !isGeneratingBatch ? (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-6 shadow-2xl animate-fadeIn">
-              <div className="w-16 h-16 bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-indigo-500/10">
-                <Brain className="w-8 h-8" />
-              </div>
-              <div className="max-w-xl mx-auto space-y-2">
-                <h2 className="text-xl sm:text-2xl font-black text-white">
-                  リスニング実験室へようこそ
-                </h2>
-                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                  上のバーでお好みの<strong>【単語数】</strong>と<strong>【再生速度（WPM）】</strong>、<strong>【トレーニングモード】</strong>を設定し、下のボタンを押して5問セッションを開始してください。
-                </p>
-              </div>
-
-              {/* Feature Highlights */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl mx-auto text-left text-xs">
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-1">
-                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
-                    <Pause className="w-4 h-4 text-cyan-400" />
-                    <span>チャンク一時停止</span>
-                  </div>
-                  <p className="text-slate-400 text-[11px]">
-                    意味の切れ目（/）で止まり、脳内で情景を圧縮して音を捨てるリズムを訓練。
-                  </p>
-                </div>
-
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-1">
-                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
-                    <Activity className="w-4 h-4 text-indigo-400" />
-                    <span>WPM 限界測定</span>
-                  </div>
-                  <p className="text-slate-400 text-[11px]">
-                    10刻みで速度を変え、自分の脳のキャパシティ境界（成長フロンティア）を発見。
-                  </p>
-                </div>
-
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-1">
-                  <div className="font-bold text-emerald-300 flex items-center gap-1.5">
-                    <Scissors className="w-4 h-4 text-emerald-400" />
-                    <span>常時チャンク解剖</span>
-                  </div>
-                  <p className="text-slate-400 text-[11px]">
-                    回答後にどこで区切るべきだったかの解剖と直読直解ガイドを詳細表示。
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={handleGenerateBatch}
-                  className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-sm sm:text-base font-black shadow-xl shadow-indigo-600/30 transition-all mx-auto active:scale-95"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>【{targetWordCount}単語 × {targetSpeedWpm} WPM】で5問セットを生成して開始</span>
-                </button>
-              </div>
-            </div>
-          ) : isGeneratingBatch ? (
-            /* Generating Screen */
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-12 text-center space-y-4 shadow-2xl">
-              <RefreshCw className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
-              <div className="space-y-1">
-                <h3 className="text-lg font-bold text-white">
-                  {targetWordCount}単語 × {targetSpeedWpm} WPM の英文を生成中...
-                </h3>
-                <p className="text-xs text-slate-400">
-                  チャンク分割データとともに、重複のない多彩な生活シーンから5問を作成しています
-                </p>
-              </div>
-            </div>
-          ) : isSessionCompleted ? (
-            /* Session Completed Screen */
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-10 text-center space-y-6 shadow-2xl animate-fadeIn">
-              <div className="w-16 h-16 bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/10">
-                <CheckCircle2 className="w-8 h-8" />
-              </div>
-              <div className="space-y-2">
-                <h2 className="text-2xl font-black text-white">5問セッション完了！</h2>
-                <p className="text-sm text-slate-300">
-                  【{targetWordCount}単語 × {targetSpeedWpm} WPM】でのリスニング結果がセッション履歴に記録されました。
-                </p>
-              </div>
-
-              <div className="flex flex-wrap justify-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleGenerateBatch}
-                  className="flex items-center space-x-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-sm font-bold shadow-lg shadow-indigo-600/30 transition-all"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span>もう一度同じ設定で挑戦</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    refreshAnalytics();
-                    setActiveTab('analytics');
-                  }}
-                  className="flex items-center space-x-2 px-6 py-3 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-2xl text-sm font-bold transition-all"
-                >
-                  <BarChart3 className="w-4 h-4 text-cyan-400" />
-                  <span>セッション履歴・キャパシティを確認</span>
-                </button>
-              </div>
-            </div>
-          ) : currentQuestion ? (
-            /* Active Question Card */
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-              {/* Question Progress Header */}
-              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
-                <div className="flex items-center space-x-2">
-                  <span className="px-2.5 py-1 bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-mono font-bold">
-                    Q{currentIndex + 1} / {questions.length}
-                  </span>
-                  <span className="text-xs font-medium text-slate-400">
-                    単語数: <strong className="text-white">{currentQuestion.wordCount}</strong> 語 / 速度: <strong className="text-cyan-300">{targetSpeedWpm}</strong> WPM
-                  </span>
-                </div>
-
-                <span className="text-[11px] text-indigo-300 font-mono hidden sm:inline-block">
-                  モード: {displayMode === 'chunk_step_pause' ? '⏸️ チャンク一時停止' : displayMode === 'audio_only' ? '🎧 音声のみ' : displayMode === 'rsvp_chunk' ? '⚡ チャンクRSVP' : displayMode === 'rsvp_word' ? '🔤 単語RSVP' : '📖 テキスト'}
-                </span>
-              </div>
-
-              {/* ================= STAGE 1: CHUNK STEP PAUSE MODE ================= */}
-              {displayMode === 'chunk_step_pause' && !diagnosisResult ? (
-                <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-6 sm:p-10 text-center space-y-6 shadow-inner min-h-[250px] flex flex-col justify-center items-center">
-                  {stepStatus === 'idle' ? (
-                    <div className="space-y-4">
-                      <div className="w-12 h-12 bg-indigo-500/20 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/30">
-                        <Play className="w-6 h-6 fill-indigo-400 ml-0.5" />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-base sm:text-lg font-bold text-white">
-                          第 {currentIndex + 1} 問（全 {currentChunks.length} チャンク）
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          単語が1語ずつ流れ、チャンクの切れ目で自動一時停止します。
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => playStepChunk(0)}
-                        className="flex items-center space-x-2 px-8 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/25 transition-all active:scale-95 mx-auto"
-                      >
-                        <Play className="w-4 h-4 fill-white" />
-                        <span>▶️ 第1チャンクを再生（Spaceキー）</span>
-                      </button>
-                    </div>
-                  ) : stepStatus === 'playing_chunk' ? (
-                    /* Word is currently flashing within the current chunk */
-                    <div className="space-y-3 animate-in fade-in zoom-in-95 duration-100">
-                      <div className="flex items-center justify-center gap-2">
-                        <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono text-[11px] font-bold">
-                          Chunk {stepChunkIdx + 1} / {currentChunks.length} 再生中...
-                        </span>
-                      </div>
-                      <div className="text-4xl sm:text-6xl font-black text-white font-mono tracking-wide py-2">
-                        {stepWordIdx >= 0 ? currentChunks[stepChunkIdx]?.text.trim().split(/\s+/)[stepWordIdx] : '...'}
-                      </div>
-                      <p className="text-xs text-slate-500">
-                        耳と目で1語ずつキャッチしてください
-                      </p>
-                    </div>
-                  ) : stepStatus === 'paused_at_boundary' ? (
-                    /* Paused at chunk boundary for instant compression! */
-                    <div className="space-y-5 animate-in fade-in zoom-in-95 duration-200 max-w-md mx-auto">
-                      <div className="flex items-center justify-center gap-2">
-                        <span className="px-3 py-1 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow">
-                          <Pause className="w-3.5 h-3.5" />
-                          <span>Chunk {stepChunkIdx + 1} / {currentChunks.length} 完了（切れ目: ／）</span>
-                        </span>
-                      </div>
-
-                      {/* Brain compression cue */}
-                      <div className="p-4 bg-slate-900 border border-amber-500/30 rounded-2xl space-y-1.5 shadow-lg">
-                        <div className="text-xs font-black text-amber-300 flex items-center justify-center gap-1">
-                          <Brain className="w-4 h-4 text-amber-400" />
-                          <span>🧠【脳内圧縮タイム】</span>
-                        </div>
-                        <p className="text-xs text-slate-200 leading-relaxed">
-                          ここまでを<strong>頭の中で情景（イメージ）に変換</strong>し、生の英語の「音」はゴミ箱に消去（キャッシュ解放）してください！
-                        </p>
-                      </div>
-
-                      {/* Control Buttons */}
-                      <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                        <button
-                          type="button"
-                          onClick={handleAdvanceStepChunk}
-                          className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-2xl text-xs sm:text-sm font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
-                        >
-                          <SkipForward className="w-4 h-4" />
-                          <span>
-                            {stepChunkIdx + 1 < currentChunks.length
-                              ? `次のチャンク（${stepChunkIdx + 2}/${currentChunks.length}）へ ▶ (Space)`
-                              : '🎉 全チャンク完了！回答入力へ ✍️'}
-                          </span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => playStepChunk(stepChunkIdx)}
-                          className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                          <span>このチャンクを再聴</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => playStepChunk(0)}
-                          className="px-3 py-3 bg-slate-850 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-2xl text-xs font-semibold border border-slate-800 transition-all"
-                          title="最初から全チャンクを聴き直す"
-                        >
-                          最初から
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* All chunks finished in step mode */
-                    <div className="space-y-4 text-center">
-                      <div className="w-12 h-12 bg-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mx-auto border border-emerald-500/30">
-                        <Check className="w-6 h-6" />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-base sm:text-lg font-bold text-white">
-                          全 {currentChunks.length} チャンクの再生が完了しました！
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          下の枠に、頭の中で組み立てた意味や聞き取れた内容を入力してください。
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => playStepChunk(0)}
-                        className="flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-bold border border-slate-700 transition-all mx-auto"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                        <span>もう一度最初から聴き直す</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* ================= STAGE 2: OTHER CONTINUOUS MODES ================= */
-                <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-6 sm:p-10 text-center space-y-6 shadow-inner min-h-[220px] flex flex-col justify-center items-center">
-                  {displayMode === 'rsvp_chunk' && isPlaying && activeChunkIndex >= 0 ? (
-                    /* 1-Chunk RSVP Continuous Flash Mode (English only during playback) */
-                    <div className="space-y-3 animate-in fade-in zoom-in-95 duration-150">
-                      <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-mono text-[11px] font-bold">
-                        Chunk {activeChunkIndex + 1} / {currentChunks.length}
-                      </span>
-                      <div className="text-2xl sm:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-white to-indigo-300 font-mono tracking-wide py-2">
-                        {currentChunks[activeChunkIndex]?.text}
-                      </div>
-                    </div>
-                  ) : displayMode === 'rsvp_word' && isPlaying && activeWordIndex >= 0 ? (
-                    /* 1-Word RSVP Continuous Flash Mode */
-                    <div className="space-y-2 animate-in fade-in zoom-in-95 duration-100">
-                      <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest block">
-                        Word {activeWordIndex + 1} / {currentQuestion.words.length}
-                      </span>
-                      <div className="text-3xl sm:text-5xl font-black text-white font-mono tracking-wide">
-                        {currentQuestion.words[activeWordIndex]}
-                      </div>
-                    </div>
-                  ) : displayMode === 'text_reveal' || diagnosisResult ? (
-                    /* Text Reveal Mode (or when diagnosed) */
-                    <div className="space-y-2 text-left sm:text-center w-full">
-                      <span className="text-[11px] font-bold text-slate-500 block uppercase tracking-wider">
-                        出題英文
-                      </span>
-                      <div className="text-xl sm:text-2xl font-bold text-white font-mono leading-relaxed">
-                        {currentQuestion.sentenceEn}
-                      </div>
-                      <div className="text-xs sm:text-sm text-slate-400 font-sans">
-                        訳: {currentQuestion.translationJa}
-                      </div>
-                    </div>
-                  ) : (
-                    /* Pure Audio Mode (Default) */
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <div className={`w-2 h-6 bg-cyan-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-75 h-10' : 'opacity-40'}`} />
-                        <div className={`w-2 h-8 bg-indigo-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-150 h-12' : 'opacity-40'}`} />
-                        <div className={`w-2 h-10 bg-purple-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-300 h-14' : 'opacity-40'}`} />
-                        <div className={`w-2 h-8 bg-indigo-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-150 h-12' : 'opacity-40'}`} />
-                        <div className={`w-2 h-6 bg-cyan-400 rounded-full transition-all ${isPlaying ? 'animate-bounce delay-75 h-10' : 'opacity-40'}`} />
-                      </div>
-                      <p className="text-xs text-slate-400 font-medium">
-                        {isPlaying ? '🎧 音声を聴き取ってください...' : '耳に全集中して「再生」を押してください'}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Play Buttons for Continuous Modes */}
-                  <div className="flex items-center justify-center gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={playContinuousQuestion}
-                      disabled={isPlaying}
-                      className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-2xl text-sm font-black shadow-lg shadow-indigo-600/25 transition-all active:scale-95"
-                    >
-                      <Play className="w-4 h-4 fill-white" />
-                      <span>{isPlaying ? '再生中...' : '▶️ 再生！'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={playContinuousQuestion}
-                      className="flex items-center space-x-1.5 px-4 py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs font-bold border border-slate-700 transition-all"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                      <span>もう一度聴く</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Free-form User Reflection & Diagnosis Area */}
-              {!diagnosisResult ? (
-                <form onSubmit={handleDiagnose} className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold text-slate-300 flex items-center justify-between">
-                      <span>💭 聴き取れたこと・推測・わからなかった原因を自由に入力:</span>
-                      <span className="text-[11px] text-slate-500 font-normal">
-                        （例: 医者がなんかしてる / 前半はわかったが後半の理由で消えた）
-                      </span>
-                    </label>
-                    <textarea
-                      value={userResponse}
-                      onChange={(e) => setUserResponse(e.target.value)}
-                      placeholder="例: 「誰かがコーヒーを飲んでいる」「前半の主語はわかったけど最後の単語で止まってパンクした」「速すぎて音が繋がって聞こえた」など、率直な感想でOK！"
-                      rows={3}
-                      className="w-full bg-slate-950 border-2 border-slate-700 focus:border-indigo-500 rounded-2xl p-4 text-white placeholder-slate-600 text-sm font-medium outline-none transition-all resize-none shadow-inner"
-                    />
-                  </div>
-
-                  {/* Quick Input Chips */}
-                  <div className="space-y-1.5">
-                    <div className="text-[11px] text-slate-500 font-semibold">クイック入力補助:</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {[
-                        '全体的になんとなく理解できた',
-                        '前半だけ理解できた',
-                        '単語は知ってるがスピードで消えた',
-                        '知らない単語があって思考停止した',
-                        '音が繋がって1つの音に聞こえた',
-                        '全く聞き取れなかった（真っ白）',
-                      ].map((chip) => (
-                        <button
-                          key={chip}
-                          type="button"
-                          onClick={() => addQuickChip(chip)}
-                          className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-750 text-slate-300 hover:text-white rounded-lg text-[11px] font-medium border border-slate-700 transition-all"
-                        >
-                          + {chip}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Submit Button */}
-                  <div className="flex justify-end pt-2">
-                    <button
-                      type="submit"
-                      disabled={isDiagnosing}
-                      className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 disabled:opacity-50 text-white rounded-2xl text-sm sm:text-base font-extrabold shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
-                    >
-                      {isDiagnosing ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>AI分析中...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4" />
-                          <span>これで診断・レビューする</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                /* AI Diagnosis Result & 案3: Chunk Dissection Screen */
-                <div className="space-y-6 pt-2 animate-fadeIn">
-                  {/* Score & Bottleneck Hero */}
-                  <div className="bg-slate-950 border border-slate-800 rounded-3xl p-6 sm:p-7 space-y-5 shadow-2xl">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-                      <div className="flex items-center space-x-3">
-                        <div
-                          className={`w-14 h-14 rounded-2xl flex items-center justify-center font-black text-xl font-mono border ${
-                            diagnosisResult.comprehensionRate >= 90
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                              : diagnosisResult.comprehensionRate >= 60
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                              : 'bg-red-500/20 text-red-300 border-red-500/40'
-                          }`}
-                        >
-                          {diagnosisResult.comprehensionRate}%
-                        </div>
-                        <div>
-                          <div className="text-xs text-slate-400 font-bold uppercase tracking-wider">
-                            理解度スコア
-                          </div>
-                          <div className="text-base sm:text-lg font-black text-white">
-                            {diagnosisResult.comprehensionRate >= 90 ? '🌟 素晴らしい知覚・処理速度！' : diagnosisResult.comprehensionRate >= 60 ? '👍 大意は掴めています' : '💡 負荷オーバー（調整推奨）'}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Bottleneck Badge */}
-                      <div className={`px-3 py-1.5 rounded-xl border text-xs font-bold ${getBottleneckBadge(diagnosisResult.bottleneckType).color}`}>
-                        {diagnosisResult.bottleneckLabel}
-                      </div>
-                    </div>
-
-                    {/* Understood vs Missed Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="bg-emerald-950/30 border border-emerald-500/20 p-3.5 rounded-2xl space-y-1">
-                        <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5" />
-                          <span>聞き取れていた点</span>
-                        </span>
-                        <p className="text-xs text-slate-200 leading-relaxed">
-                          {diagnosisResult.understood}
-                        </p>
-                      </div>
-                      <div className="bg-rose-950/30 border border-rose-500/20 p-3.5 rounded-2xl space-y-1">
-                        <span className="text-[11px] font-bold text-rose-400 flex items-center gap-1">
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          <span>脱落・課題点</span>
-                        </span>
-                        <p className="text-xs text-slate-200 leading-relaxed">
-                          {diagnosisResult.missed}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* AI Diagnosis Details */}
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl space-y-2">
-                      <div className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
-                        <Brain className="w-4 h-4 text-indigo-400" />
-                        <span>脳内処理プロセスの分析:</span>
-                      </div>
-                      <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
-                        {diagnosisResult.diagnosis}
-                      </p>
-                    </div>
-
-                    {/* Coaching Tip */}
-                    <div className="bg-gradient-to-r from-cyan-950/50 to-indigo-950/50 border border-cyan-500/30 p-4 rounded-2xl space-y-1">
-                      <div className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-cyan-400" />
-                        <span>即効ワンポイント・コーチング:</span>
-                      </div>
-                      <p className="text-xs text-slate-200 font-medium">
-                        {diagnosisResult.coachingTip}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* 案3: 常に採用される「チャンク解剖 & 切れ目ガイド」 */}
-                  <div className="bg-slate-950 border border-indigo-500/30 rounded-3xl p-6 sm:p-7 space-y-5 shadow-2xl">
-                    <div className="flex items-center space-x-2.5 text-white font-bold text-base sm:text-lg border-b border-slate-800 pb-3">
-                      <div className="p-1.5 bg-indigo-500/20 border border-indigo-500/40 rounded-xl text-indigo-400">
-                        <Scissors className="w-4 h-4" />
-                      </div>
-                      <span>🧠 チャンク解剖 &amp; 脳内パッキング・ガイド</span>
-                      <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded-full font-mono font-normal">
-                        全文キャッシュ癖の脱却
-                      </span>
-                    </div>
-
-                    {/* Slash Sentence Display */}
-                    <div className="space-y-1.5">
-                      <span className="text-[11px] font-bold text-slate-400">
-                        スラッシュ（/）の位置で情景を確定し、生の音を捨てていくイメージ:
-                      </span>
-                      <div className="p-4 bg-slate-900/90 rounded-2xl border border-indigo-500/30 flex flex-wrap items-center gap-2 text-base sm:text-lg font-bold font-mono text-white">
-                        {currentChunks.map((c, idx) => (
-                          <React.Fragment key={idx}>
-                            {idx > 0 && <span className="text-indigo-400 font-extrabold text-xl px-1 select-none">/</span>}
-                            <span className="px-2.5 py-1 bg-indigo-950/80 border border-indigo-500/40 rounded-xl text-indigo-200 shadow-sm">
-                              {c.text}
-                            </span>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Step-by-Step Chunk Processing Cards */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-                      {currentChunks.map((chunk, idx) => (
-                        <div
-                          key={idx}
-                          className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-2 hover:border-indigo-500/50 transition-all flex flex-col justify-between shadow"
-                        >
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-mono font-bold">
-                                Step {idx + 1}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-medium">
-                                📍 {chunk.boundaryReason}
-                              </span>
-                            </div>
-
-                            <div className="font-mono font-bold text-white text-sm sm:text-base leading-snug">
-                              {chunk.text}
-                            </div>
-
-                            <div className="text-xs text-indigo-300/90 font-medium border-t border-slate-800 pt-1.5">
-                              訳: {chunk.translationJa}
-                            </div>
-                          </div>
-
-                          <div className="text-[11px] text-slate-400 bg-slate-950 p-2 rounded-xl border border-slate-850 mt-2">
-                            {idx === 0
-                              ? '💡 ここで「誰がどうしたか」の映像を脳内に確定させ、音のメモリを破棄！'
-                              : idx === currentChunks.length - 1
-                              ? '💡 追加情報（時・場所等）を前の情景に付け足して文が完成！'
-                              : '💡 前の情景にこの追加情報をアタッチして次の音に備える！'}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Mindset Coach Takeaway */}
-                    <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded-2xl text-xs text-slate-300 space-y-1">
-                      <strong className="text-amber-300 flex items-center gap-1 font-bold">
-                        <span>💡 脳内キャッシュをパンクさせない黄金ルール:</span>
-                      </strong>
-                      <p className="leading-relaxed text-[11px] text-slate-300">
-                        英語は文末を待たずに、<strong>前置詞・to不定詞・接続詞</strong>の手前で情景を確定させて「音」を脳から消去（ガベージコレクション）していくのがネイティブの処理方法です。
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Next Question Navigation */}
-                  <div className="flex justify-end pt-2">
-                    <button
-                      type="button"
-                      onClick={handleNextQuestion}
-                      className="flex items-center space-x-2 px-8 py-3.5 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-2xl text-sm sm:text-base font-extrabold shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
-                    >
-                      <span>{currentIndex < questions.length - 1 ? '次の問題へ' : 'セッション結果を見る'}</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </div>
-      )}
-
-      {/* 3. Analytics & Bandwidth Matrix Tab */}
-      {activeTab === 'analytics' && (
-        <div className="space-y-6 animate-fadeIn">
-          {/* Top KPI Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1">
-              <span className="text-[11px] font-bold text-slate-400">総測定問数</span>
-              <div className="text-2xl sm:text-3xl font-black text-white font-mono">
-                {analytics.totalQuestions}
-                <span className="text-xs font-normal text-slate-400 ml-1">問</span>
-              </div>
-            </div>
-
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1">
-              <span className="text-[11px] font-bold text-slate-400">総セッション数</span>
-              <div className="text-2xl sm:text-3xl font-black text-indigo-400 font-mono">
-                {analytics.totalSessions}
-                <span className="text-xs font-normal text-slate-400 ml-1">回</span>
-              </div>
-            </div>
-
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1">
-              <span className="text-[11px] font-bold text-slate-400">平均理解度</span>
-              <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
-                {analytics.avgComprehension}%
-              </div>
-            </div>
-
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1">
-              <span className="text-[11px] font-bold text-slate-400">完全自動化 (90%+)</span>
-              <div className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">
-                {analytics.bottleneckCounts.perfect}
-                <span className="text-xs font-normal text-slate-400 ml-1">問</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Bandwidth Capacity Matrix Table */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center space-x-2.5">
-                <BarChart3 className="w-5 h-5 text-indigo-400" />
-                <h3 className="font-bold text-white text-base sm:text-lg">
-                  リスニング・キャパシティ行列（単語数 × 速度）
-                </h3>
-              </div>
-              <span className="text-xs text-slate-400 font-mono hidden sm:inline-block">
-                セル値: 平均理解度 (測定回数)
-              </span>
-            </div>
-
-            {/* Scrollable Matrix Grid */}
-            <div className="overflow-x-auto pb-2">
-              <table className="w-full text-center text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-800">
-                    <th className="p-2.5 text-left font-bold text-slate-400">単語数 ＼ WPM</th>
-                    {matrixWpmColumns.map((wpm) => (
-                      <th key={wpm} className="p-2 font-mono font-bold text-slate-300">
-                        {wpm} WPM
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/80">
-                  {WORD_COUNT_OPTIONS.map((wc) => (
-                    <tr key={wc}>
-                      <td className="p-2.5 text-left font-bold text-slate-200 whitespace-nowrap">
-                        {wc} 単語
-                      </td>
-                      {matrixWpmColumns.map((wpm) => {
-                        const cell = analytics.matrix[wc]?.[wpm];
-                        const cellClass = getCellColor(cell);
-                        return (
-                          <td key={wpm} className="p-1.5">
-                            <div className={`p-2.5 rounded-xl border text-center transition-all ${cellClass}`}>
-                              {cell && cell.attempts > 0 ? (
-                                <>
-                                  <div className="text-sm font-extrabold font-mono">{cell.avgScore}%</div>
-                                  <div className="text-[10px] opacity-70">({cell.attempts}問)</div>
-                                </>
-                              ) : (
-                                <span className="text-slate-600 font-mono text-[11px]">-</span>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Matrix Legend */}
-            <div className="flex flex-wrap items-center gap-3 pt-2 text-xs border-t border-slate-800/80 text-slate-400">
-              <span className="font-semibold text-slate-300">凡例:</span>
-              <span className="flex items-center gap-1">
-                <span className="w-3 h-3 rounded bg-emerald-500/80 inline-block" />
-                <span>90-100%: 快適処理ゾーン（自動化完了）</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-3 h-3 rounded bg-amber-500/80 inline-block" />
-                <span>70-89%: 成長フロンティア（最適負荷）</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-3 h-3 rounded bg-red-500/80 inline-block" />
-                <span>&lt;70%: キャッシュパンク限界（要改善）</span>
-              </span>
-            </div>
-          </div>
-
-          {/* Session History & Accuracy Trend */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-            <div className="flex items-center space-x-2.5 text-white font-bold text-lg border-b border-slate-800 pb-3">
-              <TrendingUp className="w-5 h-5 text-emerald-400" />
-              <span>セッション別 正答率・成績推移</span>
-            </div>
-
-            {analytics.sessionHistory.length === 0 ? (
-              <p className="text-xs text-slate-500 py-6 text-center">
-                セッション履歴はまだありません。「トレーニング」タブで問題を解くとセッション単位で自動記録されます。
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {analytics.sessionHistory.map((sess, idx) => {
-                  const isExpanded = expandedSessionId === sess.sessionId;
-                  return (
-                    <div
-                      key={sess.sessionId}
-                      className="bg-slate-950 border border-slate-850 rounded-2xl p-4 space-y-3 transition-all"
-                    >
-                      {/* Session Header Bar */}
-                      <div
-                        onClick={() => setExpandedSessionId(isExpanded ? null : sess.sessionId)}
-                        className="flex flex-wrap items-center justify-between gap-3 cursor-pointer select-none"
-                      >
-                        <div className="flex items-center space-x-2.5">
-                          <div
-                            className={`p-2 rounded-xl text-xs font-black border ${
-                              sess.averageScore >= 90
-                                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
-                                : sess.averageScore >= 70
-                                ? 'bg-amber-950/80 text-amber-400 border-amber-500/40'
-                                : 'bg-red-950/80 text-red-400 border-red-500/40'
-                            }`}
-                          >
-                            {sess.averageScore}%
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                              <span>セッション #{analytics.sessionHistory.length - idx}</span>
-                              <span className="text-slate-400 font-normal">({sess.dateString})</span>
-                            </div>
-                            <div className="text-[11px] text-slate-400 font-mono">
-                              【{sess.wordCount}単語 × {sess.speedWpm} WPM】 • {sess.totalQuestions}問中 {sess.perfectCount}問パーフェクト
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Question Mini-Score Pills */}
-                        <div className="flex items-center space-x-1.5">
-                          {sess.records.map((r, qIdx) => (
-                            <span
-                              key={r.id}
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                                r.diagnosis.comprehensionRate >= 90
-                                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
-                                  : r.diagnosis.comprehensionRate >= 70
-                                  ? 'bg-amber-950/80 text-amber-300 border-amber-500/40'
-                                  : 'bg-red-950/80 text-red-300 border-red-500/40'
-                              }`}
-                              title={`第${qIdx + 1}問: ${r.diagnosis.comprehensionRate}%`}
-                            >
-                              Q{qIdx + 1}: {r.diagnosis.comprehensionRate}%
-                            </span>
-                          ))}
-                          <div className="text-slate-500 pl-1">
-                            {isExpanded ? <ChevronDown className="w-4 h-4 text-indigo-400" /> : <ChevronRight className="w-4 h-4" />}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Expanded Question Details in this Session */}
-                      {isExpanded && (
-                        <div className="pt-3 border-t border-slate-850 space-y-2 text-xs">
-                          {sess.records.map((rec, rIdx) => {
-                            const recChunks = rec.chunks && rec.chunks.length > 0
-                              ? rec.chunks
-                              : splitIntoSmartChunks(rec.sentenceEn, rec.translationJa);
-                            return (
-                              <div key={rec.id} className="bg-slate-900/70 border border-slate-800 p-3.5 rounded-xl space-y-2">
-                                <div className="flex items-center justify-between text-[11px]">
-                                  <span className="font-bold text-indigo-300">第 {rIdx + 1} 問:</span>
-                                  <div className="flex items-center space-x-2">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getBottleneckBadge(rec.diagnosis.bottleneckType).color}`}>
-                                      {rec.diagnosis.bottleneckLabel}
-                                    </span>
-                                    <span className="font-mono font-bold text-cyan-400">理解度: {rec.diagnosis.comprehensionRate}%</span>
-                                  </div>
-                                </div>
-                                <div className="font-mono text-white font-bold">{rec.sentenceEn}</div>
-                                <div className="text-slate-400 text-[11px]">訳: {rec.translationJa}</div>
-
-                                {/* Chunks preview in record */}
-                                <div className="flex flex-wrap gap-1.5 pt-1">
-                                  {recChunks.map((rc, rcIdx) => (
-                                    <span key={rcIdx} className="px-2 py-0.5 rounded-lg bg-indigo-950/60 border border-indigo-500/30 text-[10px] text-indigo-200 font-mono">
-                                      {rc.text}
-                                    </span>
-                                  ))}
-                                </div>
-
-                                {rec.userResponse && (
-                                  <div className="text-slate-300 text-[11px] bg-slate-950 p-2 rounded-lg border border-slate-800">
-                                    <span className="text-indigo-400 font-semibold mr-1">回答メモ:</span>
-                                    {rec.userResponse}
-                                  </div>
-                                )}
-                                <div className="text-slate-400 text-[11px] italic bg-slate-950/60 p-2 rounded-lg">
-                                  <span className="text-cyan-400 font-semibold mr-1">AI診断:</span>
-                                  {rec.diagnosis.diagnosis}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Export & Data Management Strip */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-800/80">
-            <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={handleCopyRecords}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-xl text-xs font-bold border border-slate-700 transition-all"
-              >
-                <Download className="w-3.5 h-3.5 text-indigo-400" />
-                <span>{copiedExport ? 'JSONコピー完了！' : '測定ログをJSONコピー'}</span>
-              </button>
-            </div>
-
+            {/* Close Action */}
             <button
-              type="button"
-              onClick={handleClearData}
-              className="flex items-center space-x-1.5 px-3.5 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/30 rounded-xl text-xs font-bold transition-all"
+              onClick={() => setIsAnalyticsOpen(false)}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-750 text-white rounded-2xl text-xs font-bold transition-colors"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>全測定履歴をリセット</span>
+              閉じる
             </button>
           </div>
         </div>

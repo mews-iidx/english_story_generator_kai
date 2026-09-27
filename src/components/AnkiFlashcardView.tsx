@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { VocabItem } from '../types/vocab';
-import { Volume2, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool, Sliders, X, Check } from 'lucide-react';
+import { Volume2, Headphones, CheckCircle2, Zap, Filter, Undo2, BookOpen, PenTool, Sliders, X, Check } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { speakText } from '../utils/speech';
 import { getTodayDateString, getNextReviewIntervals, calculateAnkiSRS, getSiblingGroupKey, areSiblings } from '../utils/srs';
 import { cleanTranslationText, loadSettings, saveSettings } from '../services/storage';
 
-export type AnkiCardFilter = 'all' | 'word' | 'pattern' | 'en_to_ja' | 'ja_to_en';
+export type AnkiCardFilter = 'all' | 'word' | 'pattern' | 'en_to_ja' | 'ja_to_en' | 'listening';
 
 interface FilterOption {
   id: AnkiCardFilter;
@@ -22,35 +22,42 @@ const FILTER_OPTIONS: FilterOption[] = [
     label: 'すべて (全カード)',
     badgeLabel: 'すべて 📚',
     description: '登録された全1文カード・構文カードをまとめて復習',
-    filterFn: () => true,
+    filterFn: (v) => v.focusType !== 'listening',
   },
   {
     id: 'word',
     label: '🔤 単語重視',
     badgeLabel: '🔤 単語',
     description: '単語・イディオムにフォーカスしたカード',
-    filterFn: (v) => v.focusType === 'word' || Boolean(v.focusWord) || (Boolean(v.phrase) && v.phrase.trim().split(/\s+/).length <= 2 && v.focusType !== 'pattern' && (!v.corePatterns || v.corePatterns.length === 0)),
+    filterFn: (v) => v.focusType !== 'listening' && (v.focusType === 'word' || Boolean(v.focusWord) || (Boolean(v.phrase) && v.phrase.trim().split(/\s+/).length <= 2 && v.focusType !== 'pattern' && (!v.corePatterns || v.corePatterns.length === 0))),
   },
   {
     id: 'pattern',
     label: '💡 構文・文法重視',
     badgeLabel: '💡 構文',
     description: '文法構造・S+V骨格にフォーカスしたカード',
-    filterFn: (v) => v.focusType === 'pattern' || (Boolean(v.corePatterns) && v.corePatterns!.length > 0) || v.cardType === 'pattern',
+    filterFn: (v) => v.focusType !== 'listening' && (v.focusType === 'pattern' || (Boolean(v.corePatterns) && v.corePatterns!.length > 0) || v.cardType === 'pattern'),
   },
   {
     id: 'en_to_ja',
     label: '📖 読解 (EN ➔ JA)',
     badgeLabel: '📖 読解',
     description: '英語を見て瞬時に意味を脳内展開する訓練',
-    filterFn: (v) => v.cardDirection !== 'ja_to_en',
+    filterFn: (v) => v.focusType !== 'listening' && v.cardDirection !== 'ja_to_en',
   },
   {
     id: 'ja_to_en',
     label: '✍️ 作文 (JA ➔ EN)',
     badgeLabel: '✍️ 作文',
     description: '日本語の意味から瞬時に英語センテンスを組み立てる訓練',
-    filterFn: (v) => v.cardDirection === 'ja_to_en',
+    filterFn: (v) => v.focusType !== 'listening' && v.cardDirection === 'ja_to_en',
+  },
+  {
+    id: 'listening',
+    label: '🎧 リスニング特訓',
+    badgeLabel: '🎧 リスニング',
+    description: '音声ブラインド再生 ➔ マーク箇所＆英英日の復習',
+    filterFn: (v) => v.focusType === 'listening',
   },
 ];
 
@@ -126,6 +133,31 @@ function highlightWordInSentence(sentence: string, targetWord?: string) {
   );
 }
 
+
+function highlightMarkedTokensInSentence(sentence: string, markedTokens?: string[]) {
+  if (!markedTokens || markedTokens.length === 0) {
+    return <span>{sentence}</span>;
+  }
+  const cleanTokens = markedTokens.map(t => t.trim().toLowerCase()).filter(Boolean);
+  const words = sentence.split(/(\s+)/);
+  return (
+    <span>
+      {words.map((w, i) => {
+        const cleanW = w.toLowerCase().replace(/[^a-z0-9']/g, '');
+        const isMarked = cleanTokens.some(ct => cleanW === ct || ct.split(/\s+/).includes(cleanW));
+        if (isMarked) {
+          return (
+            <span key={i} className="bg-rose-500/30 text-rose-200 border-b-2 border-rose-400 px-1 py-0.5 rounded font-bold">
+              {w}
+            </span>
+          );
+        }
+        return <span key={i}>{w}</span>;
+      })}
+    </span>
+  );
+}
+
 export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
   vocabs,
   onRateCard,
@@ -158,6 +190,7 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
       pattern: { total: 0, due: 0 },
       en_to_ja: { total: 0, due: 0 },
       ja_to_en: { total: 0, due: 0 },
+      listening: { total: 0, due: 0 },
     };
 
     FILTER_OPTIONS.forEach(opt => {
@@ -387,12 +420,22 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFlipped, activeCard, reviewQueue, learningPool, historyStack]);
 
+  // リスニングカード出題時の音声自動再生
+  useEffect(() => {
+    if (activeCard && activeCard.focusType === 'listening') {
+      const text = activeCard.sentence || activeCard.exampleSentence || activeCard.phrase;
+      if (text) {
+        speakText(text, activeCard.targetSpeedRate || 1.0);
+      }
+    }
+  }, [activeCard?.id]);
+
   const handleFlip = () => {
     setIsFlipped(true);
     if (activeCard) {
       const textToSpeak = activeCard.sentence || activeCard.exampleSentence || activeCard.phrase;
       if (textToSpeak) {
-        speakText(textToSpeak);
+        speakText(textToSpeak, activeCard.targetSpeedRate || 0.95);
       }
     }
   };
@@ -737,17 +780,31 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
         {/* Top Badges */}
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center space-x-2">
-            <span className="px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold">
-              {activeCard.cardDirection === 'ja_to_en' ? '✍️ 和英 (作文)' : '📖 英和 (読解)'}
-            </span>
-            {isWordCard ? (
-              <span className="px-2.5 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
-                🔤 単語
-              </span>
+            {activeCard.focusType === 'listening' ? (
+              <>
+                <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-bold flex items-center space-x-1">
+                  <Headphones className="w-3 h-3 inline mr-1" />
+                  <span>リスニング特訓</span>
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono font-bold">
+                  🔒 {activeCard.targetSpeedRate || 1.0}x
+                </span>
+              </>
             ) : (
-              <span className="px-2.5 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-bold">
-                💡 構文・文法
-              </span>
+              <>
+                <span className="px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold">
+                  {activeCard.cardDirection === 'ja_to_en' ? '✍️ 和英 (作文)' : '📖 英和 (読解)'}
+                </span>
+                {isWordCard ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
+                    🔤 単語
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-bold">
+                    💡 構文・文法
+                  </span>
+                )}
+              </>
             )}
             {activeCard.intervalDays && activeCard.intervalDays >= (appSettings.ankiGraduationIntervalDays ?? 21) && (
               <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
@@ -763,7 +820,66 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
 
         {/* Card Content */}
         <div className="min-h-[160px] flex flex-col justify-center text-center space-y-4">
-          {activeCard.cardDirection === 'ja_to_en' ? (
+          {activeCard.focusType === 'listening' ? (
+            /* =================================================================
+               リスニング特訓モード (音声ブラインド ➔ マーク箇所＆英英日の確認)
+               ================================================================= */
+            <div className="space-y-4">
+              <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-cyan-500/20 border border-cyan-500/30 rounded-full text-cyan-300 text-xs font-bold">
+                <Headphones className="w-3.5 h-3.5" />
+                <span>リスニング特訓 (ブラインド ➔ 聴解照合)</span>
+              </div>
+
+              {!isFlipped ? (
+                <div className="py-6 flex flex-col items-center justify-center space-y-4 text-center">
+                  <button
+                    onClick={() => speakText(displaySentence, activeCard.targetSpeedRate || 1.0)}
+                    className="w-20 h-20 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white flex items-center justify-center shadow-xl shadow-cyan-500/30 hover:scale-105 transition-all"
+                    title="音声を再生"
+                  >
+                    <Volume2 className="w-8 h-8" />
+                  </button>
+                  <p className="text-xs text-slate-400">
+                    🎧 音声を聴いて、頭の中で英語と意味をイメージしてからタップ
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3 pt-3 border-t border-slate-800 animate-fadeIn text-left">
+                  {/* English Sentence with marked tokens highlighted */}
+                  <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-cyan-400">英語全文 (聞き取り急所):</span>
+                      <button
+                        onClick={() => speakText(displaySentence, activeCard.targetSpeedRate || 1.0)}
+                        className="p-1.5 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/70 rounded-xl transition-colors"
+                        title="発音を再生"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="text-base sm:text-lg font-bold text-white font-serif leading-relaxed">
+                      {highlightMarkedTokensInSentence(displaySentence, activeCard.markedTokens)}
+                    </div>
+                  </div>
+
+                  {/* Japanese Translation */}
+                  <div className="p-4 bg-slate-950/80 border border-emerald-500/30 rounded-2xl space-y-1">
+                    <span className="text-[11px] font-bold text-emerald-400 block">日本語訳:</span>
+                    <div className="text-base sm:text-lg font-bold text-white leading-relaxed">
+                      {displaySentenceTranslation || displayWordMeaning}
+                    </div>
+                  </div>
+
+                  {/* English Nuance / Phonetic advice */}
+                  {(activeCard.englishExplanation || activeCard.contextNote) && (
+                    <div className="p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl text-xs text-slate-300">
+                      💡 {activeCard.englishExplanation || activeCard.contextNote}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : activeCard.cardDirection === 'ja_to_en' ? (
             /* =================================================================
                和 ➔ 英 (瞬間英作文モード: 日本語全文 ➔ 英語全文)
                ================================================================= */

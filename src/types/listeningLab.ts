@@ -1,10 +1,10 @@
 import { CefrLevel } from './settings';
 
 export type LabBottleneckType =
-  | 'memory_overflow'    // ワーキングメモリ（文長）パンク
-  | 'backward_parsing'   // 関係詞・前置詞での返り読み癖
   | 'phonetic_linking'   // 音声変化・脱落・連結
   | 'unknown_vocab'      // 未知語・多義語
+  | 'backward_parsing'   // 構文・語順処理
+  | 'memory_overflow'    // ワーキングメモリパンク
   | 'perfect';           // 完全理解
 
 export interface LabChunk {
@@ -19,19 +19,21 @@ export interface LabQuestion {
   translationJa: string;
   wordCount: number;
   words: string[];
-  chunks: LabChunk[];
+  chunks?: LabChunk[];
   cefrLevel: CefrLevel;
   keyPoints?: string;
+  englishExplanation?: string;
+  phoneticPoints?: string;
 }
 
 export interface LabDiagnosisResult {
   comprehensionRate: number; // 0 - 100
-  understood: string;        // 聞き取れていた部分
-  missed: string;            // 脱落・聞き取れなかった部分
+  understood?: string;
+  missed?: string;
   bottleneckType: LabBottleneckType;
   bottleneckLabel: string;
-  diagnosis: string;         // AIの詳細解説
-  coachingTip: string;       // 次回へのアドバイス
+  diagnosis?: string;
+  coachingTip?: string;
 }
 
 export interface LabQuestionRecord {
@@ -42,41 +44,28 @@ export interface LabQuestionRecord {
   sentenceEn: string;
   translationJa: string;
   wordCount: number;
-  speedWpm: number;
+  speedRate: number;        // 0.8, 0.9, 1.0, 1.1, 1.2
+  speedWpm?: number;        // legacy compatibility
   cefrLevel: CefrLevel;
-  userResponse: string;
-  chunks?: LabChunk[];
-  diagnosis: LabDiagnosisResult;
+  markedTokens: string[];   // 聞き取れずマークした単語
+  isPerfect: boolean;       // マーク0で完全突破したか
+  savedToAnki?: boolean;
+  ankiCardId?: string;
+  diagnosis?: LabDiagnosisResult;
 }
 
-export interface LabSessionSummary {
-  sessionId: string;
-  timestamp: string;
-  dateString: string;
+export interface WordCountStat {
   wordCount: number;
-  speedWpm: number;
-  cefrLevel: CefrLevel;
-  totalQuestions: number;
-  averageScore: number;
-  perfectCount: number;
-  records: LabQuestionRecord[];
-}
-
-export interface BandwidthCell {
   attempts: number;
-  avgScore: number;
-  latestScore: number;
+  perfectCount: number;
+  passRate: number; // 0 - 100
 }
-
-// [wordCount: string][speedWpm: string] -> BandwidthCell
-export type BandwidthMatrixData = Record<number, Record<number, BandwidthCell>>;
 
 export interface LabAnalyticsSummary {
   totalQuestions: number;
-  totalSessions: number;
-  avgComprehension: number;
-  bottleneckCounts: Record<LabBottleneckType, number>;
-  matrix: BandwidthMatrixData;
+  perfectCount: number;
+  perfectPassRate: number; // 0 - 100
+  movingAverageWordCapacity: number; // 直近の単語処理能力移動平均 (例: 12.4語)
+  wordCountStats: Record<number, WordCountStat>;
   recentRecords: LabQuestionRecord[];
-  sessionHistory: LabSessionSummary[];
 }

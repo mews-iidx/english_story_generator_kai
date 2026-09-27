@@ -2399,3 +2399,54 @@ export function enrichExistingVocabCard(phrase: string, enriched: { sentence: st
   }
   return false;
 }
+
+// --------------------- DEDICATED LISTENING CARDS (リスニング専用カード) ---------------------
+
+export interface SaveListeningCardParams {
+  sentence: string;
+  translation: string;
+  markedTokens?: string[];
+  targetSpeedRate?: number;
+  englishExplanation?: string;
+  cefrLevel?: string;
+  wordCount?: number;
+}
+
+export function saveListeningCard(params: SaveListeningCardParams): VocabItem {
+  const vocabs = loadVocabs();
+  const now = new Date().toISOString();
+  const srs = calculateLapseSRS();
+
+  const cleanSentence = params.sentence.trim();
+  const speed = params.targetSpeedRate ?? 1.0;
+  const speedSuffix = `r${Math.round(speed * 100)}`;
+  
+  // Unique ID incorporating speed to differentiate same sentence at different speeds
+  const id = `voc_lis_${Date.now()}_${speedSuffix}_${Math.random().toString(36).substring(2, 6)}`;
+
+  const marked = params.markedTokens || [];
+  const primaryNote = params.englishExplanation || (marked.length > 0 ? `聞き取り急所: ${marked.join(', ')}` : 'リスニング特訓');
+
+  const card: VocabItem = {
+    id,
+    phrase: cleanSentence,
+    meaning: cleanTranslationText(params.translation),
+    partOfSpeech: 'リスニング特訓',
+    contextNote: primaryNote,
+    exampleSentence: cleanSentence,
+    sentence: cleanSentence,
+    translation: cleanTranslationText(params.translation),
+    focusType: 'listening',
+    targetSpeedRate: speed,
+    markedTokens: marked,
+    englishExplanation: params.englishExplanation,
+    level: params.cefrLevel,
+    ...srs,
+    lastReviewedAt: now,
+    createdAt: now,
+  };
+
+  vocabs.unshift(card);
+  saveVocabsBatch(vocabs);
+  return card;
+}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Settings, RefreshCw, Zap, PlusCircle, Download, Phone, Target, Bot } from 'lucide-react';
+import { BookOpen, Settings, RefreshCw, Zap, PlusCircle, Download, Phone, Target, Bot, Headphones } from 'lucide-react';
 
 export type NavTab = 'bookshelf' | 'drill' | 'listening_lab' | 'quiz' | 'mastery' | 'chat' | 'call' | 'create' | 'settings';
 
@@ -42,6 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
   const tabs: (TabItem & { isMaintenance?: boolean })[] = [
     { id: 'bookshelf', label: '物語', icon: BookOpen },
     { id: 'drill', label: 'ドリル', icon: Zap },
+    { id: 'listening_lab', label: '特訓', icon: Headphones },
     { id: 'quiz', label: 'Anki', icon: PlusCircle, badge: dueCount > 0 ? dueCount : undefined },
     { id: 'mastery', label: '分析', icon: Target },
     { id: 'call', label: '英会話', icon: Phone },

@@ -36,11 +36,16 @@ export interface VocabItem {
   // 1文カード拡張フィールド
   sentence?: string;          // 1文全体（exampleSentenceと共通）
   translation?: string;       // 1文の日本語訳
-  focusType?: 'word' | 'pattern' | 'sentence'; // 何がフォーカスか
+  focusType?: 'word' | 'pattern' | 'sentence' | 'listening'; // 何がフォーカスか
   focusWord?: string;         // 単語フォーカス時の語
   focusMeaning?: string;      // 単語フォーカス時の意味
   corePatterns?: ExtractedCorePattern[]; // 構文フォーカス時の2〜3個の構造化仮説
   
+  // リスニング特訓専用フィールド
+  targetSpeedRate?: number;   // 固定再生速度 (例: 0.8, 0.9, 1.0, 1.1, 1.2)
+  markedTokens?: string[];    // 聞き取れずマークした単語・フレーズ
+  englishExplanation?: string;// AIによる英語ニュアンス・音声変化の解説
+
   // Anki 兄弟カード (Sibling Cards) & 同日重複防止 (Burying)
   cardDirection?: 'en_to_ja' | 'ja_to_en'; // 'en_to_ja' (読解コンパイル) | 'ja_to_en' (瞬間英作文)
   siblingId?: string;         // 対になる兄弟カードのID
