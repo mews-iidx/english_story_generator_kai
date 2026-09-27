@@ -1,13 +1,31 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Story } from '../types/story';
 import {
-  ArrowLeft, Headphones, RotateCcw,
-  ChevronLeft, Eye, EyeOff,
-  CheckCircle2, Trophy, BookOpen
+  ArrowLeft,
+  Headphones,
+  RotateCcw,
+  ChevronLeft,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  Trophy,
+  BookOpen,
+  BookmarkPlus,
+  Sparkles,
+  Check,
 } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { speakText, stopSpeech } from '../utils/speech';
 import { splitStoryIntoSentences, StorySentenceItem } from '../utils/sentenceUtils';
-import { recordSpeechPracticeProgress, recordSpeechPracticeEvent } from '../services/storage';
+import {
+  recordSpeechPracticeProgress,
+  recordSpeechPracticeEvent,
+  saveListeningCard,
+  enrichListeningCard,
+  loadVocabs,
+  loadSettings,
+} from '../services/storage';
+import { enrichListeningSentenceWithGemini } from '../services/listeningLabService';
 
 interface StoryShadowingViewProps {
   story: Story;
@@ -83,7 +101,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
   onUpdateStory,
   onBackToReader,
   onBackToBookshelf,
-  onOpenListening,
+  onOpenListening: _onOpenListening,
 }) => {
   const [speechRate, setSpeechRate] = useState<number>(1.0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -94,6 +112,15 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
   const sentences = useMemo(() => {
     return splitStoryIntoSentences(story.storyContent);
   }, [story.storyContent]);
+
+  // Japanese translations per sentence
+  const jaSentences = useMemo(() => {
+    return (story.japaneseTranslation || '')
+      .replace(/\r\n/g, '\n')
+      .split(/(?<=[。！？\n])\s*/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }, [story.japaneseTranslation]);
 
   // Listening ratings map
   const sentenceRatings = useMemo(() => {
@@ -112,14 +139,51 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
   const [currentIndex, setCurrentIndex] = useState<number>(initialSentenceIdx);
   const [subStep, setSubStep] = useState<'overlapping' | 'shadowing'>(initialSubStep);
 
+  // Anki Listening card state & Background Enrichment tracking
+  const [savedListeningCards, setSavedListeningCards] = useState<Map<string, string>>(() => {
+    const map = new Map<string, string>();
+    try {
+      const vocabs = loadVocabs();
+      vocabs
+        .filter(v => v.focusType === 'listening')
+        .forEach(v => {
+          const text = (v.sentence || v.phrase || '').trim().toLowerCase();
+          if (text) map.set(text, v.id);
+        });
+    } catch (_) {}
+    return map;
+  });
+
+  const [enrichingCardIds, setEnrichingCardIds] = useState<Set<string>>(new Set());
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+
   const currentSentence: StorySentenceItem | undefined = sentences[currentIndex];
+  const currentSentenceKey = (currentSentence?.text || '').trim().toLowerCase();
+  const currentSavedCardId = savedListeningCards.get(currentSentenceKey);
+  const isCurrentSentenceSaved = Boolean(currentSavedCardId);
+  const isCurrentEnriching = currentSavedCardId ? enrichingCardIds.has(currentSavedCardId) : false;
+
   const currentRatingInfo = useMemo(() => {
     const r = sentenceRatings[currentIndex]?.rating;
     return getRatingBadge(r);
   }, [sentenceRatings, currentIndex]);
 
-  // Stop audio safely
+  // Show temporary toast message
+  const showToast = useCallback((msg: string, durationMs: number = 3000) => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage(msg);
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimeoutRef.current = null;
+    }, durationMs);
+  }, []);
+
+  // Stop audio helper
   const stopAudio = useCallback(() => {
     stopSpeech();
     setIsPlaying(false);
@@ -130,60 +194,31 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     } catch (_) {}
   }, []);
 
-  useEffect(() => {
-    return () => {
-      stopAudio();
-    };
-  }, [stopAudio]);
-
   // Play audio for current sentence
-  const playCurrentSentenceAudio = useCallback((index: number, currentSubStep: 'overlapping' | 'shadowing') => {
-    const target = sentences[index];
-    if (!target) return;
+  const playCurrentSentenceAudio = useCallback((index: number, step: 'overlapping' | 'shadowing') => {
+    const sent = sentences[index];
+    if (!sent) return;
 
     stopAudio();
     setIsPlaying(true);
 
-    // Record speech practice attempt event for insights & daily progress
-    recordSpeechPracticeEvent({
-      storyId: story.id,
-      storyTitle: story.title,
-      sentenceIdx: index,
-      subStep: currentSubStep,
-      sentenceText: target.text,
-    });
-
     try {
-      if (!silentAudioRef.current) {
-        silentAudioRef.current = new Audio(SILENT_AUDIO_URI);
-        silentAudioRef.current.loop = true;
+      if (silentAudioRef.current) {
+        silentAudioRef.current.currentTime = 0;
+        silentAudioRef.current.play().catch(() => {});
       }
-      silentAudioRef.current.play().catch(() => {});
     } catch (_) {}
 
-    if ('mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: `[発話 ${index + 1}/${sentences.length} - ${currentSubStep === 'overlapping' ? 'オーバーラップ' : 'シャドーイング'}] ${target.text}`,
-          artist: story.title,
-          album: `CompileEng - ${story.cefrLevel || 'A2'} 発話特訓`,
-        });
-        navigator.mediaSession.playbackState = 'playing';
-      } catch (_) {}
-    }
-
-    speakText(target.text, speechRate, 'en-US', () => {
-      setIsPlaying(false);
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
+    const rateToUse = step === 'overlapping' ? speechRate : 1.0;
+    speakText(
+      sent.text,
+      rateToUse,
+      'en-US',
+      () => {
+        setIsPlaying(false);
       }
-    });
-  }, [sentences, speechRate, stopAudio, story.id, story.title, story.cefrLevel]);
-
-  // Play on initial mount
-  useEffect(() => {
-    playCurrentSentenceAudio(currentIndex, subStep);
-  }, []);
+    );
+  }, [sentences, speechRate, stopAudio]);
 
   // Save progress helper
   const saveProgress = useCallback((sentenceIdx: number, newSubStep: 'overlapping' | 'shadowing', status: 'unstarted' | 'in_progress' | 'completed') => {
@@ -198,8 +233,87 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     }
   }, [story.id, onUpdateStory]);
 
+  // -------------------------------------------------------------------------
+  // Ankiリスニングカード登録（並列バックグラウンド英英日AI解析）
+  // -------------------------------------------------------------------------
+  const handleSaveToListeningAnki = useCallback(async () => {
+    if (!currentSentence) return;
+    const cleanText = currentSentence.text.trim();
+    if (!cleanText) return;
+
+    const sentenceJa = jaSentences[currentIndex] || (currentIndex === 0 ? story.japaneseTranslation : '');
+
+    // 1. 即座にAnkiリスニングカードを作成・保存（UIをブロックしない）
+    const speed = speechRate || 1.0;
+    const newCard = saveListeningCard({
+      sentence: cleanText,
+      translation: sentenceJa,
+      targetSpeedRate: speed,
+      cefrLevel: story.cefrLevel,
+      englishExplanation: `Story: ${story.title}`,
+    });
+
+    const key = cleanText.toLowerCase();
+    setSavedListeningCards(prev => new Map(prev).set(key, newCard.id));
+    setEnrichingCardIds(prev => new Set(prev).add(newCard.id));
+
+    confetti({ particleCount: 20, spread: 50, origin: { y: 0.7 } });
+    showToast('🎧 リスニングAnkiに保存しました！ バックグラウンドで英英日解説を生成中...', 3500);
+
+    // 2. 非同期（並列）でGeminiによる英英日・音声変化の解析を実行
+    const settings = loadSettings();
+    if (settings.geminiApiKey) {
+      enrichListeningSentenceWithGemini({
+        cardId: newCard.id,
+        sentenceEn: cleanText,
+        contextJa: sentenceJa,
+        storyTitle: story.title,
+        apiKey: settings.geminiApiKey,
+        model: settings.geminiModel,
+      }).then((result) => {
+        if (result) {
+          enrichListeningCard(newCard.id, {
+            translation: result.translation,
+            englishExplanation: result.englishExplanation,
+            markedTokens: result.markedTokens,
+          });
+          showToast('✨ リスニングカードの英英日解説が完了しました！', 3000);
+        }
+        setEnrichingCardIds(prev => {
+          const next = new Set(prev);
+          next.delete(newCard.id);
+          return next;
+        });
+      }).catch(err => {
+        console.warn('Background enrichment failed', err);
+        setEnrichingCardIds(prev => {
+          const next = new Set(prev);
+          next.delete(newCard.id);
+          return next;
+        });
+      });
+    } else {
+      setEnrichingCardIds(prev => {
+        const next = new Set(prev);
+        next.delete(newCard.id);
+        return next;
+      });
+    }
+  }, [currentSentence, currentIndex, jaSentences, story, speechRate, showToast]);
+
   // 1. Advance to Next Sub-Step: Overlapping ➔ Shadowing ➔ Next Sentence Overlapping
   const handleAdvanceStep = useCallback(() => {
+    // Record utterance event for Mastery Analytics
+    if (currentSentence) {
+      recordSpeechPracticeEvent({
+        storyId: story.id,
+        storyTitle: story.title,
+        sentenceIdx: currentIndex,
+        subStep: subStep,
+        sentenceText: currentSentence.text,
+      });
+    }
+
     if (subStep === 'overlapping') {
       // Step 1 ➔ Step 2: Same sentence, switch to Shadowing (text hidden)
       setSubStep('shadowing');
@@ -220,21 +334,25 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
         stopAudio();
         setIsAllCompleted(true);
         saveProgress(currentIndex, 'shadowing', 'completed');
-        speakText(`全${sentences.length}文の発話特訓完了です。お疲れ様でした！`, 1.0, 'ja-JP');
+        confetti({
+          particleCount: 80,
+          spread: 80,
+          origin: { y: 0.6 },
+        });
       }
     }
-  }, [subStep, currentIndex, sentences.length, saveProgress, playCurrentSentenceAudio, stopAudio]);
+  }, [subStep, currentIndex, sentences.length, currentSentence, story.id, story.title, saveProgress, playCurrentSentenceAudio, stopAudio]);
 
-  // 2. Step Back (Undo mistake / go back to previous step)
+  // 2. Step Back (Previous Sub-Step or Previous Sentence)
   const handleStepBack = useCallback(() => {
     if (subStep === 'shadowing') {
-      // Step 2 ➔ Step 1: Same sentence, return to Overlapping
+      // Return to Overlapping of current sentence
       setSubStep('overlapping');
       setShowEnglishInShadowing(false);
       saveProgress(currentIndex, 'overlapping', 'in_progress');
       playCurrentSentenceAudio(currentIndex, 'overlapping');
     } else if (currentIndex > 0) {
-      // Step 1 ➔ Previous sentence's Step 2 (Shadowing)
+      // Return to Shadowing of previous sentence
       const prevIdx = currentIndex - 1;
       setCurrentIndex(prevIdx);
       setSubStep('shadowing');
@@ -244,23 +362,12 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     }
   }, [subStep, currentIndex, saveProgress, playCurrentSentenceAudio]);
 
-  // Direct jump to sentence
-  const handleJumpToSentence = useCallback((targetIdx: number) => {
-    if (targetIdx >= 0 && targetIdx < sentences.length && targetIdx !== currentIndex) {
-      setCurrentIndex(targetIdx);
-      setSubStep('overlapping');
-      setShowEnglishInShadowing(false);
-      saveProgress(targetIdx, 'overlapping', 'in_progress');
-      playCurrentSentenceAudio(targetIdx, 'overlapping');
-    }
-  }, [sentences.length, currentIndex, saveProgress, playCurrentSentenceAudio]);
-
-  // Replay current sentence
+  // 3. Replay Current Sentence Audio
   const handleReplay = useCallback(() => {
     playCurrentSentenceAudio(currentIndex, subStep);
   }, [currentIndex, subStep, playCurrentSentenceAudio]);
 
-  // Toggle shadowing english visibility
+  // 4. Toggle English visibility in Shadowing step
   const toggleShadowingEnglish = useCallback(() => {
     if (subStep === 'shadowing') {
       setShowEnglishInShadowing(prev => !prev);
@@ -284,6 +391,9 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
       } else if (e.code === 'KeyV') {
         e.preventDefault();
         toggleShadowingEnglish();
+      } else if (e.code === 'KeyA') {
+        e.preventDefault();
+        handleSaveToListeningAnki();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
         handleStepBack();
@@ -294,7 +404,7 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleAdvanceStep, handleReplay, handleStepBack, toggleShadowingEnglish]);
+  }, [handleAdvanceStep, handleReplay, handleStepBack, toggleShadowingEnglish, handleSaveToListeningAnki]);
 
   // MediaSession API handler
   useEffect(() => {
@@ -341,29 +451,55 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
               Speech Practice Completed
             </span>
             <h2 className="text-2xl sm:text-3xl font-black text-white">
-              発話特訓（全{sentences.length}文）完走！🎉
+              全{sentences.length}文の発話特訓をコンプリート！
             </h2>
-            <p className="text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
-              『{story.title}』のオーバーラッピング＆シャドーイングをすべてやり切りました！口と聴覚野がネイティブのリズムに同期しています。
+            <p className="text-xs sm:text-sm text-slate-400">
+              「オーバーラッピング」と「シャドーイング」の2段階トレーニングを達成しました。
             </p>
           </div>
 
-          <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 flex items-center justify-around text-center">
+            <div>
+              <div className="text-xs text-slate-400 font-medium">総センテンス数</div>
+              <div className="text-xl font-black text-purple-300">{sentences.length} 文</div>
+            </div>
+            <div className="h-8 w-px bg-slate-800" />
+            <div>
+              <div className="text-xs text-slate-400 font-medium">総発話回数</div>
+              <div className="text-xl font-black text-cyan-300">{sentences.length * 2} 回</div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
             <button
-              onClick={onBackToReader}
-              className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+              onClick={() => {
+                setIsAllCompleted(false);
+                setCurrentIndex(0);
+                setSubStep('overlapping');
+                setShowEnglishInShadowing(false);
+                saveProgress(0, 'overlapping', 'in_progress');
+                playCurrentSentenceAudio(0, 'overlapping');
+              }}
+              className="flex-1 py-3.5 px-5 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-lg active:scale-95"
             >
-              <BookOpen className="w-4 h-4 text-cyan-400" />
-              <span>精読画面に戻る</span>
+              <RotateCcw className="w-4 h-4" />
+              <span>もう一度最初から練習する</span>
             </button>
 
-            {onOpenListening && (
+            <button
+              onClick={onBackToReader}
+              className="flex-1 py-3.5 px-5 bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-xl shadow-purple-600/30 active:scale-95"
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>リーダーに戻る</span>
+            </button>
+
+            {onBackToBookshelf && (
               <button
-                onClick={onOpenListening}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-sm font-black shadow-lg shadow-emerald-600/30 transition-all active:scale-95 cursor-pointer"
+                onClick={onBackToBookshelf}
+                className="py-3.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 transition-all flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95"
               >
-                <Headphones className="w-4 h-4 text-white" />
-                <span>耳トレで100% 🟢 完全制覇しにいく 🚀</span>
+                <span>本棚へ</span>
               </button>
             )}
           </div>
@@ -372,148 +508,147 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
     );
   }
 
-  // Calculate total sub-step progress: (currentIndex * 2 + (subStep === 'shadowing' ? 1 : 0)) / (sentences.length * 2)
-  const totalSubSteps = sentences.length * 2;
-  const currentSubStepNum = currentIndex * 2 + (subStep === 'shadowing' ? 2 : 1);
-  const overallPercent = Math.round((currentSubStepNum / totalSubSteps) * 100);
+  // Progress percentage
+  const currentStepNum = currentIndex * 2 + (subStep === 'overlapping' ? 1 : 2);
+  const totalSteps = sentences.length * 2;
+  const overallPercent = Math.round((currentStepNum / totalSteps) * 100);
 
   return (
-    <div className="max-w-3xl mx-auto space-y-5 pb-72 sm:pb-80 animate-fadeIn">
-      {/* 1. Top Header */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="max-w-3xl mx-auto space-y-6 pb-48 animate-fadeIn relative">
+      <audio ref={silentAudioRef} src={SILENT_AUDIO_URI} preload="auto" loop />
+
+      {/* Floating Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-16 left-1/2 transform -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900/95 border border-cyan-500/50 shadow-2xl text-cyan-200 text-xs sm:text-sm font-bold flex items-center space-x-2 animate-bounce backdrop-blur-md">
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* 1. Header Navigation & Mode / Speed Controls */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl backdrop-blur-md space-y-4">
+        <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <button
               onClick={onBackToReader}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-950 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-xl text-xs font-semibold transition-all group cursor-pointer"
-              title="精読画面に戻る"
+              className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+              title="リーダーに戻る"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-cyan-400 group-hover:-translate-x-0.5 transition-transform" />
-              <span>精読に戻る</span>
+              <ArrowLeft className="w-5 h-5" />
             </button>
-            <button
-              onClick={onBackToBookshelf}
-              className="text-xs text-slate-500 hover:text-slate-300 transition-colors hidden sm:inline cursor-pointer"
-            >
-              本棚へ
-            </button>
-
             <div>
               <div className="flex items-center space-x-2">
-                <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-bold font-mono">
-                  🎙️ 発話特訓（1文ずつ集中）
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                  <Headphones className="w-3 h-3 inline" />
+                  <span>発話特訓モード</span>
                 </span>
-                <span className="text-xs text-slate-400 font-medium">
-                  {story.cefrLevel || 'A2'}
+                <span className="text-xs text-slate-400 font-mono">
+                  文 {currentIndex + 1} / {sentences.length}
                 </span>
               </div>
-              <h1 className="text-base sm:text-lg font-bold text-white mt-0.5 line-clamp-1">
+              <h1 className="text-base sm:text-lg font-bold text-white truncate max-w-[200px] sm:max-w-md">
                 {story.title}
               </h1>
             </div>
           </div>
 
-          {/* Speed Selector */}
-          <div className="flex items-center gap-1.5 bg-slate-950 px-2 py-1 rounded-xl border border-slate-800 text-xs">
-            <span className="text-slate-400 font-medium text-[11px]">速度:</span>
-            {SPEECH_RATES.map(r => (
+          {/* Speed Selector (Active in Overlapping) */}
+          <div className="flex items-center space-x-1 bg-slate-950/80 p-1 rounded-2xl border border-slate-800">
+            {SPEECH_RATES.map(rate => (
               <button
-                key={r.value}
+                key={rate.value}
                 type="button"
-                onClick={() => setSpeechRate(r.value)}
-                className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
-                  speechRate === r.value
-                    ? 'bg-purple-500 text-slate-950 shadow-sm'
-                    : 'text-slate-400 hover:text-white'
+                onClick={() => {
+                  setSpeechRate(rate.value);
+                  if (subStep === 'overlapping') {
+                    stopAudio();
+                  }
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-xl text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                  speechRate === rate.value
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
                 }`}
+                title={`再生速度: ${rate.label}`}
               >
-                {r.label}
+                {rate.label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* 2-Step Micro Pipeline Indicator for Current Sentence */}
-        <div className="grid grid-cols-2 gap-2 pt-1">
-          {/* Sub-Step 1: Overlapping */}
-          <div className={`p-2.5 sm:p-3 rounded-2xl border transition-all ${
-            subStep === 'overlapping'
-              ? 'bg-gradient-to-r from-teal-950/80 to-emerald-950/80 border-teal-500/60 shadow-lg shadow-teal-500/10 ring-1 ring-teal-500/30'
-              : 'bg-slate-950/60 border-slate-800/80 opacity-60'
-          }`}>
-            <div className="flex items-center justify-between">
-              <span className={`text-xs font-bold flex items-center gap-1.5 ${
-                subStep === 'overlapping' ? 'text-teal-300' : 'text-slate-400'
-              }`}>
-                <span className="w-5 h-5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 flex items-center justify-center text-[10px] font-bold font-mono">1</span>
-                <span>🗣️ オーバーラッピング</span>
-              </span>
-              <span className="text-[10px] text-teal-400/80 font-medium">【英文を見る】</span>
+        {/* 2-Step Stage Indicator */}
+        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800/80">
+          <div
+            className={`p-2.5 sm:p-3 rounded-2xl border transition-all text-center flex items-center justify-center space-x-2 ${
+              subStep === 'overlapping'
+                ? 'bg-gradient-to-r from-teal-500/20 to-emerald-500/20 border-teal-500/40 text-teal-300 ring-1 ring-teal-500/30'
+                : 'bg-slate-950/40 border-slate-800/60 text-slate-500'
+            }`}
+          >
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+              subStep === 'overlapping' ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+            }`}>
+              1
             </div>
-            <p className="text-[11px] text-slate-300 pt-1 leading-tight hidden sm:block">
-              英文を目で追いながら、音声と完全にタイミングを合わせて同時に発声します。
-            </p>
+            <div className="text-left">
+              <div className="text-xs font-bold leading-tight">オーバーラッピング</div>
+              <div className="text-[10px] text-slate-400">英文を見ながら同時に発音</div>
+            </div>
           </div>
 
-          {/* Sub-Step 2: Shadowing */}
-          <div className={`p-2.5 sm:p-3 rounded-2xl border transition-all ${
-            subStep === 'shadowing'
-              ? 'bg-gradient-to-r from-purple-950/80 to-indigo-950/80 border-purple-500/60 shadow-lg shadow-purple-500/10 ring-1 ring-purple-500/30'
-              : 'bg-slate-950/60 border-slate-800/80 opacity-60'
-          }`}>
-            <div className="flex items-center justify-between">
-              <span className={`text-xs font-bold flex items-center gap-1.5 ${
-                subStep === 'shadowing' ? 'text-purple-300' : 'text-slate-400'
-              }`}>
-                <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center justify-center text-[10px] font-bold font-mono">2</span>
-                <span>🎧 シャドーイング</span>
-              </span>
-              <span className="text-[10px] text-purple-400/80 font-medium">【英文を隠す】</span>
+          <div
+            className={`p-2.5 sm:p-3 rounded-2xl border transition-all text-center flex items-center justify-center space-x-2 ${
+              subStep === 'shadowing'
+                ? 'bg-gradient-to-r from-purple-500/20 to-indigo-500/20 border-purple-500/40 text-purple-300 ring-1 ring-purple-500/30'
+                : 'bg-slate-950/40 border-slate-800/60 text-slate-500'
+            }`}
+          >
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+              subStep === 'shadowing' ? 'bg-purple-500 text-white' : 'bg-slate-800 text-slate-400'
+            }`}>
+              2
             </div>
-            <p className="text-[11px] text-slate-300 pt-1 leading-tight hidden sm:block">
-              英文を隠し、耳に入ってくる音の1拍後ろを影のように追走して声に出します。
-            </p>
+            <div className="text-left">
+              <div className="text-xs font-bold leading-tight">シャドーイング</div>
+              <div className="text-[10px] text-slate-400">耳だけ（1拍遅れて影追走）</div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* 2. Main Sentence Display Card */}
+      {/* 2. Sentence Display & Progress */}
       <div className="space-y-4">
-        {/* Progress Bar & Sentence Navigation Map */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-lg space-y-3">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono font-bold">
-                文 {currentIndex + 1} / {sentences.length}
-              </span>
-              <span className="text-[11px] text-slate-400">
-                ({subStep === 'overlapping' ? '① オーバーラップ' : '② シャドーイング'})
-              </span>
-              {/* Listening Comprehension Badge for Current Sentence */}
-              <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border font-mono ${currentRatingInfo.bg} ${currentRatingInfo.text} ${currentRatingInfo.border}`}>
-                🎧 {currentRatingInfo.label}
-              </span>
-            </div>
-
-            <span className="text-[11px] text-purple-300 font-mono font-bold">
-              全体進捗 {overallPercent}%
-            </span>
+        {/* Sentence Mini-Map Pills */}
+        <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 space-y-2">
+          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+            <span className="font-semibold text-slate-300">特訓進捗ミニマップ</span>
+            <span className="font-mono text-purple-300 font-bold">{overallPercent}% 完了</span>
           </div>
 
-          {/* Mini Sentences Dots Map */}
-          <div className="flex items-center gap-1.5 overflow-x-auto py-1 px-0.5 no-scrollbar">
-            {sentences.map((_, idx) => {
+          <div className="flex items-center gap-1.5 overflow-x-auto py-1 scrollbar-thin">
+            {sentences.map((sent, idx) => {
+              const isCurrent = idx === currentIndex;
+              const isPast = idx < currentIndex;
               const r = sentenceRatings[idx]?.rating;
               const info = getRatingBadge(r);
-              const isCurrent = idx === currentIndex;
+
               return (
                 <button
-                  key={idx}
+                  key={sent.id}
                   type="button"
-                  onClick={() => handleJumpToSentence(idx)}
-                  className={`h-2.5 rounded-full transition-all shrink-0 cursor-pointer ${
+                  onClick={() => {
+                    setCurrentIndex(idx);
+                    setSubStep('overlapping');
+                    setShowEnglishInShadowing(false);
+                    saveProgress(idx, 'overlapping', 'in_progress');
+                    playCurrentSentenceAudio(idx, 'overlapping');
+                  }}
+                  className={`h-3 rounded-full transition-all duration-200 shrink-0 cursor-pointer ${
                     isCurrent
-                      ? 'w-7 ring-2 ring-purple-400 ring-offset-1 ring-offset-slate-950 ' + info.dot
+                      ? 'w-8 bg-purple-400 ring-2 ring-purple-400/50'
+                      : isPast
+                      ? 'w-3.5 bg-slate-600 hover:bg-slate-500'
                       : `w-3 hover:w-5 opacity-80 hover:opacity-100 ` + info.dot
                   }`}
                   title={`文 ${idx + 1}: ${info.label}`}
@@ -560,18 +695,48 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
                   setShowEnglishInShadowing(false);
                 }
               }}
-              className={`p-6 sm:p-8 rounded-3xl space-y-3 animate-fadeIn shadow-lg border transition-all ${
+              className={`p-6 sm:p-8 rounded-3xl space-y-3 animate-fadeIn shadow-lg border transition-all relative ${
                 subStep === 'overlapping'
                   ? `bg-slate-900/90 ${currentRatingInfo.cardBorder}`
                   : `bg-slate-900/90 ${currentRatingInfo.cardBorder} cursor-pointer hover:bg-slate-900`
               }`}
               title={subStep === 'shadowing' ? 'クリックして英文を再び隠す (Vキー)' : undefined}
             >
-              {/* Listening Rating Header inside box */}
-              <div className="flex items-center justify-center gap-2 pb-1">
+              {/* Badges & Actions inside box */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
                 <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border ${currentRatingInfo.bg} ${currentRatingInfo.text} ${currentRatingInfo.border}`}>
                   リスニング判定: {currentRatingInfo.label}
                 </span>
+
+                {/* Dedicated Anki Listening Card Send Button */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSaveToListeningAnki();
+                  }}
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer ${
+                    isCurrentSentenceSaved
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30'
+                      : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-600/25 ring-1 ring-cyan-400/40'
+                  }`}
+                  title="この文をリスニングAnkiに保存 (Aキー)"
+                >
+                  {isCurrentSentenceSaved ? (
+                    <Check className="w-3.5 h-3.5 text-cyan-400" />
+                  ) : (
+                    <BookmarkPlus className="w-3.5 h-3.5 text-white" />
+                  )}
+                  <span>
+                    {isCurrentSentenceSaved ? `✅ リスニングAnki登録済 (${speechRate}x)` : '🎧 リスニングAnkiに送る (A)'}
+                  </span>
+                  {isCurrentEnriching && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-cyan-300 animate-pulse ml-1">
+                      <Sparkles className="w-3 h-3" />
+                      英英日解析中...
+                    </span>
+                  )}
+                </button>
               </div>
 
               <p className="text-xl sm:text-2xl font-bold text-white leading-relaxed font-serif">
@@ -588,14 +753,44 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
           ) : (
             <div
               onClick={() => setShowEnglishInShadowing(true)}
-              className={`p-8 sm:p-10 bg-slate-900/40 border-2 border-dashed ${currentRatingInfo.cardBorder} hover:bg-slate-900/60 rounded-3xl space-y-3 animate-fadeIn cursor-pointer transition-all group`}
+              className={`p-8 sm:p-10 bg-slate-900/40 border-2 border-dashed ${currentRatingInfo.cardBorder} hover:bg-slate-900/60 rounded-3xl space-y-3 animate-fadeIn cursor-pointer transition-all group relative`}
               title="クリックして英文をチラ見 (Vキー)"
             >
-              {/* Rating indicator even when masked */}
-              <div className="flex items-center justify-center gap-2">
+              {/* Badges & Actions even when masked */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border ${currentRatingInfo.bg} ${currentRatingInfo.text} ${currentRatingInfo.border}`}>
                   リスニング判定: {currentRatingInfo.label}
                 </span>
+
+                {/* Dedicated Anki Listening Card Send Button */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSaveToListeningAnki();
+                  }}
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer ${
+                    isCurrentSentenceSaved
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30'
+                      : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-600/25 ring-1 ring-cyan-400/40'
+                  }`}
+                  title="この文をリスニングAnkiに保存 (Aキー)"
+                >
+                  {isCurrentSentenceSaved ? (
+                    <Check className="w-3.5 h-3.5 text-cyan-400" />
+                  ) : (
+                    <BookmarkPlus className="w-3.5 h-3.5 text-white" />
+                  )}
+                  <span>
+                    {isCurrentSentenceSaved ? `✅ リスニングAnki登録済 (${speechRate}x)` : '🎧 リスニングAnkiに送る (A)'}
+                  </span>
+                  {isCurrentEnriching && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-cyan-300 animate-pulse ml-1">
+                      <Sparkles className="w-3 h-3" />
+                      英英日解析中...
+                    </span>
+                  )}
+                </button>
               </div>
 
               <p className="text-sm sm:text-base text-purple-200/90 font-bold leading-relaxed">
@@ -636,22 +831,43 @@ export const StoryShadowingView: React.FC<StoryShadowingViewProps> = ({
             </span>
           </button>
 
-          {/* 2. Replay Audio Button (Middle, Medium Emphasis) */}
-          <button
-            type="button"
-            onClick={handleReplay}
-            className="w-full flex items-center justify-center space-x-2 py-3 px-4 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 hover:border-slate-600 transition-all cursor-pointer shadow-md active:scale-[0.98] group"
-          >
-            <RotateCcw className="w-4 h-4 text-purple-400 group-hover:rotate-[-45deg] transition-transform shrink-0" />
-            <span>もう一度音声を聴いて発音する (R)</span>
-          </button>
+          {/* 2. Secondary Row: Replay & Anki Send */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleReplay}
+              className="flex-1 flex items-center justify-center space-x-2 py-3 px-4 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 hover:border-slate-600 transition-all cursor-pointer shadow-md active:scale-[0.98] group"
+            >
+              <RotateCcw className="w-4 h-4 text-purple-400 group-hover:rotate-[-45deg] transition-transform shrink-0" />
+              <span>もう一度聴く (R)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveToListeningAnki}
+              className={`flex-1 flex items-center justify-center space-x-2 py-3 px-4 rounded-2xl text-xs sm:text-sm font-bold border transition-all cursor-pointer shadow-md active:scale-[0.98] ${
+                isCurrentSentenceSaved
+                  ? 'bg-cyan-950/60 border-cyan-500/40 text-cyan-300'
+                  : 'bg-slate-900 hover:bg-slate-850 border-slate-700 text-cyan-300 hover:text-cyan-200'
+              }`}
+            >
+              {isCurrentSentenceSaved ? (
+                <Check className="w-4 h-4 text-cyan-400 shrink-0" />
+              ) : (
+                <BookmarkPlus className="w-4 h-4 text-cyan-400 shrink-0" />
+              )}
+              <span className="truncate">
+                {isCurrentSentenceSaved ? 'Anki登録済' : 'Ankiリスニング (A)'}
+              </span>
+            </button>
+          </div>
 
           {/* 3. Step Back Button (Bottom, Subtle Emphasis, Only if previous step exists) */}
           {(currentIndex > 0 || subStep === 'shadowing') && (
             <button
               type="button"
               onClick={handleStepBack}
-              className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-slate-950 hover:bg-slate-900 text-slate-400 hover:text-slate-200 rounded-2xl text-xs font-semibold border border-slate-800 hover:border-slate-700 transition-all cursor-pointer active:scale-[0.98]"
+              className="w-full flex items-center justify-center space-x-2 py-2 px-4 bg-slate-950 hover:bg-slate-900 text-slate-400 hover:text-slate-200 rounded-2xl text-xs font-semibold border border-slate-800 hover:border-slate-700 transition-all cursor-pointer active:scale-[0.98]"
             >
               <ChevronLeft className="w-4 h-4 shrink-0" />
               <span>

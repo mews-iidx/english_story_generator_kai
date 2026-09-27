@@ -358,3 +358,93 @@ export function calculateLabAnalytics(): LabAnalyticsSummary {
     recentRecords: records.slice(0, 30),
   };
 }
+
+
+/**
+ * ストーリー内の文からAnkiリスニングカード用「英英日」解説＆音声変化ポイントを非同期に並列生成
+ */
+export async function enrichListeningSentenceWithGemini(params: {
+  cardId: string;
+  sentenceEn: string;
+  contextJa?: string;
+  storyTitle?: string;
+  apiKey: string;
+  model?: string;
+}): Promise<{
+  translation: string;
+  englishExplanation: string;
+  markedTokens: string[];
+} | null> {
+  const { cardId, sentenceEn, contextJa = '', storyTitle = '', apiKey, model = 'gemini-2.0-flash' } = params;
+  if (!apiKey || !sentenceEn.trim()) return null;
+
+  const systemInstruction = `あなたは英語音声学・第二言語習得論（SLA）の専門家です。
+ストーリー英文に対して、リスニング学習者が「音の脱落・連結・弱形」を理解し、英語のまま直感的なニュアンスを掴むための【英英日（英語ニュアンス解説＋音声変化＋日本語訳）】の分析を行ってください。
+
+【出力フォーマット（純粋なJSONオブジェクトのみ）】:
+{
+  "translation": "自然で正確な日本語訳",
+  "englishExplanation": "Concise English explanation of communicative nuance, key phrases, and natural context (1-2 sentences in clear English).",
+  "phoneticPoints": "Key sound shifts in natural spoken speed (e.g. reduction: 'want to' -> /wɑnə/, linking: 'pick up' -> /pɪkʌp/, flap-t, dropped consonants)",
+  "markedTokens": ["linking/reduction words or key phonetic chunks in the sentence"]
+}`;
+
+  const userPrompt = `Story: "${storyTitle}"
+Sentence: "${sentenceEn}"
+Context Japanese: "${contextJa}"
+
+上記英文のリスニングカード用解説（英英日）をJSONで生成してください。`;
+
+  const modelsToTry = [model, ...FALLBACK_MODELS.filter(m => m !== model)];
+
+  for (const currentModel of modelsToTry) {
+    try {
+      LiveLogger.logQuizDrill('ListeningEnrichment', `リスニング文の英英日解説を生成中 (Model: ${currentModel}): "${sentenceEn.slice(0, 30)}..."`);
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: userPrompt }] }],
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: {
+            temperature: 0.3,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!res.ok) continue;
+
+      const json = await res.json();
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+
+      const parsed = JSON.parse(rawText);
+      const translation = (parsed.translation || contextJa || '').trim();
+      const englishExplanation = (parsed.englishExplanation || '').trim();
+      const phoneticPoints = (parsed.phoneticPoints || '').trim();
+      const markedTokens: string[] = Array.isArray(parsed.markedTokens) ? parsed.markedTokens : [];
+
+      const fullExplanation = [
+        englishExplanation ? `💡 ${englishExplanation}` : '',
+        phoneticPoints ? `🗣️ 音声変化: ${phoneticPoints}` : '',
+      ].filter(Boolean).join('\n');
+
+      // Return parsed enrichment result (caller handles storage update)
+
+      LiveLogger.logQuizDrill('ListeningEnrichment', `リスニングAnkiカードの英英日解説が完了しました (${cardId})`);
+
+      return {
+        translation,
+        englishExplanation: fullExplanation,
+        markedTokens,
+      };
+    } catch (e: any) {
+      console.warn(`Listening enrichment error with model ${currentModel}:`, e);
+    }
+  }
+
+  return null;
+}

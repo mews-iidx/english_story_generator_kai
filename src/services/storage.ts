@@ -2451,6 +2451,33 @@ export function saveListeningCard(params: SaveListeningCardParams): VocabItem {
   return card;
 }
 
+export function enrichListeningCard(
+  cardId: string,
+  enriched: {
+    translation?: string;
+    englishExplanation?: string;
+    markedTokens?: string[];
+  }
+): boolean {
+  const vocabs = loadVocabs();
+  const index = vocabs.findIndex(v => v.id === cardId);
+  if (index >= 0) {
+    const current = vocabs[index];
+    vocabs[index] = {
+      ...current,
+      translation: enriched.translation || current.translation,
+      meaning: enriched.translation || current.meaning,
+      englishExplanation: enriched.englishExplanation || current.englishExplanation,
+      contextNote: enriched.englishExplanation || current.contextNote,
+      markedTokens: (enriched.markedTokens && enriched.markedTokens.length > 0) ? enriched.markedTokens : current.markedTokens,
+    };
+    saveVocabsBatch(vocabs);
+    return true;
+  }
+  return false;
+}
+
+
 export function recordAnkiSpeechPractice(params: {
   vocabId: string;
   subStep: 'overlapping' | 'shadowing';
