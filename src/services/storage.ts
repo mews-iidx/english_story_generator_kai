@@ -2278,11 +2278,11 @@ export function recordSpeechPracticeEvent(params: {
 
   const logs = loadSpeechPracticeLogs();
 
-  // 800ms以内の同一文・同一サブステップの二重トリガー防止
+  // 400ms以内の同一文・同一サブステップの二重トリガー防止
   if (logs.length > 0) {
     const latest = logs[0];
     const diffMs = Date.now() - new Date(latest.timestamp).getTime();
-    if (latest.storyId === params.storyId && latest.sentenceIdx === params.sentenceIdx && latest.subStep === params.subStep && diffMs < 800) {
+    if (latest.storyId === params.storyId && latest.sentenceIdx === params.sentenceIdx && latest.subStep === params.subStep && diffMs < 400) {
       return;
     }
   }
@@ -2309,7 +2309,9 @@ export function recordSpeechPracticeEvent(params: {
   }
 
   const todayLogs = updatedLogs.filter(l => l.dateString === today);
-  const uniqueKeys = new Set(todayLogs.map(l => `${l.storyId}_${l.sentenceIdx}`));
+  const uniqueKeys = new Set(
+    todayLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
+  );
 
   existing.speechUtterancesCount = todayLogs.length;
   existing.uniqueSentencesCount = uniqueKeys.size;
@@ -2334,7 +2336,9 @@ export function deleteSpeechPracticeLog(logId: string): { logs: SpeechPracticeLo
     const dateLogs = updatedLogs.filter(l => l.dateString === target.dateString);
     const snapIdx = snapshots.findIndex(s => s.date === target.dateString);
     if (snapIdx >= 0) {
-      const uniqueKeys = new Set(dateLogs.map(l => `${l.storyId}_${l.sentenceIdx}`));
+      const uniqueKeys = new Set(
+        dateLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
+      );
       snapshots[snapIdx].speechUtterancesCount = dateLogs.length;
       snapshots[snapIdx].uniqueSentencesCount = uniqueKeys.size;
       saveDailySnapshotsBatch(snapshots);
@@ -2499,20 +2503,22 @@ export function recordAnkiSpeechPractice(params: {
   const now = new Date().toISOString();
 
   let sentence = params.sentenceText || '';
+  let cardPhrase = '';
   if (idx >= 0) {
     vocabs[idx] = {
       ...vocabs[idx],
       speechPracticeCount: (vocabs[idx].speechPracticeCount || 0) + 1,
       lastSpeechPracticedAt: now,
     };
-    sentence = vocabs[idx].sentence || vocabs[idx].exampleSentence || vocabs[idx].phrase;
+    sentence = vocabs[idx].sentence || vocabs[idx].exampleSentence || vocabs[idx].phrase || sentence;
+    cardPhrase = vocabs[idx].phrase || '';
     saveVocabsBatch(vocabs);
   }
 
-  // Record into common speech practice log
+  // Record into common speech practice log with unique storyId per card
   recordSpeechPracticeEvent({
-    storyId: params.vocabId || 'anki_deck',
-    storyTitle: 'Ankiリスニングカード',
+    storyId: 'anki_' + (params.vocabId || 'card'),
+    storyTitle: cardPhrase ? `Anki: ${cardPhrase}` : 'Ankiリスニングカード',
     sentenceIdx: 0,
     subStep: params.subStep,
     sentenceText: sentence,

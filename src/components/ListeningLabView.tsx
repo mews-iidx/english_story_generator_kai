@@ -11,13 +11,14 @@ import {
   BookmarkPlus,
   RefreshCw,
   Eye,
+  EyeOff,
+  RotateCcw,
   HelpCircle,
   TrendingUp,
   Mic,
-  ArrowRight,
   ChevronLeft,
   List,
-  X
+  X,
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
 import { LabQuestion, LabAnalyticsSummary } from '../types/listeningLab';
@@ -336,20 +337,28 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
   }, [currentQuestion, soundMissIndices, unknownVocabIndices, targetSpeedRate, targetCefrLevel, playCount, currentIndex, questions, onListeningCardSaved]);
 
   // ----------------------------------------------------
-  // Anki発話特訓: Speech Practice Flow
+  // Anki発話特訓: Speech Practice Flow & UX
   // ----------------------------------------------------
-  const handlePlaySpeechCardAudio = useCallback((rate = speechRate) => {
-    if (!currentSpeechCard) return;
-    const sentence = currentSpeechCard.sentence || currentSpeechCard.exampleSentence || currentSpeechCard.phrase;
+  const overallSpeechPercent = useMemo(() => {
+    if (ankiCards.length === 0) return 0;
+    const progress = speechCardIndex + (speechSubStep === 'shadowing' ? 0.5 : 0);
+    return Math.min(100, Math.round((progress / ankiCards.length) * 100));
+  }, [ankiCards.length, speechCardIndex, speechSubStep]);
+
+  const playSpeechCardAudio = useCallback((index: number, step: 'overlapping' | 'shadowing') => {
+    const card = ankiCards[index];
+    if (!card) return;
+    const sentence = card.sentence || card.exampleSentence || card.phrase;
     if (!sentence) return;
 
     stopSpeech();
     setIsPlayingAudio(true);
-    speakText(sentence, rate, 'en-US', () => setIsPlayingAudio(false));
-  }, [currentSpeechCard, speechRate]);
+    const rateToUse = step === 'overlapping' ? speechRate : 1.0;
+    speakText(sentence, rateToUse, 'en-US', () => setIsPlayingAudio(false));
+  }, [ankiCards, speechRate]);
 
-  // Advance speech sub-step or next card
-  const handleCompleteSpeechStep = useCallback(() => {
+  // Advance speech sub-step or next card (Overlapping ➔ Shadowing ➔ Next Card)
+  const handleAdvanceSpeechStep = useCallback(() => {
     if (!currentSpeechCard) return;
     stopSpeech();
 
@@ -362,44 +371,83 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       sentenceText: sentence,
     });
 
+    // Refresh allVocabs so cumulative count badge updates immediately
+    setAllVocabs(loadVocabs());
+
     if (speechSubStep === 'overlapping') {
-      // Advance to Shadowing
+      // Step 1 ➔ Step 2: Shadowing (English hidden)
       setSpeechSubStep('shadowing');
-      // Auto-play at normal speed for shadowing
+      setShowEnglishInShadowing(false);
       setTimeout(() => {
-        handlePlaySpeechCardAudio(1.0);
-      }, 250);
+        playSpeechCardAudio(speechCardIndex, 'shadowing');
+      }, 150);
     } else {
-      // Advance to Next Card
-      const nextCardIdx = (speechCardIndex + 1) % Math.max(1, ankiCards.length);
-      setSpeechCardIndex(nextCardIdx);
-      setSpeechSubStep('overlapping');
-
-      setTimeout(() => {
-        if (ankiCards[nextCardIdx]) {
-          const nextSentence = ankiCards[nextCardIdx].sentence || ankiCards[nextCardIdx].exampleSentence || ankiCards[nextCardIdx].phrase;
-          if (nextSentence) {
-            speakText(nextSentence, speechRate, 'en-US', () => setIsPlayingAudio(false));
-            setIsPlayingAudio(true);
-          }
-        }
-      }, 300);
+      // Step 2 ➔ Next card Step 1
+      if (speechCardIndex + 1 < ankiCards.length) {
+        const nextIdx = speechCardIndex + 1;
+        setSpeechCardIndex(nextIdx);
+        setSpeechSubStep('overlapping');
+        setShowEnglishInShadowing(false);
+        setTimeout(() => {
+          playSpeechCardAudio(nextIdx, 'overlapping');
+        }, 150);
+      } else {
+        // Completed all cards in current deck queue!
+        confetti({ particleCount: 50, spread: 60, origin: { y: 0.6 } });
+        const nextIdx = 0;
+        setSpeechCardIndex(nextIdx);
+        setSpeechSubStep('overlapping');
+        setShowEnglishInShadowing(false);
+        setTimeout(() => {
+          playSpeechCardAudio(nextIdx, 'overlapping');
+        }, 200);
+      }
     }
-  }, [currentSpeechCard, speechSubStep, speechCardIndex, ankiCards, speechRate, handlePlaySpeechCardAudio]);
+  }, [currentSpeechCard, speechSubStep, speechCardIndex, ankiCards.length, playSpeechCardAudio]);
 
-  const handleSkipSpeechCard = () => {
+  // Step back (Shadowing ➔ Overlapping; or Overlapping ➔ Previous Card Shadowing)
+  const handleStepBackSpeech = useCallback(() => {
     stopSpeech();
-    const nextCardIdx = (speechCardIndex + 1) % Math.max(1, ankiCards.length);
-    setSpeechCardIndex(nextCardIdx);
-    setSpeechSubStep('overlapping');
-  };
+    if (speechSubStep === 'shadowing') {
+      setSpeechSubStep('overlapping');
+      setShowEnglishInShadowing(false);
+      setTimeout(() => {
+        playSpeechCardAudio(speechCardIndex, 'overlapping');
+      }, 100);
+    } else if (speechCardIndex > 0) {
+      const prevIdx = speechCardIndex - 1;
+      setSpeechCardIndex(prevIdx);
+      setSpeechSubStep('shadowing');
+      setShowEnglishInShadowing(false);
+      setTimeout(() => {
+        playSpeechCardAudio(prevIdx, 'shadowing');
+      }, 100);
+    }
+  }, [speechSubStep, speechCardIndex, playSpeechCardAudio]);
 
-  const handlePrevSpeechCard = () => {
+  // Skip card
+  const handleSkipSpeechCard = useCallback(() => {
     stopSpeech();
-    const prevIdx = speechCardIndex > 0 ? speechCardIndex - 1 : ankiCards.length - 1;
-    setSpeechCardIndex(prevIdx);
+    const nextIdx = (speechCardIndex + 1) % Math.max(1, ankiCards.length);
+    setSpeechCardIndex(nextIdx);
     setSpeechSubStep('overlapping');
-  };
+    setShowEnglishInShadowing(false);
+    setTimeout(() => {
+      playSpeechCardAudio(nextIdx, 'overlapping');
+    }, 100);
+  }, [speechCardIndex, ankiCards.length, playSpeechCardAudio]);
+
+  // Replay speech audio
+  const handleReplaySpeech = useCallback(() => {
+    playSpeechCardAudio(speechCardIndex, speechSubStep);
+  }, [speechCardIndex, speechSubStep, playSpeechCardAudio]);
+
+  // Toggle English in Shadowing step
+  const toggleShadowingEnglish = useCallback(() => {
+    if (speechSubStep === 'shadowing') {
+      setShowEnglishInShadowing(prev => !prev);
+    }
+  }, [speechSubStep]);
 
   // Keyboard Navigation
   useEffect(() => {
@@ -425,28 +473,43 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
           }
         }
       } else if (activeMode === 'anki_speech') {
-        if (e.code === 'Space' || e.code === 'KeyR') {
+        if (e.code === 'Space' || e.code === 'Enter') {
           e.preventDefault();
-          handlePlaySpeechCardAudio();
-        } else if (e.code === 'Enter') {
+          handleAdvanceSpeechStep();
+        } else if (e.code === 'KeyR') {
           e.preventDefault();
-          handleCompleteSpeechStep();
-        } else if (e.code === 'KeyS' || e.code === 'ArrowRight') {
+          handleReplaySpeech();
+        } else if (e.code === 'KeyV') {
+          e.preventDefault();
+          toggleShadowingEnglish();
+        } else if (e.code === 'ArrowLeft' || e.code === 'KeyZ') {
+          e.preventDefault();
+          handleStepBackSpeech();
+        } else if (e.code === 'ArrowRight' || e.code === 'KeyS') {
           e.preventDefault();
           handleSkipSpeechCard();
-        } else if (e.code === 'KeyZ' || e.code === 'ArrowLeft') {
-          e.preventDefault();
-          handlePrevSpeechCard();
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeMode, isRevealed, soundMissIndices, unknownVocabIndices, handlePlayAudio, handleCompleteQuestion, handlePlaySpeechCardAudio, handleCompleteSpeechStep]);
+  }, [
+    activeMode,
+    isRevealed,
+    soundMissIndices,
+    unknownVocabIndices,
+    handlePlayAudio,
+    handleCompleteQuestion,
+    handleAdvanceSpeechStep,
+    handleReplaySpeech,
+    toggleShadowingEnglish,
+    handleStepBackSpeech,
+    handleSkipSpeechCard
+  ]);
 
   return (
-    <div className="max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-6 pb-28 animate-fadeIn">
+    <div className="max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-6 pb-36 animate-fadeIn">
       {/* Mode Switcher Tabs */}
       <div className="flex items-center justify-center space-x-2 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800 max-w-md mx-auto">
         <button
@@ -922,16 +985,16 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
           MODE 2: Ankiカード発話特訓 (無限シャドーイングストリーム)
           ========================================================================= */}
       {activeMode === 'anki_speech' && (
-        <div className="space-y-6 animate-fadeIn">
+        <div className="space-y-5 animate-fadeIn">
           {ankiCards.length === 0 ? (
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-4 shadow-xl">
               <div className="w-16 h-16 rounded-3xl bg-indigo-950 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400">
-                <Mic className="w-8 h-8" />
+                <Headphones className="w-8 h-8" />
               </div>
               <div className="space-y-1">
                 <h2 className="text-xl font-bold text-white">リスニング専用Ankiカードがまだありません</h2>
                 <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto">
-                  「AI無制限特訓」で聞き取れなかった文を「🔴 リスニングAnkiに保存」すると、ここにストックされて無限に発話練習できます。
+                  「AI無制限特訓」で聞き取れなかった文を「🎧 リスニングAnkiに保存」すると、ここにストックされてStoryと同様のUIで無限に発話特訓できます。
                 </p>
               </div>
               <button
@@ -942,164 +1005,335 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
               </button>
             </div>
           ) : currentSpeechCard ? (
-            <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 relative overflow-hidden">
-              {/* Header & Badges */}
-              <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
-                <div className="flex items-center space-x-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold flex items-center space-x-1">
-                    <Mic className="w-3 h-3" />
-                    <span>発話特訓 (Hot Priority)</span>
-                  </span>
-                  <span className="font-mono text-slate-400 text-xs">
-                    {speechCardIndex + 1} / {ankiCards.length} 枚
-                  </span>
-                  {currentSpeechCard.targetSpeedRate && (
-                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[10px]">
-                      🔒 登録 {currentSpeechCard.targetSpeedRate}x
-                    </span>
-                  )}
+            <>
+              {/* 1. Header Navigation & Mode / Speed Controls (Matching StoryShadowingView) */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl backdrop-blur-md space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                          <Headphones className="w-3 h-3 inline" />
+                          <span>発話特訓モード</span>
+                        </span>
+                        <span className="text-xs text-slate-400 font-mono">
+                          カード {speechCardIndex + 1} / {ankiCards.length}
+                        </span>
+                      </div>
+                      <h1 className="text-base sm:text-lg font-bold text-white truncate max-w-[200px] sm:max-w-md mt-0.5">
+                        {currentSpeechCard.phrase || 'リスニングAnkiカード'}
+                      </h1>
+                    </div>
+                  </div>
+
+                  {/* Speed Selector */}
+                  <div className="flex items-center space-x-1 bg-slate-950/80 p-1 rounded-2xl border border-slate-800">
+                    {SPEECH_PRACTICE_RATES.map(rate => (
+                      <button
+                        key={rate.value}
+                        type="button"
+                        onClick={() => {
+                          setSpeechRate(rate.value);
+                          if (speechSubStep === 'overlapping') {
+                            stopSpeech();
+                          }
+                        }}
+                        className={`px-2 sm:px-2.5 py-1 rounded-xl text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                          speechRate === rate.value
+                            ? 'bg-purple-600 text-white shadow-md'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title={`再生速度: ${rate.label}`}
+                      >
+                        {rate.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex items-center space-x-2">
-                  <span className="text-slate-500 text-[11px] font-mono">
-                    累計発話: <strong className="text-amber-300">{currentSpeechCard.speechPracticeCount || 0}</strong> 回
-                  </span>
-                  <button
-                    onClick={() => setIsCardListOpen(true)}
-                    className="p-1.5 text-slate-400 hover:text-white bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl transition-colors"
-                    title="カード一覧から選択"
+                {/* 2-Step Stage Indicator Grid */}
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800/80">
+                  <div
+                    className={`p-2.5 sm:p-3 rounded-2xl border transition-all text-center flex items-center justify-center space-x-2 ${
+                      speechSubStep === 'overlapping'
+                        ? 'bg-gradient-to-r from-teal-500/20 to-emerald-500/20 border-teal-500/40 text-teal-300 ring-1 ring-teal-500/30'
+                        : 'bg-slate-950/40 border-slate-800/60 text-slate-500'
+                    }`}
                   >
-                    <List className="w-4 h-4" />
-                  </button>
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+                      speechSubStep === 'overlapping' ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      1
+                    </div>
+                    <div className="text-left">
+                      <div className="text-xs font-bold leading-tight">オーバーラッピング</div>
+                      <div className="text-[10px] text-slate-400">英文を見ながら同時に発音</div>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`p-2.5 sm:p-3 rounded-2xl border transition-all text-center flex items-center justify-center space-x-2 ${
+                      speechSubStep === 'shadowing'
+                        ? 'bg-gradient-to-r from-purple-500/20 to-indigo-500/20 border-purple-500/40 text-purple-300 ring-1 ring-purple-500/30'
+                        : 'bg-slate-950/40 border-slate-800/60 text-slate-500'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+                      speechSubStep === 'shadowing' ? 'bg-purple-500 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      2
+                    </div>
+                    <div className="text-left">
+                      <div className="text-xs font-bold leading-tight">シャドーイング</div>
+                      <div className="text-[10px] text-slate-400">耳だけ（1拍遅れて影追走）</div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Sub-step Indicator Banner */}
-              <div className="flex items-center justify-between p-3 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-xs ${
-                    speechSubStep === 'overlapping'
-                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  }`}>
-                    {speechSubStep === 'overlapping' ? '1' : '2'}
+              {/* 2. Sentence Display & Progress */}
+              <div className="space-y-4">
+                {/* Sentence Mini-Map Pills */}
+                <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-semibold text-slate-300">特訓進捗ミニマップ</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsCardListOpen(true)}
+                        className="inline-flex items-center gap-1 text-[10px] text-indigo-400 hover:text-indigo-300 font-bold ml-2 underline cursor-pointer"
+                      >
+                        <List className="w-3 h-3" />
+                        <span>カード一覧 ({ankiCards.length}枚)</span>
+                      </button>
+                    </div>
+                    <span className="font-mono text-purple-300 font-bold">{overallSpeechPercent}% 完了</span>
                   </div>
-                  <div>
-                    <span className="font-bold text-xs block text-white">
-                      {speechSubStep === 'overlapping' ? 'Step 1: オーバーラッピング' : 'Step 2: シャドーイング'}
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      {speechSubStep === 'overlapping' ? '音声を流しながらぴったり重ねて声に出す' : '音声の少し後を追いかけて発話する'}
-                    </span>
+
+                  <div className="flex items-center gap-1.5 overflow-x-auto py-1 scrollbar-thin">
+                    {ankiCards.map((card, idx) => {
+                      const isCurrent = idx === speechCardIndex;
+                      const isPast = idx < speechCardIndex;
+                      const practiced = (card.speechPracticeCount || 0) > 0;
+
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          onClick={() => {
+                            setSpeechCardIndex(idx);
+                            setSpeechSubStep('overlapping');
+                            setShowEnglishInShadowing(false);
+                            setTimeout(() => {
+                              playSpeechCardAudio(idx, 'overlapping');
+                            }, 100);
+                          }}
+                          className={`h-3 rounded-full transition-all duration-200 shrink-0 cursor-pointer ${
+                            isCurrent
+                              ? 'w-8 bg-purple-400 ring-2 ring-purple-400/50'
+                              : isPast
+                              ? 'w-3.5 bg-slate-600 hover:bg-slate-500'
+                              : practiced
+                              ? 'w-3 bg-emerald-500/70 hover:w-5'
+                              : 'w-3 bg-slate-700 hover:w-5'
+                          }`}
+                          title={`カード ${idx + 1}: ${card.phrase || ''} (発話 ${card.speechPracticeCount || 0}回)`}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800/80">
+                    <div
+                      className="bg-gradient-to-r from-teal-400 via-purple-500 to-indigo-400 h-full transition-all duration-300"
+                      style={{ width: `${overallSpeechPercent}%` }}
+                    />
                   </div>
                 </div>
 
-                {/* Speed selector */}
-                <div className="flex items-center space-x-1">
-                  {SPEECH_PRACTICE_RATES.map(r => (
-                    <button
-                      key={r.value}
-                      onClick={() => setSpeechRate(r.value)}
-                      className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
-                        speechRate === r.value
-                          ? 'bg-indigo-600 text-white shadow-sm'
-                          : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                {/* Big Center Display */}
+                <div className="bg-slate-950/90 border border-slate-800/90 rounded-3xl p-6 sm:p-8 space-y-5 text-center shadow-inner relative overflow-hidden min-h-[260px] flex flex-col justify-center">
+                  {/* Audio Wave Visualizer */}
+                  <div className="flex items-center justify-center gap-1.5 py-1">
+                    {[0.4, 0.7, 1.0, 0.6, 0.9, 0.5, 0.8, 0.3].map((heightRatio, i) => (
+                      <div
+                        key={i}
+                        className={`w-1.5 rounded-full transition-all duration-200 ${
+                          isPlayingAudio
+                            ? speechSubStep === 'overlapping'
+                              ? 'bg-gradient-to-t from-teal-400 to-emerald-300 animate-pulse'
+                              : 'bg-gradient-to-t from-purple-400 to-indigo-300 animate-pulse'
+                            : 'bg-slate-800'
+                        }`}
+                        style={{
+                          height: isPlayingAudio ? `${Math.max(16, heightRatio * 44)}px` : '10px',
+                          animationDelay: `${i * 100}ms`,
+                        }}
+                      />
+                    ))}
+                  </div>
+
+                  {/* English Text: Visible in Overlapping, Toggleable in Shadowing */}
+                  {speechSubStep === 'overlapping' || showEnglishInShadowing ? (
+                    <div
+                      onClick={() => {
+                        if (speechSubStep === 'shadowing') {
+                          setShowEnglishInShadowing(false);
+                        }
+                      }}
+                      className={`p-6 sm:p-8 rounded-3xl space-y-3 animate-fadeIn shadow-lg border transition-all relative ${
+                        speechSubStep === 'overlapping'
+                          ? 'bg-slate-900/90 border-slate-800'
+                          : 'bg-purple-950/40 border-purple-500/40 ring-1 ring-purple-500/30 cursor-pointer'
                       }`}
                     >
-                      {r.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                      {/* Badges & Actions */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border bg-indigo-500/20 text-indigo-300 border-indigo-500/40">
+                            Ankiリスニングカード
+                          </span>
 
-              {/* Main Sentence Area */}
-              <div className="p-6 bg-slate-950/90 border border-slate-800 rounded-2xl space-y-4 text-center">
-                {/* Audio Play Trigger */}
-                <button
-                  onClick={() => handlePlaySpeechCardAudio()}
-                  className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto transition-all ${
-                    isPlayingAudio
-                      ? 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white shadow-2xl shadow-indigo-500/50 scale-105 animate-pulse'
-                      : 'bg-slate-900 hover:bg-slate-800 border-2 border-slate-700 text-indigo-400 shadow-xl hover:scale-105'
-                  }`}
-                  title="音声を再生 (Space / R)"
-                >
-                  {isPlayingAudio ? (
-                    <Volume2 className="w-8 h-8 text-white animate-bounce" />
-                  ) : (
-                    <Play className="w-8 h-8 text-indigo-400 ml-1" />
-                  )}
-                </button>
+                          {currentSpeechCard.targetSpeedRate && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border bg-slate-800 text-slate-300 border-slate-700">
+                              🔒 登録 {currentSpeechCard.targetSpeedRate}x
+                            </span>
+                          )}
+                        </div>
 
-                {/* Sentence English Display */}
-                {speechSubStep === 'overlapping' || showEnglishInShadowing ? (
-                  <div className="space-y-2">
-                    <p className="text-lg sm:text-2xl font-bold text-white font-serif leading-relaxed px-2">
-                      {highlightMarkedTokensInSentence(
-                        currentSpeechCard.sentence || currentSpeechCard.exampleSentence || currentSpeechCard.phrase,
-                        currentSpeechCard.markedTokens
+                        <span className="text-[11px] font-mono text-slate-400">
+                          累計発話: <strong className="text-amber-300 font-bold">{currentSpeechCard.speechPracticeCount || 0}</strong> 回
+                        </span>
+                      </div>
+
+                      <p className="text-xl sm:text-2xl font-bold text-white leading-relaxed font-serif">
+                        {highlightMarkedTokensInSentence(
+                          currentSpeechCard.sentence || currentSpeechCard.exampleSentence || currentSpeechCard.phrase,
+                          currentSpeechCard.markedTokens
+                        )}
+                      </p>
+
+                      {/* Japanese translation */}
+                      {(currentSpeechCard.translation || currentSpeechCard.meaning) && (
+                        <div className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-2xl text-xs text-slate-300 max-w-lg mx-auto">
+                          <span className="text-[10px] font-bold text-slate-500 block mb-0.5">日本語訳:</span>
+                          {currentSpeechCard.translation || currentSpeechCard.meaning}
+                        </div>
                       )}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="py-4 space-y-2">
-                    <p className="text-sm font-bold text-slate-400">英文は非表示です（音声だけでシャドーイング）</p>
-                    <button
+
+                      {/* Linguistic note */}
+                      {(currentSpeechCard.englishExplanation || currentSpeechCard.contextNote) && (
+                        <div className="text-[11px] text-purple-300/80 max-w-md mx-auto pt-1">
+                          💡 {currentSpeechCard.englishExplanation || currentSpeechCard.contextNote}
+                        </div>
+                      )}
+
+                      {speechSubStep === 'shadowing' && (
+                        <div className="text-xs text-purple-400 font-bold flex items-center justify-center gap-1.5 pt-2 border-t border-purple-500/20">
+                          <EyeOff className="w-4 h-4" />
+                          <span>英文を表示中（クリック または Vキー で再び隠す）</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div
                       onClick={() => setShowEnglishInShadowing(true)}
-                      className="inline-flex items-center space-x-1 px-3 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-xl text-xs"
+                      className="p-8 sm:p-10 bg-slate-900/40 border-2 border-dashed border-purple-500/40 hover:bg-slate-900/60 rounded-3xl space-y-3 animate-fadeIn cursor-pointer transition-all group relative"
+                      title="クリックして英文をチラ見 (Vキー)"
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>英文を見る</span>
+                      {/* Badges */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[10px] px-2 py-0.5 rounded-md font-bold font-mono border bg-indigo-500/20 text-indigo-300 border-indigo-500/40">
+                            Ankiリスニングカード
+                          </span>
+
+                        </div>
+
+                        <span className="text-[11px] font-mono text-slate-400">
+                          累計発話: <strong className="text-amber-300 font-bold">{currentSpeechCard.speechPracticeCount || 0}</strong> 回
+                        </span>
+                      </div>
+
+                      <p className="text-sm sm:text-base text-purple-200/90 font-bold leading-relaxed">
+                        🎧 英文は非表示です（音の1拍後ろを影のように追走）
+                      </p>
+                      <div className="text-xs font-bold text-purple-400 group-hover:text-purple-300 transition-all inline-flex items-center gap-1.5 pt-1">
+                        <Eye className="w-4 h-4" />
+                        <span>英文を見る / チラ見する (タップ または Vキー)</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Sticky Bottom Control Bar with Full-Width Vertically Stacked Buttons */}
+              <div
+                className="fixed bottom-0 inset-x-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl p-3.5 sm:p-4 max-w-3xl mx-auto"
+                style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom, 20px))' }}
+              >
+                <div className="flex flex-col gap-2.5 w-full">
+                  {/* 1. Main Complete / Advance Button (Top, Large, Primary Emphasis) */}
+                  <button
+                    type="button"
+                    onClick={handleAdvanceSpeechStep}
+                    className={`w-full flex items-center justify-center space-x-2 py-3.5 px-6 rounded-2xl text-sm sm:text-base font-black shadow-xl transition-all active:scale-[0.98] cursor-pointer ${
+                      speechSubStep === 'overlapping'
+                        ? 'bg-gradient-to-r from-teal-600 via-emerald-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white shadow-teal-600/30 ring-1 ring-teal-400/40'
+                        : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white shadow-purple-600/30 ring-1 ring-purple-400/40'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-5 h-5 shrink-0" />
+                    <span className="truncate">
+                      {speechSubStep === 'overlapping'
+                        ? '🗣️ オーバーラップ完了 ➔ ② シャドーイングへ (Space / Enter)'
+                        : speechCardIndex + 1 < ankiCards.length
+                        ? `🎧 シャドーイング完了 ➔ 次のカード (カード ${speechCardIndex + 2}) へ (Space / Enter)`
+                        : '🎉 全カードの発話特訓を完了！ 次の周へ (Space / Enter)'}
+                    </span>
+                  </button>
+
+                  {/* 2. Secondary Row: Replay, Card List, Back, Skip */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleReplaySpeech}
+                      className="flex-1 flex items-center justify-center space-x-2 py-3 px-3 sm:px-4 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 hover:border-slate-600 transition-all cursor-pointer shadow-md active:scale-[0.98] group"
+                    >
+                      <RotateCcw className="w-4 h-4 text-purple-400 group-hover:rotate-[-45deg] transition-transform shrink-0" />
+                      <span>もう一度聴く (R)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsCardListOpen(true)}
+                      className="flex-1 flex items-center justify-center space-x-2 py-3 px-3 sm:px-4 bg-slate-900 hover:bg-slate-850 text-slate-200 hover:text-white rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 hover:border-slate-600 transition-all cursor-pointer shadow-md active:scale-[0.98]"
+                    >
+                      <List className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>カード一覧</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleStepBackSpeech}
+                      className="flex-none p-3 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-2xl border border-slate-700 transition-all cursor-pointer shadow-md active:scale-[0.98]"
+                      title="1つ前に戻る (← / Z)"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSkipSpeechCard}
+                      className="flex-none py-3 px-3 sm:px-4 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-2xl text-xs sm:text-sm font-bold border border-slate-700 transition-all cursor-pointer shadow-md active:scale-[0.98]"
+                      title="スキップ (S / →)"
+                    >
+                      スキップ
                     </button>
                   </div>
-                )}
-
-                {/* Translation Box */}
-                {(currentSpeechCard.translation || currentSpeechCard.meaning) && (
-                  <div className="p-3 bg-slate-900/60 border border-slate-800/80 rounded-xl text-xs text-slate-300 max-w-lg mx-auto">
-                    <span className="text-[10px] font-bold text-slate-500 block mb-0.5">日本語訳:</span>
-                    {currentSpeechCard.translation || currentSpeechCard.meaning}
-                  </div>
-                )}
-
-                {/* Explanation note */}
-                {(currentSpeechCard.englishExplanation || currentSpeechCard.contextNote) && (
-                  <div className="text-[11px] text-purple-300/80 max-w-md mx-auto">
-                    💡 {currentSpeechCard.englishExplanation || currentSpeechCard.contextNote}
-                  </div>
-                )}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center justify-between gap-2 pt-2">
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={handlePrevSpeechCard}
-                    className="p-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white rounded-2xl transition-colors text-xs font-bold"
-                    title="1つ戻る (Z)"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleSkipSpeechCard}
-                    className="px-3.5 py-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white rounded-2xl transition-colors text-xs font-bold"
-                    title="スキップ (S)"
-                  >
-                    スキップ
-                  </button>
                 </div>
-
-                <button
-                  onClick={handleCompleteSpeechStep}
-                  className="flex-1 py-3.5 px-6 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-[0.99] text-white rounded-2xl text-xs sm:text-sm font-bold shadow-xl shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2"
-                >
-                  <span>
-                    {speechSubStep === 'overlapping' ? '完了 ➔ シャドーイングへ (Enter)' : '完了 ➔ 次のカードへ (Enter)'}
-                  </span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
               </div>
-            </div>
+            </>
           ) : null}
         </div>
       )}

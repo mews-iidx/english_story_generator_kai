@@ -139,10 +139,14 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     const todayStr = getTodayDateString();
     const todayLogs = speechLogs.filter(l => l.dateString === todayStr);
     const todayUtterances = todayLogs.length;
-    const todayUniqueSentences = new Set(todayLogs.map(l => `${l.storyId}_${l.sentenceIdx}`)).size;
+    const todayUniqueSentences = new Set(
+      todayLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
+    ).size;
 
     const totalUtterances = speechLogs.length;
-    const totalUniqueSentences = new Set(speechLogs.map(l => `${l.storyId}_${l.sentenceIdx}`)).size;
+    const totalUniqueSentences = new Set(
+      speechLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
+    ).size;
 
     const completedSpeechStories = (stories || []).filter(s => s.speechPracticeStatus === 'completed').length;
     const inProgressSpeechStories = (stories || []).filter(s => s.speechPracticeStatus === 'in_progress').length;
@@ -155,7 +159,9 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       const displayDate = `${d.getMonth() + 1}/${d.getDate()}`;
       const dayLogs = speechLogs.filter(l => l.dateString === dateStr);
       const utterances = dayLogs.length;
-      const uniqueCount = new Set(dayLogs.map(l => `${l.storyId}_${l.sentenceIdx}`)).size;
+      const uniqueCount = new Set(
+        dayLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
+      ).size;
       const snap = dailySnapshots.find(s => s.date === dateStr);
 
       last7DaysSpeech.push({
