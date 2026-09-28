@@ -16,3 +16,11 @@ export interface ChatMessage {
   suggestedSentences?: SuggestedSentence[]; // AIが回答から抽出した登録推奨英文・フレーズ
   createdAt: string;
 }
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+}

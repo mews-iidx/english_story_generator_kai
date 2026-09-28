@@ -1,30 +1,39 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, User, Sparkles, X, Plus, Check, Loader2, Trash2, Puzzle, BookOpen, PenTool, Repeat } from 'lucide-react';
-import confetti from 'canvas-confetti';
-import { ChatMessage, ChatSuggestedVocab, SuggestedSentence } from '../types/chat';
-import { SaveSentenceCardParams, loadVocabs } from '../services/storage';
+import React, { useState, useRef, useEffect } from 'react';
+import { 
+  Send, Bot, User, Sparkles, X, Plus, Check, Loader2, Trash2, 
+  BookOpen, PenTool, Repeat, MessageSquare, History, Edit3, ChevronDown 
+} from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { ChatMessage, ChatSession, ChatSuggestedVocab, SuggestedSentence } from '../types/chat';
 import { chatWithAiMentor } from '../services/gemini';
-import { enqueueMasteryScanTask } from '../services/cefrScanner';
-import {
-  loadDailySnapshots,
-  loadMyGoal,
-  computeLevelProgress,
-  getWeakestPatterns
+import { 
+  loadVocabs, loadDailySnapshots, loadMyGoal, computeLevelProgress, 
+  getWeakestPatterns, saveSentenceCardWithSiblings, SaveSentenceCardParams,
+  loadChatSessions, loadActiveChatSessionId, saveActiveChatSessionId,
+  createNewChatSession, deleteChatSession, updateChatSessionTitle, saveMessagesToSession,
+  clearChatMessages
 } from '../services/storage';
 
 interface AiMentorChatViewProps {
   apiKey: string;
   model?: string;
-  messages: ChatMessage[];
-  onSendMessage: (userText: string, replyText: string, suggestedVocabs: ChatSuggestedVocab[], suggestedSentences?: SuggestedSentence[]) => void;
   onAddToVocab: (phrase: string, meaning: string, sentence?: string) => void;
-  onSaveSentenceCard?: (params: SaveSentenceCardParams) => void;
-  onClearChat?: () => void;
+  onSaveSentenceCard: (params: SaveSentenceCardParams) => void;
   onRecordTokenUsage?: (promptTokens: number, candidatesTokens: number) => void;
   savedVocabPhrases?: Set<string>;
   initialInput?: string;
   isOverlayMode?: boolean;
   onClose?: () => void;
+  // Legacy / optional props
+  messages?: ChatMessage[];
+  onSendMessage?: (
+    userText: string,
+    assistantReply: string,
+    suggestedVocabs: ChatSuggestedVocab[],
+    suggestedSentences?: SuggestedSentence[]
+  ) => void;
+  onClearChat?: () => void;
 }
 
 /**
@@ -125,19 +134,35 @@ export function extractEnglishSentenceCandidates(text: string, userQueryText: st
 export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
   apiKey,
   model = 'gemini-3.7-flash',
-  messages,
-  onSendMessage,
   onAddToVocab,
   onSaveSentenceCard,
-  onClearChat,
   onRecordTokenUsage,
   savedVocabPhrases = new Set(),
   initialInput = '',
   isOverlayMode = false,
   onClose,
+  onSendMessage,
+  onClearChat,
 }) => {
+  // Session State
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadChatSessions());
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => loadActiveChatSessionId());
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+
   const [inputText, setInputText] = useState(initialInput);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Current active session & messages
+  const currentSession = sessions.find(s => s.id === activeSessionId) || sessions[0] || {
+    id: 'session_default',
+    title: '新規チャット',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: [],
+  };
+  const currentMessages = currentSession.messages || [];
 
   // Track saved cards per sentence text and direction
   const [savedDirectionsMap, setSavedDirectionsMap] = useState<Map<string, Set<'en_to_ja' | 'ja_to_en'>>>(() => {
@@ -172,7 +197,64 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [currentMessages, isLoading]);
+
+  // Session Handlers
+  const handleNewChat = () => {
+    const newSession = createNewChatSession();
+    const updated = loadChatSessions();
+    setSessions(updated);
+    setActiveSessionId(newSession.id);
+    setIsHistoryOpen(false);
+    setInputText('');
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
+  };
+
+  const handleSelectSession = (sessionId: string) => {
+    saveActiveChatSessionId(sessionId);
+    setActiveSessionId(sessionId);
+    setIsHistoryOpen(false);
+  };
+
+  const handleDeleteSession = (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sessions.length === 1) {
+      if (window.confirm('この会話をクリアして新しく開始しますか？')) {
+        const updated = deleteChatSession(sessionId);
+        setSessions(updated);
+        setActiveSessionId(loadActiveChatSessionId());
+      }
+      return;
+    }
+    const updated = deleteChatSession(sessionId);
+    setSessions(updated);
+    setActiveSessionId(loadActiveChatSessionId());
+  };
+
+  const handleStartRename = (session: ChatSession, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingSessionId(session.id);
+    setEditingTitle(session.title);
+  };
+
+  const handleSaveRename = (sessionId: string, e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (editingTitle.trim()) {
+      updateChatSessionTitle(sessionId, editingTitle.trim());
+      setSessions(loadChatSessions());
+    }
+    setEditingSessionId(null);
+  };
+
+  const handleClearCurrentSession = () => {
+    if (window.confirm('現在の会話履歴をクリアしますか？')) {
+      clearChatMessages();
+      setSessions(loadChatSessions());
+      if (onClearChat) onClearChat();
+    }
+  };
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -182,12 +264,25 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     setInputText('');
     setIsLoading(true);
 
+    const userMsg: ChatMessage = {
+      id: 'msg_u_' + Date.now(),
+      sender: 'user',
+      text: query,
+      createdAt: new Date().toISOString(),
+    };
+
+    // Optimistically update current session
+    const updatedWithUser = [...currentMessages, userMsg];
+    saveMessagesToSession(currentSession.id, updatedWithUser);
+    setSessions(loadChatSessions());
+
     try {
-      const historyContents = messages.map(m => ({
+      const historyContents = updatedWithUser.map(m => ({
         role: m.sender === 'user' ? ('user' as const) : ('model' as const),
         parts: [{ text: m.text }],
       }));
 
+      // SLA Telemetry context
       const snapshots = loadDailySnapshots();
       const latestSnapshot = snapshots[snapshots.length - 1];
       const myGoal = loadMyGoal();
@@ -229,10 +324,10 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         onRecordTokenUsage(res.tokenUsage.promptTokens, res.tokenUsage.candidatesTokens);
       }
 
-      // 過去のターンで既に提示された文・単語の重複を除外（常に最新ターンの新規候補のみに絞り込む）
+      // 重複除外
       const pastSentences = new Set<string>();
       const pastVocabs = new Set<string>();
-      messages.forEach(m => {
+      updatedWithUser.forEach(m => {
         if (m.suggestedSentences) {
           m.suggestedSentences.forEach(s => pastSentences.add(s.english.trim().toLowerCase()));
         }
@@ -248,19 +343,33 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
         v => !pastVocabs.has(v.phrase.trim().toLowerCase())
       );
 
-      onSendMessage(query, res.replyText, freshVocabs, freshSentences);
+      const botMsg: ChatMessage = {
+        id: 'msg_b_' + Date.now(),
+        sender: 'assistant',
+        text: res.replyText,
+        suggestedVocabs: freshVocabs,
+        suggestedSentences: freshSentences,
+        createdAt: new Date().toISOString(),
+      };
 
-      try {
-        enqueueMasteryScanTask({
-          sourceType: 'mentor',
-          title: 'AIメンター対話',
-          text: `${query} ${res.replyText}`,
-          userUtterances: [query],
-        });
-      } catch (_) {}
-    } catch (err) {
-      console.error('Chat error:', err);
-      alert('AIとの通信中にエラーが発生しました。');
+      const finalMessages = [...updatedWithUser, botMsg];
+      saveMessagesToSession(currentSession.id, finalMessages);
+      setSessions(loadChatSessions());
+
+      if (onSendMessage) {
+        onSendMessage(query, res.replyText, freshVocabs, freshSentences);
+      }
+    } catch (e: any) {
+      console.error('AI Mentor chat error:', e);
+      const errorMsg: ChatMessage = {
+        id: 'msg_err_' + Date.now(),
+        sender: 'assistant',
+        text: `申し訳ありません。回答の生成中にエラーが発生しました: ${e?.message || '通信エラー'}\n\nAPIキーの設定やネットワーク状態をご確認ください。`,
+        createdAt: new Date().toISOString(),
+      };
+      const finalMessages = [...updatedWithUser, errorMsg];
+      saveMessagesToSession(currentSession.id, finalMessages);
+      setSessions(loadChatSessions());
     } finally {
       setIsLoading(false);
     }
@@ -273,243 +382,393 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     }
   };
 
-  // Quick save with specific direction
-  const handleSaveCardWithDirection = useCallback((
-    sentenceItem: SuggestedSentence,
-    direction: 'ja_to_en' | 'en_to_ja' | 'both'
+  const handleSaveDirectionalCard = (
+    sentence: string,
+    translation: string,
+    direction: 'ja_to_en' | 'en_to_ja'
   ) => {
-    if (!onSaveSentenceCard) return;
-    const cleanEn = sentenceItem.english.trim();
-    const cleanJa = sentenceItem.japanese.trim() || '瞬間英作文';
-
-    if (!isValidEnglishSentence(cleanEn)) {
-      alert('英語のセンテンスとして認識できませんでした。');
-      return;
-    }
-
     onSaveSentenceCard({
-      sentence: cleanEn,
-      translation: cleanJa,
+      sentence,
+      translation,
       focusType: 'sentence',
-      importance: 5,
       cardDirection: direction,
     });
 
-    confetti({ particleCount: 25, spread: 50, origin: { y: 0.8 } });
-
-    // Update local state map
-    const key = cleanEn.toLowerCase();
+    const key = sentence.trim().toLowerCase();
     setSavedDirectionsMap(prev => {
       const next = new Map(prev);
-      const set = new Set(next.get(key) || []);
-      if (direction === 'both') {
-        set.add('ja_to_en');
-        set.add('en_to_ja');
-      } else {
-        set.add(direction);
-      }
-      next.set(key, set);
+      if (!next.has(key)) next.set(key, new Set());
+      next.get(key)!.add(direction);
       return next;
     });
-  }, [onSaveSentenceCard]);
+  };
+
+  const handleSaveBidirectionalCards = (
+    sentence: string,
+    translation: string
+  ) => {
+    saveSentenceCardWithSiblings({
+      sentence,
+      translation,
+      focusType: 'sentence',
+    });
+
+    const key = sentence.trim().toLowerCase();
+    setSavedDirectionsMap(prev => {
+      const next = new Map(prev);
+      if (!next.has(key)) next.set(key, new Set());
+      next.get(key)!.add('ja_to_en');
+      next.get(key)!.add('en_to_ja');
+      return next;
+    });
+  };
+
+  const formatSessionDate = (isoString?: string) => {
+    if (!isoString) return '';
+    try {
+      const d = new Date(isoString);
+      const now = new Date();
+      const isToday = d.toDateString() === now.toDateString();
+      if (isToday) {
+        return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+      }
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    } catch (_) {
+      return '';
+    }
+  };
 
   return (
-    <div className={`flex flex-col h-full ${isOverlayMode ? 'bg-slate-950' : 'max-w-4xl mx-auto px-2 sm:px-4 py-4 sm:py-6 h-[calc(100vh-4rem)]'}`}>
-      {/* Header */}
-      <div className={`flex items-center justify-between pb-3 sm:pb-4 border-b border-slate-800 ${isOverlayMode ? 'p-4 bg-slate-900/60' : ''}`}>
-        <div className="flex items-center space-x-2.5">
-          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-            <Bot className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-base sm:text-lg font-bold text-white flex items-center gap-1.5">
-              CompileEng AIメンター
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-normal border border-blue-500/30">
-                パーソナル指導
-              </span>
-            </h1>
-            <p className="text-xs text-slate-400">「〜ってどう言う？」相談 ➔ 瞬間英作文・読解カードに即時登録</p>
-          </div>
+    <div className={`flex flex-col h-full bg-slate-950 text-slate-100 ${isOverlayMode ? 'p-3 sm:p-4' : 'max-w-4xl mx-auto p-3 sm:p-6 w-full'}`}>
+      {/* Top Header Bar */}
+      <div className="flex items-center justify-between pb-3 border-b border-slate-800 shrink-0 gap-2">
+        {/* Left: Thread Title / Selector */}
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <button
+            onClick={() => setIsHistoryOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 text-xs font-semibold text-slate-200 transition-colors cursor-pointer max-w-[220px] sm:max-w-xs truncate group"
+            title="会話履歴・スレッド切り替え"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+            <span className="truncate">{currentSession.title || '新規チャット'}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-200 shrink-0 ml-0.5" />
+          </button>
+
+          <button
+            onClick={handleNewChat}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-sm shadow-blue-500/20 active:scale-95 transition-all cursor-pointer shrink-0"
+            title="新しいチャットを開始（メモリリフレッシュ）"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">新規チャット</span>
+          </button>
         </div>
 
-        <div className="flex items-center space-x-1">
-          {messages.length > 0 && onClearChat && (
-            <button
-              onClick={onClearChat}
-              className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
-              title="チャット履歴をクリア"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
+        {/* Right: Actions */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => setIsHistoryOpen(true)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1 text-xs px-2"
+            title="会話スレッド一覧"
+          >
+            <History className="w-3.5 h-3.5 text-slate-400" />
+            <span className="hidden md:inline">履歴 ({sessions.length})</span>
+          </button>
+
+          <button
+            onClick={handleClearCurrentSession}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 border border-transparent hover:border-rose-900/40 transition-colors cursor-pointer"
+            title="現在のチャットをクリア"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+
           {isOverlayMode && onClose && (
             <button
               onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer ml-1"
               title="閉じる"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
       </div>
 
-      {/* Message List */}
-      <div className="flex-1 overflow-y-auto py-4 space-y-4 px-2 sm:px-4">
-        {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 space-y-4">
-            <div className="w-14 h-14 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center text-blue-400 shadow-inner">
-              <Sparkles className="w-7 h-7" />
+      {/* History Drawer / Modal */}
+      {isHistoryOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-start animate-fadeIn"
+          onClick={() => setIsHistoryOpen(false)}
+        >
+          <div 
+            className="w-full max-w-xs sm:max-w-sm h-full bg-slate-950 border-r border-slate-800 shadow-2xl animate-slideRight flex flex-col p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Drawer Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-blue-400" />
+                <h3 className="font-bold text-sm text-white">会話スレッド履歴</h3>
+              </div>
+              <button
+                onClick={() => setIsHistoryOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="space-y-1 max-w-sm">
-              <h3 className="text-sm font-semibold text-slate-300">英語の疑問を何でも質問してください</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                「〜って言いたい時どう言う？」「このニュアンスの違いは？」と相談すると、AIが回答し、ワンタップでAnkiの瞬間英作文・読解カードに登録できます。
+
+            {/* + New Chat Button inside Drawer */}
+            <button
+              onClick={handleNewChat}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-500/20 active:scale-95 transition-all cursor-pointer mb-3"
+            >
+              <Plus className="w-4 h-4" />
+              <span>＋ 新しい会話を作成</span>
+            </button>
+
+            {/* Thread List */}
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+              {sessions.map((session) => {
+                const isActive = session.id === activeSessionId;
+                const isEditing = editingSessionId === session.id;
+                const msgCount = session.messages?.length || 0;
+
+                return (
+                  <div
+                    key={session.id}
+                    onClick={() => !isEditing && handleSelectSession(session.id)}
+                    className={`group relative flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer text-xs ${
+                      isActive
+                        ? 'bg-blue-950/40 border-blue-500/50 text-white shadow-sm'
+                        : 'bg-slate-900/60 border-slate-800/80 hover:bg-slate-850 hover:border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2 min-w-0 flex-1 pr-2">
+                      <MessageSquare className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${isActive ? 'text-blue-400' : 'text-slate-500'}`} />
+                      
+                      {isEditing ? (
+                        <form 
+                          onSubmit={(e) => handleSaveRename(session.id, e)}
+                          className="flex-1 flex items-center gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="text"
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            onBlur={() => handleSaveRename(session.id)}
+                            autoFocus
+                            className="w-full bg-slate-950 border border-blue-500 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+                          />
+                          <button type="submit" className="p-1 text-emerald-400 hover:text-emerald-300">
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="min-w-0 flex-1">
+                          <p className={`font-semibold truncate ${isActive ? 'text-white' : 'text-slate-200'}`}>
+                            {session.title}
+                          </p>
+                          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500">
+                            <span>{formatSessionDate(session.updatedAt || session.createdAt)}</span>
+                            <span>•</span>
+                            <span>{msgCount}件</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {!isEditing && (
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => handleStartRename(session, e)}
+                          className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                          title="タイトル編集"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteSession(session.id, e)}
+                          className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40"
+                          title="削除"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Messages Scroll Area */}
+      <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-1 sm:pr-2 custom-scrollbar">
+        {currentMessages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+              <Bot className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-bold text-slate-200 text-sm">AI英語メンターに何でも質問</h4>
+              <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                「〜は英語で何と言う？」「このニュアンスの違いは？」など気軽に送信してください。
               </p>
-            </div>
-            <div className="flex flex-wrap justify-center gap-2 pt-2 max-w-md">
-              {[
-                '「〜の予約を取りたいのですが」って英語でどう言う？',
-                '「used to」と「be used to」の違いを教えて',
-                '「念のため確認させてください」を自然に言いたい',
-              ].map((suggestion, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => {
-                    setInputText(suggestion);
-                    inputRef.current?.focus();
-                  }}
-                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs rounded-xl transition-colors text-left cursor-pointer"
-                >
-                  💡 {suggestion}
-                </button>
-              ))}
             </div>
           </div>
         ) : (
-          messages.map((m, mIdx) => {
-            const prevUserMessage = mIdx > 0 && messages[mIdx - 1]?.sender === 'user' ? messages[mIdx - 1]?.text : undefined;
-            const primaryIntent = detectQueryDirection(prevUserMessage);
-
-            // Extract sentences from structured payload or fallback parser
-            const candidateSentences = m.suggestedSentences && m.suggestedSentences.length > 0
-              ? m.suggestedSentences
-              : extractEnglishSentenceCandidates(m.text, prevUserMessage);
+          currentMessages.map((m) => {
+            const hasCandidates = (m.suggestedSentences && m.suggestedSentences.length > 0) ||
+                                  (m.suggestedVocabs && m.suggestedVocabs.length > 0);
 
             return (
               <div
                 key={m.id}
-                className={`flex items-start gap-3 ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex items-start gap-2.5 sm:gap-3 ${
+                  m.sender === 'user' ? 'justify-end' : 'justify-start'
+                }`}
               >
                 {m.sender === 'assistant' && (
-                  <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shrink-0 mt-0.5">
+                  <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-blue-600/90 border border-blue-400/30 flex items-center justify-center text-white shrink-0 mt-0.5 shadow-sm">
                     <Bot className="w-4 h-4" />
                   </div>
                 )}
 
                 <div
-                  className={`max-w-[92%] sm:max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed space-y-3 ${
+                  className={`max-w-[88%] sm:max-w-[82%] rounded-2xl px-3.5 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm shadow-sm ${
                     m.sender === 'user'
-                      ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/20'
-                      : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
+                      ? 'bg-blue-600 text-white rounded-tr-none font-sans leading-relaxed'
+                      : 'bg-slate-900 border border-slate-800/90 text-slate-200 rounded-tl-none space-y-3'
                   }`}
                 >
-                  {m.sender === 'user' ? (
-                    <div className="whitespace-pre-wrap">{m.text}</div>
+                  {/* Markdown Renderer for AI responses or user text */}
+                  {m.sender === 'assistant' ? (
+                    <div className="prose-dark leading-relaxed">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed text-slate-200 text-xs sm:text-sm">{children}</p>,
+                          strong: ({ children }) => <strong className="font-bold text-white bg-slate-800/80 px-1 py-0.5 rounded text-[13px] border border-slate-700/50">{children}</strong>,
+                          em: ({ children }) => <em className="text-cyan-300 not-italic font-medium">{children}</em>,
+                          h1: ({ children }) => <h1 className="text-base font-bold text-white mt-3 mb-1.5 pb-1 border-b border-slate-800 flex items-center gap-1.5">{children}</h1>,
+                          h2: ({ children }) => <h2 className="text-sm font-bold text-blue-300 mt-2.5 mb-1 flex items-center gap-1">{children}</h2>,
+                          h3: ({ children }) => <h3 className="text-xs font-bold text-slate-300 mt-2 mb-1">{children}</h3>,
+                          ul: ({ children }) => <ul className="list-disc list-inside space-y-1 my-2 text-slate-200 pl-1">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal list-inside space-y-1 my-2 text-slate-200 pl-1">{children}</ol>,
+                          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-2 border-blue-500 bg-blue-950/20 pl-3 py-1 my-2 rounded-r text-slate-300 text-xs italic">
+                              {children}
+                            </blockquote>
+                          ),
+                          code: ({ node, inline, className, children, ...props }: any) => {
+                            if (inline) {
+                              return (
+                                <code className="bg-slate-950 text-cyan-300 px-1.5 py-0.5 rounded font-mono text-xs border border-slate-800" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <pre className="bg-slate-950 p-3 rounded-xl font-mono text-xs text-slate-200 overflow-x-auto border border-slate-800 my-2 shadow-inner">
+                                <code {...props}>{children}</code>
+                              </pre>
+                            );
+                          },
+                          table: ({ children }) => (
+                            <div className="overflow-x-auto my-2 rounded-lg border border-slate-800">
+                              <table className="min-w-full text-xs divide-y divide-slate-800">{children}</table>
+                            </div>
+                          ),
+                          thead: ({ children }) => <thead className="bg-slate-900/90">{children}</thead>,
+                          th: ({ children }) => <th className="px-3 py-1.5 text-left font-semibold text-slate-300 text-[11px] uppercase tracking-wider">{children}</th>,
+                          td: ({ children }) => <td className="px-3 py-1.5 border-t border-slate-800/60 text-slate-300 text-xs">{children}</td>,
+                          hr: () => <hr className="border-slate-800 my-3" />,
+                        }}
+                      >
+                        {m.text}
+                      </ReactMarkdown>
+                    </div>
                   ) : (
-                    <MarkdownRenderer content={m.text} />
+                    <p className="whitespace-pre-wrap">{m.text}</p>
                   )}
 
-                  {/* Assistant Action Buttons: Assembly Cards & Vocab Suggestions */}
-                  {m.sender === 'assistant' && (
-                    <div className="pt-2 border-t border-slate-800 space-y-3">
-                      {/* 1. 🧩 例文Anki登録ボックス群（和英・英和・双方向） */}
-                      {onSaveSentenceCard && candidateSentences.length > 0 && (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-[11px] font-bold">
-                            <span className="text-purple-300 flex items-center gap-1">
-                              <Puzzle className="w-3.5 h-3.5 text-purple-400" />
-                              おすすめ例文をAnkiに登録:
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                              {primaryIntent === 'ja_to_en' ? '🎯 和英（作文）推奨' : '🎯 英和（読解）推奨'}
-                            </span>
-                          </div>
-
+                  {/* AI Recommended Candidate Cards */}
+                  {hasCandidates && (
+                    <div className="space-y-3 pt-2.5 border-t border-slate-800/80">
+                      {/* 1. 英文カード登録推奨 */}
+                      {m.suggestedSentences && m.suggestedSentences.length > 0 && (
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-bold text-cyan-300 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            瞬間英作文・Anki登録推奨:
+                          </span>
                           <div className="space-y-2">
-                            {candidateSentences.map((sent, sIdx) => {
-                              const sentKey = sent.english.trim().toLowerCase();
-                              const savedSet = savedDirectionsMap.get(sentKey) || new Set();
-                              const isJaToEnSaved = savedSet.has('ja_to_en');
-                              const isEnToJaSaved = savedSet.has('en_to_ja');
+                            {m.suggestedSentences.map((s, idx) => {
+                              const sKey = s.english.trim().toLowerCase();
+                              const savedDirs = savedDirectionsMap.get(sKey) || new Set();
+                              const isJaToEnSaved = savedDirs.has('ja_to_en');
+                              const isEnToJaSaved = savedDirs.has('en_to_ja');
                               const isBothSaved = isJaToEnSaved && isEnToJaSaved;
 
                               return (
                                 <div
-                                  key={sIdx}
-                                  className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/40 via-indigo-950/40 to-slate-950/60 border border-purple-500/30 text-xs space-y-2.5 shadow-md"
+                                  key={idx}
+                                  className="p-2.5 bg-slate-950/90 border border-slate-800 rounded-xl space-y-2 text-xs"
                                 >
-                                  {/* Sentence Display */}
-                                  <div className="space-y-1 min-w-0 pr-1">
-                                    <p className="font-serif font-bold text-white text-sm leading-snug">
-                                      "{sent.english}"
-                                    </p>
-                                    <p className="text-[11px] text-purple-200/90 font-medium">
-                                      {sent.japanese}
-                                    </p>
+                                  <div>
+                                    <div className="font-bold text-white font-serif text-sm tracking-wide">
+                                      {s.english}
+                                    </div>
+                                    <div className="text-slate-400 text-xs mt-0.5">
+                                      {s.japanese}
+                                    </div>
                                   </div>
 
-                                  {/* Action Buttons: 和英 / 英和 / 双方向 */}
-                                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-purple-500/20">
-                                    {/* 1. 和英（瞬間英作文）ボタン */}
+                                  <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/60 flex-wrap">
                                     <button
-                                      type="button"
-                                      onClick={() => handleSaveCardWithDirection(sent, 'ja_to_en')}
+                                      onClick={() => handleSaveDirectionalCard(s.english, s.japanese, 'ja_to_en')}
                                       disabled={isJaToEnSaved}
-                                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                      className={`px-2 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
                                         isJaToEnSaved
-                                          ? 'bg-purple-900/40 text-purple-300 border border-purple-500/30 cursor-default'
-                                          : primaryIntent === 'ja_to_en'
-                                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-600/30 ring-1 ring-purple-400/40 active:scale-95'
-                                          : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700 active:scale-95'
+                                          ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-500/30 cursor-default'
+                                          : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:border-slate-600 active:scale-95'
                                       }`}
-                                      title="日本語を見て英語を瞬時に組み立てる訓練 (JA ➔ EN)"
+                                      title="日本語を見て英語を瞬時に発話する練習カード"
                                     >
-                                      {isJaToEnSaved ? <Check className="w-3.5 h-3.5 text-purple-400" /> : <PenTool className="w-3.5 h-3.5 text-purple-300" />}
-                                      <span>{isJaToEnSaved ? '和英済' : '✍️ 和英 (作文)'}</span>
+                                      {isJaToEnSaved ? <Check className="w-3 h-3 text-emerald-400" /> : <PenTool className="w-3 h-3 text-blue-400" />}
+                                      <span>{isJaToEnSaved ? '和英済' : '📝 和英 (作文)'}</span>
                                     </button>
 
-                                    {/* 2. 英和（読解コンパイル）ボタン */}
                                     <button
-                                      type="button"
-                                      onClick={() => handleSaveCardWithDirection(sent, 'en_to_ja')}
+                                      onClick={() => handleSaveDirectionalCard(s.english, s.japanese, 'en_to_ja')}
                                       disabled={isEnToJaSaved}
-                                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                      className={`px-2 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
                                         isEnToJaSaved
-                                          ? 'bg-blue-900/40 text-blue-300 border border-blue-500/30 cursor-default'
-                                          : primaryIntent === 'en_to_ja'
-                                          ? 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white shadow-md shadow-blue-600/30 ring-1 ring-blue-400/40 active:scale-95'
-                                          : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700 active:scale-95'
+                                          ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-500/30 cursor-default'
+                                          : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:border-slate-600 active:scale-95'
                                       }`}
-                                      title="英語を見て頭から瞬時に意味を理解する訓練 (EN ➔ JA)"
+                                      title="英語を見て頭から瞬時に意味を掴む読解カード"
                                     >
-                                      {isEnToJaSaved ? <Check className="w-3.5 h-3.5 text-blue-400" /> : <BookOpen className="w-3.5 h-3.5 text-blue-300" />}
+                                      {isEnToJaSaved ? <Check className="w-3 h-3 text-emerald-400" /> : <BookOpen className="w-3 h-3 text-cyan-400" />}
                                       <span>{isEnToJaSaved ? '英和済' : '📖 英和 (読解)'}</span>
                                     </button>
 
-                                    {/* 3. 双方向（兄弟カード）ボタン */}
                                     <button
-                                      type="button"
-                                      onClick={() => handleSaveCardWithDirection(sent, 'both')}
+                                      onClick={() => handleSaveBidirectionalCards(s.english, s.japanese)}
                                       disabled={isBothSaved}
-                                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                      className={`px-2 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
                                         isBothSaved
                                           ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-500/30 cursor-default'
                                           : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:border-slate-600 active:scale-95'
                                       }`}
                                       title="和英（作文）と英和（読解）の2枚を兄弟カードとして同時作成"
                                     >
-                                      {isBothSaved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Repeat className="w-3.5 h-3.5 text-emerald-400" />}
+                                      {isBothSaved ? <Check className="w-3 h-3 text-emerald-400" /> : <Repeat className="w-3 h-3 text-emerald-400" />}
                                       <span>{isBothSaved ? '双方向済' : '🔄 双方向 (2枚)'}</span>
                                     </button>
                                   </div>
@@ -562,7 +821,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
                 </div>
 
                 {m.sender === 'user' && (
-                  <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 mt-0.5">
+                  <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 mt-0.5 shadow-sm">
                     <User className="w-4 h-4" />
                   </div>
                 )}
@@ -571,8 +830,8 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
           })
         )}
         {isLoading && (
-          <div className="flex items-start gap-3 animate-fadeIn">
-            <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shrink-0 mt-0.5 animate-pulse">
+          <div className="flex items-start gap-2.5 sm:gap-3 animate-fadeIn">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shrink-0 mt-0.5 animate-pulse">
               <Bot className="w-4 h-4" />
             </div>
             <div className="bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl rounded-tl-none px-4 py-3 text-xs flex items-center space-x-2">
@@ -585,7 +844,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
       </div>
 
       {/* Input Form */}
-      <form onSubmit={handleSubmit} className="pt-3 border-t border-slate-800">
+      <form onSubmit={handleSubmit} className="pt-3 border-t border-slate-800 shrink-0">
         <div className="relative flex items-center">
           <textarea
             ref={inputRef}
@@ -594,7 +853,7 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
             onKeyDown={handleKeyDown}
             placeholder="「〜って英語でどう言う？」「このニュアンスの違いは？」と質問... (Ctrl+Enterで送信)"
             rows={2}
-            className="w-full bg-slate-900 border border-slate-700 rounded-2xl pl-4 pr-12 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
+            className="w-full bg-slate-900 border border-slate-700 rounded-2xl pl-4 pr-12 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none shadow-inner"
           />
           <button
             type="submit"
@@ -612,58 +871,3 @@ export const AiMentorChatView: React.FC<AiMentorChatViewProps> = ({
     </div>
   );
 };
-
-function MarkdownRenderer({ content }: { content: string }) {
-  // Simple markdown renderer for AI responses
-  const lines = content.split('\n');
-  return (
-    <div className="space-y-1.5 text-xs sm:text-sm">
-      {lines.map((line, idx) => {
-        if (line.startsWith('### ')) {
-          return <h3 key={idx} className="font-bold text-white text-sm pt-2">{line.replace('### ', '')}</h3>;
-        }
-        if (line.startsWith('## ')) {
-          return <h2 key={idx} className="font-bold text-white text-base pt-2">{line.replace('## ', '')}</h2>;
-        }
-        if (line.startsWith('# ')) {
-          return <h1 key={idx} className="font-black text-white text-base pt-2">{line.replace('# ', '')}</h1>;
-        }
-        if (line.startsWith('- ') || line.startsWith('* ')) {
-          return (
-            <div key={idx} className="flex items-start space-x-2 pl-1">
-              <span className="text-blue-400 text-sm leading-tight">•</span>
-              <span className="flex-1">{renderFormattedText(line.replace(/^[-*]\s*/, ''))}</span>
-            </div>
-          );
-        }
-        if (/^\d+\.\s/.test(line)) {
-          const num = line.match(/^(\d+)\./)?.[1];
-          return (
-            <div key={idx} className="flex items-start space-x-2 pl-1">
-              <span className="font-bold text-blue-400 text-xs font-mono">{num}.</span>
-              <span className="flex-1">{renderFormattedText(line.replace(/^\d+\.\s*/, ''))}</span>
-            </div>
-          );
-        }
-        if (!line.trim()) {
-          return <div key={idx} className="h-1" />;
-        }
-        return <p key={idx}>{renderFormattedText(line)}</p>;
-      })}
-    </div>
-  );
-}
-
-function renderFormattedText(text: string) {
-  // Bold **text**
-  const parts = text.split(/(\*[^*]+\*|`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={i} className="text-white font-bold">{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={i} className="bg-slate-950 px-1.5 py-0.5 rounded font-mono text-cyan-300 text-xs border border-slate-800">{part.slice(1, -1)}</code>;
-    }
-    return part;
-  });
-}

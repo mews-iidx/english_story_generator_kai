@@ -8,7 +8,7 @@ import { VocabItem, VocabLookupResult, ExtractedCorePattern } from '../types/voc
 import { DifficultSentenceItem, DifficultyReasonCategory } from '../types/sentence';
 import { Story, StoryListeningMetrics, PracticeStepStatus } from '../types/story';
 import { AppSettings, DEFAULT_SETTINGS, TokenStats } from '../types/settings';
-import { ChatMessage } from '../types/chat';
+import { ChatMessage, ChatSession } from '../types/chat';
 import { Persona, CallSession } from '../types/persona';
 import { calculateLapseSRS, calculateSuccessSRS, calculateAnkiSRS, addDaysToDate, getSiblingGroupKey, areSiblings } from '../utils/srs';
 
@@ -18,6 +18,8 @@ const STORAGE_KEYS = {
   VOCABS: 'storykai_vocabs_v1',
   DIFFICULT_SENTENCES: 'storykai_difficult_sentences_v1',
   CHAT_MESSAGES: 'storykai_chat_messages_v1',
+  CHAT_SESSIONS: 'storykai_chat_sessions_v1',
+  ACTIVE_CHAT_SESSION_ID: 'storykai_active_chat_session_id_v1',
   PERSONAS: 'storykai_personas_v1',
   CALL_SESSIONS: 'storykai_call_sessions_v1',
   EXPRESSION_ERRORS: 'storykai_expression_errors_v1',
@@ -649,43 +651,181 @@ export function deleteDifficultSentence(id: string): void {
   }
 }
 
-// ===================== CHAT MESSAGES (AIメンターチャット) =====================
-export function loadChatMessages(): ChatMessage[] {
+// ===================== CHAT SESSIONS & MESSAGES (AIメンターマルチチャット) =====================
+
+export const DEFAULT_WELCOME_MESSAGE: ChatMessage = {
+  id: 'welcome_msg',
+  sender: 'assistant',
+  text: 'こんにちは！AI英語メンターのCompileEngです。⚡\n「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など、疑問に思ったことを何でも質問してください。回答からワンタップで語彙帳やAnkiに登録できます！',
+  createdAt: new Date().toISOString(),
+};
+
+export function loadChatSessions(): ChatSession[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.CHAT_MESSAGES);
-    if (!raw) {
-      return [
-        {
-          id: 'welcome_msg',
-          sender: 'assistant',
-          text: 'こんにちは！AI英語メンターのCompileEngです。⚡\n「〜は英語で何と言う？」「このニュアンスの違いは？」「この文法の意味は？」など、疑問に思ったことを何でも質問してください。回答からワンタップで語彙帳やAnkiに登録できます！',
-          createdAt: new Date().toISOString(),
-        }
-      ];
+    const raw = localStorage.getItem(STORAGE_KEYS.CHAT_SESSIONS);
+    if (raw) {
+      const parsed: ChatSession[] = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
     }
-    return JSON.parse(raw);
+
+    // Migration from legacy single chat messages list
+    const legacyRaw = localStorage.getItem(STORAGE_KEYS.CHAT_MESSAGES);
+    let initialMessages: ChatMessage[] = [DEFAULT_WELCOME_MESSAGE];
+    if (legacyRaw) {
+      try {
+        const legacyParsed = JSON.parse(legacyRaw);
+        if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
+          initialMessages = legacyParsed;
+        }
+      } catch (_) {}
+    }
+
+    const defaultSession: ChatSession = {
+      id: 'session_default',
+      title: initialMessages.length > 1 ? (initialMessages.find(m => m.sender === 'user')?.text?.slice(0, 20) || '以前の会話') : '新規チャット',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: initialMessages,
+    };
+
+    saveChatSessions([defaultSession]);
+    saveActiveChatSessionId(defaultSession.id);
+    return [defaultSession];
   } catch (e) {
-    console.error('Failed to load chat messages', e);
-    return [];
+    console.error('Failed to load chat sessions', e);
+    return [
+      {
+        id: 'session_default',
+        title: '新規チャット',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: [DEFAULT_WELCOME_MESSAGE],
+      }
+    ];
   }
+}
+
+export function saveChatSessions(sessions: ChatSession[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.CHAT_SESSIONS, JSON.stringify(sessions));
+  } catch (e) {
+    console.error('Failed to save chat sessions', e);
+  }
+}
+
+export function loadActiveChatSessionId(): string {
+  try {
+    const storedId = localStorage.getItem(STORAGE_KEYS.ACTIVE_CHAT_SESSION_ID);
+    if (storedId) return storedId;
+    const sessions = loadChatSessions();
+    const firstId = sessions[0]?.id || 'session_default';
+    saveActiveChatSessionId(firstId);
+    return firstId;
+  } catch (e) {
+    return 'session_default';
+  }
+}
+
+export function saveActiveChatSessionId(id: string): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_CHAT_SESSION_ID, id);
+  } catch (e) {
+    console.error('Failed to save active chat session id', e);
+  }
+}
+
+export function createNewChatSession(title: string = '新規チャット'): ChatSession {
+  const sessions = loadChatSessions();
+  const newSession: ChatSession = {
+    id: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    title,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: [
+      {
+        id: 'welcome_' + Date.now(),
+        sender: 'assistant',
+        text: '新しい会話をはじめました。英語の疑問や言いたい表現、学習の相談など、何でも気軽にどうぞ！',
+        createdAt: new Date().toISOString(),
+      }
+    ],
+  };
+
+  const updated = [newSession, ...sessions];
+  saveChatSessions(updated);
+  saveActiveChatSessionId(newSession.id);
+  return newSession;
+}
+
+export function deleteChatSession(sessionId: string): ChatSession[] {
+  const sessions = loadChatSessions();
+  const updated = sessions.filter(s => s.id !== sessionId);
+  if (updated.length === 0) {
+    const fresh = createNewChatSession();
+    return [fresh];
+  }
+  saveChatSessions(updated);
+  const currentActive = loadActiveChatSessionId();
+  if (currentActive === sessionId) {
+    saveActiveChatSessionId(updated[0].id);
+  }
+  return updated;
+}
+
+export function updateChatSessionTitle(sessionId: string, newTitle: string): void {
+  const sessions = loadChatSessions();
+  const idx = sessions.findIndex(s => s.id === sessionId);
+  if (idx !== -1) {
+    sessions[idx].title = newTitle.trim() || '無題の会話';
+    sessions[idx].updatedAt = new Date().toISOString();
+    saveChatSessions(sessions);
+  }
+}
+
+export function saveMessagesToSession(sessionId: string, newMessages: ChatMessage[]): void {
+  const sessions = loadChatSessions();
+  const idx = sessions.findIndex(s => s.id === sessionId);
+  if (idx !== -1) {
+    sessions[idx].messages = newMessages;
+    sessions[idx].updatedAt = new Date().toISOString();
+
+    // Auto title if default
+    if (sessions[idx].title === '新規チャット' || sessions[idx].title === '新しい会話') {
+      const firstUserMsg = newMessages.find(m => m.sender === 'user');
+      if (firstUserMsg && firstUserMsg.text) {
+        const cleanTitle = firstUserMsg.text.replace(/\n/g, ' ').trim();
+        sessions[idx].title = cleanTitle.length > 22 ? cleanTitle.slice(0, 22) + '...' : cleanTitle;
+      }
+    }
+
+    saveChatSessions(sessions);
+  }
+}
+
+// 互換用関数
+export function loadChatMessages(): ChatMessage[] {
+  const sessions = loadChatSessions();
+  const activeId = loadActiveChatSessionId();
+  const activeSession = sessions.find(s => s.id === activeId) || sessions[0];
+  return activeSession?.messages || [DEFAULT_WELCOME_MESSAGE];
 }
 
 export function saveChatMessage(msg: ChatMessage): void {
-  try {
-    const list = loadChatMessages();
-    const updated = [...list, msg];
-    localStorage.setItem(STORAGE_KEYS.CHAT_MESSAGES, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Failed to save chat message', e);
+  const sessions = loadChatSessions();
+  const activeId = loadActiveChatSessionId();
+  let activeSession = sessions.find(s => s.id === activeId);
+  if (!activeSession) {
+    activeSession = sessions[0] || createNewChatSession();
   }
+  const updatedMessages = [...activeSession.messages, msg];
+  saveMessagesToSession(activeSession.id, updatedMessages);
 }
 
 export function clearChatMessages(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEYS.CHAT_MESSAGES);
-  } catch (e) {
-    console.error('Failed to clear chat messages', e);
-  }
+  const activeId = loadActiveChatSessionId();
+  saveMessagesToSession(activeId, [DEFAULT_WELCOME_MESSAGE]);
 }
 
 // ===================== RESET ALL DATA =====================
@@ -695,6 +835,8 @@ export function resetAllData(): void {
     localStorage.removeItem(STORAGE_KEYS.VOCABS);
     localStorage.removeItem(STORAGE_KEYS.DIFFICULT_SENTENCES);
     localStorage.removeItem(STORAGE_KEYS.CHAT_MESSAGES);
+    localStorage.removeItem(STORAGE_KEYS.CHAT_SESSIONS);
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_CHAT_SESSION_ID);
     localStorage.removeItem(STORAGE_KEYS.PERSONAS);
     localStorage.removeItem(STORAGE_KEYS.CALL_SESSIONS);
     localStorage.removeItem(STORAGE_KEYS.EXPRESSION_ERRORS);
@@ -735,6 +877,7 @@ export interface ExportData {
   vocabs: VocabItem[];
   difficultSentences?: DifficultSentenceItem[];
   chatMessages?: ChatMessage[];
+  chatSessions?: ChatSession[];
   personas?: Persona[];
   callSessions?: CallSession[];
   expressionErrors?: ExpressionErrorItem[];
@@ -752,6 +895,7 @@ export function exportAllData(): string {
     vocabs: loadVocabs(),
     difficultSentences: loadDifficultSentences(),
     chatMessages: loadChatMessages(),
+    chatSessions: loadChatSessions(),
     personas: loadPersonas(),
     callSessions: loadCallSessions(),
     expressionErrors: loadExpressionErrors(),
@@ -782,7 +926,9 @@ export function importAllData(jsonStr: string): {
     if (data.difficultSentences && Array.isArray(data.difficultSentences)) {
       localStorage.setItem(STORAGE_KEYS.DIFFICULT_SENTENCES, JSON.stringify(data.difficultSentences));
     }
-    if (data.chatMessages && Array.isArray(data.chatMessages)) {
+    if (data.chatSessions && Array.isArray(data.chatSessions)) {
+      localStorage.setItem(STORAGE_KEYS.CHAT_SESSIONS, JSON.stringify(data.chatSessions));
+    } else if (data.chatMessages && Array.isArray(data.chatMessages)) {
       localStorage.setItem(STORAGE_KEYS.CHAT_MESSAGES, JSON.stringify(data.chatMessages));
     }
     if (data.personas && Array.isArray(data.personas)) {

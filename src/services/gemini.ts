@@ -680,8 +680,13 @@ ${contextInfo.weakestPatterns.map(w => `- 構文: ${w.patternName} (${w.formula 
 <!--SUGGESTIONS:{"sentences":[{"english":"I work remotely, so I only go into the office about once a month.","japanese":"リモートで働いているので、会社に行くのは月に1回程度です。"}],"vocabs":[{"phrase":"work remotely","meaning":"リモートワークする"}]}-->
 回答本文は通常の親切で自然な日本語解説（Markdown記法可）で記述してください。`;
 
+  // トークン上限・メモリパンク防止のため、直近16件（8ターン分）の対話履歴に制限
+  const recentHistory = (messages || [])
+    .slice(-16)
+    .filter(m => m.parts && m.parts.length > 0 && m.parts[0].text && m.parts[0].text.trim());
+
   const formattedContents = [
-    ...messages,
+    ...recentHistory,
     {
       role: 'user',
       parts: [
