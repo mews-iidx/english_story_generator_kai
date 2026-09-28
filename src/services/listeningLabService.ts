@@ -22,18 +22,52 @@ export interface GenerateLabBatchParams {
 }
 
 const SITUATION_SEEDS = [
-  '💻 職場・IT・PCトラブル（Wi-Fiが切れた、メールの返信、締め切り、会議、PCの再起動）',
-  '🍳 料理・食事・グルメ（新しいレシピ、夕食の準備、美味しいデザート、お弁当、味付け）',
-  '🐕 ペット・動物（犬の散歩、猫の昼寝、動物病院、可愛い仕草、餌やり）',
-  '📱 スマホ・SNS・買い物（バッテリー残量、ネット通販の荷物、写真の共有、アプリの通知）',
-  '🎬 映画・音楽・エンタメ（おすすめの映画、ライブ、ゲームの新作、読書、ギターの練習）',
-  '🏃‍♂️ 健康・運動・睡眠（ジョギング、昨夜の睡眠不足、ジム、水分補給、ストレッチ）',
-  '🚗 移動・交通・街歩き（渋滞、買い出し、スーパーのセール、公園のベンチ、自転車のパンク）',
-  '🌤️ 天気・週末の過ごし方（急な夕立、気持ちいい晴天、ピクニック、家で映画鑑賞）',
-  '🤝 友達・家族との日常（週末の約束、久しぶりの再会、サプライズプレゼント、感謝の言葉）',
-  '🏠 家事・部屋の片付け（掃除機の故障、部屋の模様替え、洗濯物が乾かない、ゴミ出し）',
-  '🎒 学び・新しい挑戦（新しいスキルの練習、英会話の練習、図書館で勉強、資格試験）',
-  '☕ カフェ・リラックス（お気に入りの席、本を読みながら休憩、テラス席での雑談）',
+  '💻 職場・Slack・リモートワーク（Slackの通知音、画面共有の不具合、マイクのミュート解除、共有ドライブの権限、締め切りのリスケ）',
+  '☕ カフェ・テラス席（季節限定のオーツミルクラテ、空席の確保、Wi-Fiパスワード、店員のおすすめ、持ち帰りカップ）',
+  '🍳 自炊・キッチンのハプニング（パスタの茹で加減、調味料の買い忘れ、フライパンのこびりつき、新作レシピの味見、作り置き保存）',
+  '🛒 スーパー・買い物・レジ（特売のイチゴ、エコバッグの持参、ポイントカードの提示、セルフレジの操作、賞味期限の確認）',
+  '📱 スマホ・バッテリー・SNS（充電ケーブルの接触不良、画面のひび割れ、写真のバックアップ、通知のオフ、機内モード）',
+  '🚇 電車・バス・通勤ラッシュ（急行電車の通過待ち、定期券のタッチ、座席を譲る、ドア付近の混雑、乗り換えアプリの案内）',
+  '🐕 ペット・犬猫との暮らし（散歩用のリード、猫のゴロゴロ音、爪切りへの抵抗、お気に入りのおやつ、動物病院の予約）',
+  '🏃‍♂️ ジム・フィットネス・健康（プロテインシェイカー、トレッドミルの速度、ストレッチポール、筋肉痛の予防、水分補給）',
+  '📦 ネット通販・宅配便（置き配の指定、段ボールの開封、不在票の再配達、サイズ違いの返品、レビューの投稿）',
+  '🎬 週末の動画配信・映画（話題のSFドラマの一気見、字幕と吹替の切り替え、映画館のポップコーン、結末のネタバレ注意）',
+  '🌦️ 急な天気・気温の変化（突然のゲリラ豪雨、心地よい秋風、エアコンのリモコン、折りたたみ傘の骨、朝晩の冷え込み）',
+  '🏠 家事・部屋の模様替え（ロボット掃除機の迷子、洗濯物の部屋干し、観葉植物の葉水、クローゼットの整理、ゴミの分別）',
+  '🤝 友人との食事・雑談（久しぶりの近況報告、おすすめの居酒屋、割り勘アプリ、旅行の計画、写真のAirDrop）',
+  '✈️ 空港・ホテル・旅行（保安検査場のトレー、搭乗口の変更、ホテルのルームキー、スーツケースの重量、観光ガイドブック）',
+  '📚 図書館・勉強・資格（静かな自習スペース、参考書の付箋、蛍光ペンのインク切れ、集中タイマー、英単語の復習）',
+  '🍽️ レストラン・ディナー（日替わりパスタの注文、アレルギー食材の確認、お冷のおかわり、デザートメニューの追加、お会計）',
+  '🚗 ドライブ・ガソリンスタンド（カーナビのリルート、タイヤの空気圧、洗車機のコース選択、サービスエリアの休憩、渋滞情報）',
+  '⛺ キャンプ・アウトドア（焚き火の薪割り、テントのペグ打ち、虫除けスプレー、満点の星空、朝淹れたてのコーヒー）',
+  '🎨 趣味・カメラ・DIY（レンズのキャップ、ドライバーのサイズ、日曜大工の棚作り、水彩画の筆洗い、お気に入りのアングル）',
+  '🏥 病院・薬局・体調（花粉症の目薬、処方箋の受付、体温計のピピッという音、ビタミン剤の服用、うがいと手洗い）',
+  '🛍️ ファッション・試着室（サイズ感の確認、色違いの在庫、丈の長さの調整、レジ前のセール品、春物のアウター）',
+  '🎧 音楽・ライブ・ポッドキャスト（ワイヤレスイヤホンのペアリング、お気に入りプレイリスト、ライブのチケット抽選、ギターのコード練習）',
+  '🎂 サプライズ・記念日（誕生日ケーキのロウソク、プレゼントのラッピング、メッセージカード、お祝いの乾杯、記念撮影）',
+  '🧹 大掃除・不用品整理（メルカリの出品写真、プチプチでの梱包、押し入れの奥の掘り出し物、窓ガラスの拭き掃除）',
+  '💼 就活・面接・キャリア（オンライン面接の背景、履歴書の推敲、志望動機の整理、オフィスカジュアル、名刺交換の練習）',
+  '🥐 ベーカリー・朝の風景（焼きたてメロンパンの香り、トングとトレイ、モーニングセット、テイクアウトの紙袋）',
+  '🌧️ 雨の日の過ごし方（窓を叩く雨音、ホットココア、お気に入りの長靴、濡れたタオルの乾燥、読書に没頭）',
+  '🎡 遊園地・テーマパーク（アトラクションの待ち時間、ファストパスの取得、ポップコーンバケット、お化け屋敷の絶叫）',
+  '🪴 ガーデニング・ベランダ菜園（ミニトマトの芽吹き、プランターの土入れ、ハーブの収穫、朝の水やり）',
+  '🎮 ゲーム・オンライン対戦（ボイスチャットの音量、コントローラーの充電、協力プレイの作戦会議、高難易度ボスの攻略）',
+  '💇 美容院・ヘアサロン（カットの長さの相談、シャンプーの力加減、トリートメントの香り、雑誌のページめくり）',
+  '📮 郵便局・市役所（書類の記入、窓口の整理券、身分証明書の提示、切手の貼り付け、マイナンバーカード）',
+  '🌙 深夜・夜更かし（静まり返った部屋、間接照明、温かいハーブティー、深夜ラジオ、明日へのアラーム設定）',
+  '🚲 自転車・サイクリング（タイヤの空気入れ、チェーンの注油、坂道でのギアチェンジ、川沿いの爽快な風）',
+  '🍱 ピクニック・公園（レジャーシートを広げる、手作りのおにぎり、芝生での昼寝、シャボン玉、鳩の群れ）',
+];
+
+const CONTEXT_MODIFIERS = [
+  { time: '早朝', mood: 'まだ少し眠そうだが澄んだ気持ちで', subject: 'I' },
+  { time: '午前中の忙しい時間帯', mood: '手際よくテキパキと', subject: 'My coworker' },
+  { time: '昼休み', mood: 'ほっと一息つきながら', subject: 'We' },
+  { time: '夕方の帰り道', mood: '一日の疲れを感じつつもリラックスして', subject: 'You' },
+  { time: '休日の午後', mood: 'のんびりと趣味を楽しみながら', subject: 'The barista' },
+  { time: '深夜', mood: '静かな部屋で落ち着いて', subject: 'My roommate' },
+  { time: '急なハプニングの直後', mood: 'ちょっと慌てつつも笑顔で', subject: 'She' },
+  { time: '待ち合わせの直前', mood: 'わくわくしながら', subject: 'He' },
 ];
 
 /**
@@ -103,11 +137,27 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
     return getFallbackBatch(wordCount, count, cefrLevel);
   }
 
+  // 1. 過去の出題履歴（直近40〜50問）を取得して重複禁止リストを作成
+  const recentRecords = loadLabQuestionRecords();
+  const avoidSentences = Array.from(
+    new Set(
+      recentRecords
+        .slice(0, 50)
+        .map(r => r.sentenceEn?.trim())
+        .filter(Boolean)
+    )
+  );
+
+  // 2. 多様なシチュエーション＆コンテキスト修飾子をランダムにブレンド
   const shuffledSeeds = [...SITUATION_SEEDS].sort(() => Math.random() - 0.5);
+  const shuffledModifiers = [...CONTEXT_MODIFIERS].sort(() => Math.random() - 0.5);
   const selectedSituations = shuffledSeeds.slice(0, count);
 
   const situationPrompts = selectedSituations
-    .map((s, idx) => `  - ${idx + 1}問目の場面: ${s}`)
+    .map((s, idx) => {
+      const mod = shuffledModifiers[idx % shuffledModifiers.length];
+      return `  - ${idx + 1}問目の場面: ${s} (状況: ${mod.time}、${mod.mood}、主語の例: ${mod.subject})`;
+    })
     .join('\n');
 
   const systemInstruction = `あなたは第二言語習得論（SLA）およびリスニング認知負荷トレーニングの専門家です。
@@ -115,11 +165,12 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
 
 【絶対ルール】
 1. 各英文の単語数は、目標単語数【${wordCount}単語】（±1語以内）に厳密に一致させてください。
-2. ${count}問はすべて全く異なるシチュエーション、多様な主語（I, You, She, He, We, My coworker, The barista など）、自然な日常動詞を用いて作成してください。
+2. ${count}問はすべて全く異なるシチュエーション、多様な主語（I, You, She, He, We, My coworker, The barista, Someone など）、多彩な日常句動詞・前置詞を用いて作成してください。
 3. 【禁止事項】「Leo」「Alex」「駅への行き方 (way to the station)」「傘を忘れた (forgot umbrella)」のようなステレオタイプな教科書フレーズは避け、リアルな現代生活シーンから作成してください。
-4. 英文は生きたカジュアルな日常会話・口語表現にしてください（短縮形や自然な前置詞・句動詞を歓迎）。
-5. 日本語訳（translationJa）は、自然で正確な日本語にしてください。
+4. 英文は生きたカジュアルな日常会話・口語表現にしてください（短縮形や自然なリンキング・弱形を歓迎）。
+5. 日本語訳（translationJa）は、自然でこなれた正確な日本語にしてください。
 6. 英語の急所解説（englishExplanation）と、音声変化（phoneticPoints: リダクション、リンキング、脱落音のポイント）を付与してください。
+7. 【最重要】過去に出題された定型文の繰り返しを徹底的に排除し、毎回新鮮で初見の英文を生成してください。
 
 【必ず守る出力フォーマット（純粋なJSON配列のみ）】:
 [
@@ -132,7 +183,11 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
   }
 ]`;
 
-  const userPrompt = `CEFRレベル【${cefrLevel}】、目標単語数【${wordCount}単語】で、以下のシチュエーションに基づく${count}問のリスニング用短文をJSON配列で生成してください:\n${situationPrompts}`;
+  let userPrompt = `CEFRレベル【${cefrLevel}】、目標単語数【${wordCount}単語】で、以下のシチュエーションに基づく${count}問のリスニング用短文をJSON配列で生成してください:\n${situationPrompts}`;
+
+  if (avoidSentences.length > 0) {
+    userPrompt += `\n\n【★最重要：重複・類似禁止リスト（過去に出題済みの以下の英文やこれと似た構文・フレーズは絶対に生成しないでください）】\n${avoidSentences.slice(0, 30).map((s, i) => `${i + 1}. "${s}"`).join('\n')}\n※必ず上記と全く異なる新しい文構造・日常表現を用いてください。`;
+  }
 
   const modelsToTry = [model, ...FALLBACK_MODELS.filter(m => m !== model)];
 
@@ -148,7 +203,7 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
           contents: [{ parts: [{ text: userPrompt }] }],
           systemInstruction: { parts: [{ text: systemInstruction }] },
           generationConfig: {
-            temperature: 0.75,
+            temperature: 0.85,
             responseMimeType: 'application/json',
           },
         }),
@@ -169,10 +224,21 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
 
       if (items.length > 0) {
         LiveLogger.logQuizDrill('ListeningLab', `${items.length}件のリスニング問題を正常に生成しました`);
-        return items.map((item, idx) => {
+        
+        // バッチ内および直近過去履歴との重複排除フィルタリング
+        const seenInBatch = new Set<string>();
+        const avoidNormalizedSet = new Set(avoidSentences.map(s => s.toLowerCase().replace(/[^a-z0-9]/g, '')));
+        const validQuestions: LabQuestion[] = [];
+
+        items.forEach((item, idx) => {
           const sentenceEn = (item.sentenceEn || item.sentence || '').trim();
+          if (!sentenceEn) return;
+          const normalized = sentenceEn.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (seenInBatch.has(normalized) || avoidNormalizedSet.has(normalized)) return;
+          seenInBatch.add(normalized);
+
           const words = sentenceEn.split(/\s+/).filter(Boolean);
-          return {
+          validQuestions.push({
             id: `lab_q_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
             sentenceEn,
             translationJa: item.translationJa || item.translation || '',
@@ -181,8 +247,12 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
             cefrLevel,
             englishExplanation: item.englishExplanation || item.keyPoints || '',
             phoneticPoints: item.phoneticPoints || '',
-          };
+          });
         });
+
+        if (validQuestions.length > 0) {
+          return validQuestions;
+        }
       }
     } catch (e: any) {
       LiveLogger.logQuizDrill('ListeningLab', `Model ${currentModel} exception: ${e?.message || e}`, undefined, 'WARN');
@@ -200,32 +270,59 @@ function getFallbackBatch(wordCount: number, count: number, cefrLevel: CefrLevel
       { en: "Let's grab some lunch.", ja: "お昼ご飯を食べに行こう。", exp: "grab lunch: 軽く食事をとる", pho: "grab some -> /ɡræbsəm/" },
       { en: "Please leave a message.", ja: "メッセージを残してください。", exp: "leave a message: 伝言を残す", pho: "leave a -> /liːvə/ (連結)" },
       { en: "We need more time.", ja: "もっと時間が必要です。", exp: "need more: もっと必要", pho: "need more -> /niːdmɔːr/" },
+      { en: "Call me back later.", ja: "あとで掛け直してね。", exp: "call back: 折り返し電話する", pho: "call me -> /kɔːlmi/" },
+      { en: "The battery is low.", ja: "バッテリーが切れそうです。", exp: "battery is low: 残量低下", pho: "is low -> /ɪzloʊ/" },
+      { en: "Keep up the work.", ja: "その調子で頑張って。", exp: "keep up: 維持する", pho: "keep up -> /kiːpʌp/" },
     ],
     6: [
       { en: "Can you send me the file?", ja: "そのファイルを送ってくれる？", exp: "send A B: AにBを送る", pho: "send me -> /sɛndmi/" },
       { en: "I have to leave right now.", ja: "今すぐ出ないといけない。", exp: "have to: 〜しなければならない", pho: "have to -> /hæftə/ (無声化)" },
       { en: "She decided to buy a car.", ja: "彼女は車を買うことに決めた。", exp: "decide to: 〜することに決める", pho: "buy a -> /baɪjə/ (渡り音)" },
       { en: "We are waiting for the rain.", ja: "私たちは雨宿りしています。", exp: "wait for: 〜を待つ", pho: "waiting for -> /weɪtɪŋfər/ (弱形)" },
+      { en: "My train was delayed this morning.", ja: "今朝は電車が遅延していました。", exp: "be delayed: 遅延する", pho: "was delayed -> /wəzdɪleɪd/" },
+      { en: "Could you pass me the salt?", ja: "お塩を取っていただけますか？", exp: "pass A B: AにBを渡す", pho: "pass me -> /pæsmi/" },
+      { en: "He always drinks coffee after lunch.", ja: "彼はいつも昼食後にコーヒーを飲みます。", exp: "after lunch: 昼食後", pho: "drinks coffee -> /drɪŋkskɔːfi/" },
     ],
     8: [
       { en: "I should have called you before leaving home.", ja: "家を出る前にあなたに電話するべきだった。", exp: "should have + p.p.: 〜するべきだった", pho: "should have -> /ʃʊdəv/ (弱形・脱落)" },
       { en: "Could you please help me move this desk?", ja: "この机を動かすのを手伝っていただけますか？", exp: "help + O + 原形: Oが〜するのを手伝う", pho: "help me -> /hɛlpmi/" },
       { en: "He was surprised to hear the shocking news.", ja: "彼はその衝撃的な知らせを聞いて驚いた。", exp: "be surprised to: 〜して驚く", pho: "surprised to -> /sərpraɪzd tə/" },
+      { en: "We decided to hold the meeting online today.", ja: "私たちは今日、会議をオンラインで開催することに決めました。", exp: "hold a meeting: 会議を開催する", pho: "meeting online -> /miːtɪŋɔːnlaɪn/" },
+      { en: "She forgot to charge her phone last night.", ja: "彼女は昨夜スマホを充電し忘れました。", exp: "forget to do: 〜し忘れる", pho: "forgot to -> /fərɡɑːttə/" },
+      { en: "I cannot connect to the office Wi-Fi network.", ja: "オフィスのWi-Fiネットワークに接続できません。", exp: "connect to: 〜に接続する", pho: "connect to -> /kənɛkt tə/" },
+    ],
+    10: [
+      { en: "I was looking forward to seeing my friends this weekend.", ja: "今週末に友達と会うのをとても楽しみにしていました。", exp: "look forward to -ing: 〜を楽しみに待つ", pho: "forward to -> /fɔːrwərd tə/" },
+      { en: "You should double check your passport before heading to the airport.", ja: "空港に向かう前にパスポートを再確認したほうがいいですよ。", exp: "head to: 〜に向かう", pho: "heading to -> /hɛdɪŋtə/" },
+      { en: "My coworker helped me prepare the slides for the presentation.", ja: "同僚がプレゼンのスライド準備を手伝ってくれました。", exp: "prepare for: 〜の準備をする", pho: "helped me -> /hɛlptmi/" },
+      { en: "The weather forecast said it would clear up by evening.", ja: "天気予報では夕方までに晴れると言っていました。", exp: "clear up: 晴れ上がる", pho: "clear up -> /klɪrʌp/ (連結)" },
     ],
     12: [
       { en: "I was wondering if you could give me a hand with this project.", ja: "このプロジェクトを手伝っていただけないかと思いまして。", exp: "I was wondering if...: 丁寧な依頼表現", pho: "give me a hand -> /ɡɪvmiəhænd/ (連続リンキング)" },
       { en: "You should take an umbrella because the weather forecast predicted heavy rain.", ja: "天気予報で大雨が予想されていたので、傘を持っていくべきです。", exp: "predict: 予測する", pho: "take an -> /teɪkən/, weather forecast -> /wɛðər fɔːrkæst/" },
+      { en: "She spent the whole afternoon cleaning her room and organizing old books.", ja: "彼女は午後ずっと部屋の掃除と古い本の整理をして過ごしました。", exp: "spend time -ing: 〜して時間を過ごす", pho: "spent the -> /spɛntðə/" },
+    ],
+    14: [
+      { en: "Even though the traffic was terrible this morning, I managed to arrive at work on time.", ja: "今朝は渋滞がひどかったにもかかわらず、なんとか時間通りに出社できました。", exp: "manage to: なんとか〜する", pho: "managed to -> /mænɪdʒd tə/" },
+      { en: "If you have any questions about the new software, please feel free to ask me.", ja: "新しいソフトウェアについて何か質問があれば、いつでも遠慮なく聞いてくださいね。", exp: "feel free to: ご自由に〜する", pho: "feel free -> /fiːlfriː/" },
+    ],
+    16: [
+      { en: "I was planning to go grocery shopping after work, but I was so exhausted that I went straight home.", ja: "仕事の後に買い出しに行く予定でしたが、あまりに疲れていたのでまっすぐ家に帰りました。", exp: "so ... that: あまりに〜なので", pho: "grocery shopping -> /ɡroʊsəri ʃɑːpɪŋ/" },
+    ],
+    20: [
+      { en: "Although we encountered several unexpected technical issues during the launch, the team worked together and successfully delivered the update without any major downtime.", ja: "ローンチ中に予期せぬ技術的トラブルがいくつか発生したものの、チームが一丸となって対応し、大きなサービス停止もなく無事にアップデートを完了できました。", exp: "encounter issues: 問題に直面する", pho: "worked together -> /wɜːrkt təɡɛðər/" },
     ],
   };
 
   const pool = sampleBank[wordCount] || sampleBank[8] || sampleBank[4];
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
   const results: LabQuestion[] = [];
 
   for (let i = 0; i < count; i++) {
-    const item = pool[i % pool.length];
+    const item = shuffled[i % shuffled.length];
     const words = item.en.split(/\s+/).filter(Boolean);
     results.push({
-      id: `lab_q_fallback_${Date.now()}_${i}`,
+      id: `lab_q_fallback_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
       sentenceEn: item.en,
       translationJa: item.ja,
       wordCount: words.length,
