@@ -21,55 +21,6 @@ export interface GenerateLabBatchParams {
   model?: string;
 }
 
-const SITUATION_SEEDS = [
-  '💻 職場・Slack・リモートワーク（Slackの通知音、画面共有の不具合、マイクのミュート解除、共有ドライブの権限、締め切りのリスケ）',
-  '☕ カフェ・テラス席（季節限定のオーツミルクラテ、空席の確保、Wi-Fiパスワード、店員のおすすめ、持ち帰りカップ）',
-  '🍳 自炊・キッチンのハプニング（パスタの茹で加減、調味料の買い忘れ、フライパンのこびりつき、新作レシピの味見、作り置き保存）',
-  '🛒 スーパー・買い物・レジ（特売のイチゴ、エコバッグの持参、ポイントカードの提示、セルフレジの操作、賞味期限の確認）',
-  '📱 スマホ・バッテリー・SNS（充電ケーブルの接触不良、画面のひび割れ、写真のバックアップ、通知のオフ、機内モード）',
-  '🚇 電車・バス・通勤ラッシュ（急行電車の通過待ち、定期券のタッチ、座席を譲る、ドア付近の混雑、乗り換えアプリの案内）',
-  '🐕 ペット・犬猫との暮らし（散歩用のリード、猫のゴロゴロ音、爪切りへの抵抗、お気に入りのおやつ、動物病院の予約）',
-  '🏃‍♂️ ジム・フィットネス・健康（プロテインシェイカー、トレッドミルの速度、ストレッチポール、筋肉痛の予防、水分補給）',
-  '📦 ネット通販・宅配便（置き配の指定、段ボールの開封、不在票の再配達、サイズ違いの返品、レビューの投稿）',
-  '🎬 週末の動画配信・映画（話題のSFドラマの一気見、字幕と吹替の切り替え、映画館のポップコーン、結末のネタバレ注意）',
-  '🌦️ 急な天気・気温の変化（突然のゲリラ豪雨、心地よい秋風、エアコンのリモコン、折りたたみ傘の骨、朝晩の冷え込み）',
-  '🏠 家事・部屋の模様替え（ロボット掃除機の迷子、洗濯物の部屋干し、観葉植物の葉水、クローゼットの整理、ゴミの分別）',
-  '🤝 友人との食事・雑談（久しぶりの近況報告、おすすめの居酒屋、割り勘アプリ、旅行の計画、写真のAirDrop）',
-  '✈️ 空港・ホテル・旅行（保安検査場のトレー、搭乗口の変更、ホテルのルームキー、スーツケースの重量、観光ガイドブック）',
-  '📚 図書館・勉強・資格（静かな自習スペース、参考書の付箋、蛍光ペンのインク切れ、集中タイマー、英単語の復習）',
-  '🍽️ レストラン・ディナー（日替わりパスタの注文、アレルギー食材の確認、お冷のおかわり、デザートメニューの追加、お会計）',
-  '🚗 ドライブ・ガソリンスタンド（カーナビのリルート、タイヤの空気圧、洗車機のコース選択、サービスエリアの休憩、渋滞情報）',
-  '⛺ キャンプ・アウトドア（焚き火の薪割り、テントのペグ打ち、虫除けスプレー、満点の星空、朝淹れたてのコーヒー）',
-  '🎨 趣味・カメラ・DIY（レンズのキャップ、ドライバーのサイズ、日曜大工の棚作り、水彩画の筆洗い、お気に入りのアングル）',
-  '🏥 病院・薬局・体調（花粉症の目薬、処方箋の受付、体温計のピピッという音、ビタミン剤の服用、うがいと手洗い）',
-  '🛍️ ファッション・試着室（サイズ感の確認、色違いの在庫、丈の長さの調整、レジ前のセール品、春物のアウター）',
-  '🎧 音楽・ライブ・ポッドキャスト（ワイヤレスイヤホンのペアリング、お気に入りプレイリスト、ライブのチケット抽選、ギターのコード練習）',
-  '🎂 サプライズ・記念日（誕生日ケーキのロウソク、プレゼントのラッピング、メッセージカード、お祝いの乾杯、記念撮影）',
-  '🧹 大掃除・不用品整理（メルカリの出品写真、プチプチでの梱包、押し入れの奥の掘り出し物、窓ガラスの拭き掃除）',
-  '💼 就活・面接・キャリア（オンライン面接の背景、履歴書の推敲、志望動機の整理、オフィスカジュアル、名刺交換の練習）',
-  '🥐 ベーカリー・朝の風景（焼きたてメロンパンの香り、トングとトレイ、モーニングセット、テイクアウトの紙袋）',
-  '🌧️ 雨の日の過ごし方（窓を叩く雨音、ホットココア、お気に入りの長靴、濡れたタオルの乾燥、読書に没頭）',
-  '🎡 遊園地・テーマパーク（アトラクションの待ち時間、ファストパスの取得、ポップコーンバケット、お化け屋敷の絶叫）',
-  '🪴 ガーデニング・ベランダ菜園（ミニトマトの芽吹き、プランターの土入れ、ハーブの収穫、朝の水やり）',
-  '🎮 ゲーム・オンライン対戦（ボイスチャットの音量、コントローラーの充電、協力プレイの作戦会議、高難易度ボスの攻略）',
-  '💇 美容院・ヘアサロン（カットの長さの相談、シャンプーの力加減、トリートメントの香り、雑誌のページめくり）',
-  '📮 郵便局・市役所（書類の記入、窓口の整理券、身分証明書の提示、切手の貼り付け、マイナンバーカード）',
-  '🌙 深夜・夜更かし（静まり返った部屋、間接照明、温かいハーブティー、深夜ラジオ、明日へのアラーム設定）',
-  '🚲 自転車・サイクリング（タイヤの空気入れ、チェーンの注油、坂道でのギアチェンジ、川沿いの爽快な風）',
-  '🍱 ピクニック・公園（レジャーシートを広げる、手作りのおにぎり、芝生での昼寝、シャボン玉、鳩の群れ）',
-];
-
-const CONTEXT_MODIFIERS = [
-  { time: '早朝', mood: 'まだ少し眠そうだが澄んだ気持ちで', subject: 'I' },
-  { time: '午前中の忙しい時間帯', mood: '手際よくテキパキと', subject: 'My coworker' },
-  { time: '昼休み', mood: 'ほっと一息つきながら', subject: 'We' },
-  { time: '夕方の帰り道', mood: '一日の疲れを感じつつもリラックスして', subject: 'You' },
-  { time: '休日の午後', mood: 'のんびりと趣味を楽しみながら', subject: 'The barista' },
-  { time: '深夜', mood: '静かな部屋で落ち着いて', subject: 'My roommate' },
-  { time: '急なハプニングの直後', mood: 'ちょっと慌てつつも笑顔で', subject: 'She' },
-  { time: '待ち合わせの直前', mood: 'わくわくしながら', subject: 'He' },
-];
-
 /**
  * 英語音声学・Thought Group分割ユーティリティ（互換性用）
  */
@@ -137,7 +88,7 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
     return getFallbackBatch(wordCount, count, cefrLevel);
   }
 
-  // 1. 過去の出題履歴（直近40〜50問）を取得して重複禁止リストを作成
+  // 1. 過去の出題履歴（直近50問）を取得して重複禁止リストを作成
   const recentRecords = loadLabQuestionRecords();
   const avoidSentences = Array.from(
     new Set(
@@ -148,28 +99,30 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
     )
   );
 
-  // 2. 多様なシチュエーション＆コンテキスト修飾子をランダムにブレンド
-  const shuffledSeeds = [...SITUATION_SEEDS].sort(() => Math.random() - 0.5);
-  const shuffledModifiers = [...CONTEXT_MODIFIERS].sort(() => Math.random() - 0.5);
-  const selectedSituations = shuffledSeeds.slice(0, count);
+  const isBasicLevel = cefrLevel === 'A1' || cefrLevel === 'A2';
 
-  const situationPrompts = selectedSituations
-    .map((s, idx) => {
-      const mod = shuffledModifiers[idx % shuffledModifiers.length];
-      return `  - ${idx + 1}問目の場面: ${s} (状況: ${mod.time}、${mod.mood}、主語の例: ${mod.subject})`;
-    })
-    .join('\n');
+  const vocabRule = isBasicLevel
+    ? `【★超重要：中学英語（基本1500語）への厳格な語彙制限】
+- 単語は中学校1〜3年生の教科書レベル（Oxford Basic 1500語・超基本英語）のみを絶対に使用してください。
+- 未知語による認知負荷をゼロにし、「純粋な音の聞き取りとワーキングメモリでの文構造保持」に100%集中させるのが目的です。
+- 【禁止単語の例】Bluetooth, barista, Wi-Fi, treadmill, battery, app, gadget, software, reservation, schedule, presentation, client, coworker, airport などの専門用語・ITガジェット機器語・ビジネス用語・難解語は一切使わないでください。
+- 【推奨単語】go, come, make, take, get, have, see, look, hear, tell, say, ask, help, want, need, think, know, find, try, use, work, leave, put, keep, let, start, open, walk, run, buy, wait, send, stay, friend, brother, sister, mother, father, teacher, dog, cat, water, food, book, car, bus, train, room, door, street, park, school, morning, night, time, day, week, rain などの中学基本語。
+- 単語数を伸ばす（${wordCount}単語にする）際は、難しい単語を使うのではなく、接続詞（because, when, if, so, but, that）、不定詞（to do）、動名詞（doing）、関係詞（who, that）、前置詞句（in the morning, with my friend, after school）などの文法構造の展開によって長さを出してください。`
+    : `【語彙レベル：${cefrLevel}】
+- 自然な日常会話で頻出する語彙を用いてください。過度に専門的・学術的な難語は避け、口語表現を中心にしてください。`;
 
-  const systemInstruction = `あなたは第二言語習得論（SLA）およびリスニング認知負荷トレーニングの専門家です。
-リスニングの「ワーキングメモリ（脳内バッファ）限界測定＆リアルタイム聴解訓練」のために、指定された【目標単語数（${wordCount}単語）】に厳密に合わせた、自然で生き生きとしたネイティブの日常会話短文を【${count}問】作成してください。
+  const systemInstruction = `あなたは第二言語習得論（SLA）およびリスニング認知負荷トレーニング（ワーキングメモリ拡張）の専門家です。
+リスニングにおける「リアルタイムで脳内バッファに保持・処理できる文の長さ（4語→6語→8語→12語→16語...）」を段階的に伸ばす訓練のため、指定された【目標単語数（${wordCount}単語）】に厳密に合わせた日常会話短文を【${count}問】作成してください。
+
+${vocabRule}
 
 【絶対ルール】
 1. 各英文の単語数は、目標単語数【${wordCount}単語】（±1語以内）に厳密に一致させてください。
-2. ${count}問はすべて全く異なるシチュエーション、多様な主語（I, You, She, He, We, My coworker, The barista, Someone など）、多彩な日常句動詞・前置詞を用いて作成してください。
-3. 【禁止事項】「Leo」「Alex」「駅への行き方 (way to the station)」「傘を忘れた (forgot umbrella)」のようなステレオタイプな教科書フレーズは避け、リアルな現代生活シーンから作成してください。
-4. 英文は生きたカジュアルな日常会話・口語表現にしてください（短縮形や自然なリンキング・弱形を歓迎）。
+2. 5問はそれぞれ全く異なる日常の自然なシチュエーション・多様な主語（I, You, She, He, We, They, My friend, The boy など）で作成してください。
+3. ステレオタイプな不自然な教科書例文（"Leo goes to..." など）は避け、ネイティブが日常で実際に口にする自然な発話にしてください。
+4. 自然な音声変化（リンキング・リダクション・弱形）を含む、生きた日常英語にしてください。
 5. 日本語訳（translationJa）は、自然でこなれた正確な日本語にしてください。
-6. 英語の急所解説（englishExplanation）と、音声変化（phoneticPoints: リダクション、リンキング、脱落音のポイント）を付与してください。
+6. 英語の急所解説（englishExplanation）と、音声変化（phoneticPoints: リンキング・脱落等のポイント）を付与してください。
 7. 【最重要】過去に出題された定型文の繰り返しを徹底的に排除し、毎回新鮮で初見の英文を生成してください。
 
 【必ず守る出力フォーマット（純粋なJSON配列のみ）】:
@@ -183,10 +136,10 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
   }
 ]`;
 
-  let userPrompt = `CEFRレベル【${cefrLevel}】、目標単語数【${wordCount}単語】で、以下のシチュエーションに基づく${count}問のリスニング用短文をJSON配列で生成してください:\n${situationPrompts}`;
+  let userPrompt = `CEFRレベル【${cefrLevel}】、目標単語数【${wordCount}単語】で、自然な日常リスニング短文を${count}問、JSON配列で生成してください。`;
 
   if (avoidSentences.length > 0) {
-    userPrompt += `\n\n【★最重要：重複・類似禁止リスト（過去に出題済みの以下の英文やこれと似た構文・フレーズは絶対に生成しないでください）】\n${avoidSentences.slice(0, 30).map((s, i) => `${i + 1}. "${s}"`).join('\n')}\n※必ず上記と全く異なる新しい文構造・日常表現を用いてください。`;
+    userPrompt += `\n\n【★最重要：重複・類似禁止リスト（過去に出題済みの以下の英文やこれと似た構文・フレーズは絶対に生成しないでください）】\n${avoidSentences.slice(0, 40).map((s, i) => `${i + 1}. "${s}"`).join('\n')}\n※必ず上記と全く異なる新しい文構造・日常表現を用いてください。`;
   }
 
   const modelsToTry = [model, ...FALLBACK_MODELS.filter(m => m !== model)];
@@ -265,52 +218,52 @@ export async function generateLabBatch(params: GenerateLabBatchParams): Promise<
 function getFallbackBatch(wordCount: number, count: number, cefrLevel: CefrLevel): LabQuestion[] {
   const sampleBank: Record<number, { en: string; ja: string; exp: string; pho: string }[]> = {
     4: [
-      { en: "Turn off the lights.", ja: "電気を消して。", exp: "Turn off: 句動詞（消す）", pho: "Turn off -> /tɜːrnɔːf/ (連結)" },
-      { en: "I missed the bus.", ja: "バスに乗り遅れました。", exp: "miss: 乗り遅れる", pho: "missed the -> /mɪstðə/ (破裂音の消失)" },
-      { en: "Let's grab some lunch.", ja: "お昼ご飯を食べに行こう。", exp: "grab lunch: 軽く食事をとる", pho: "grab some -> /ɡræbsəm/" },
-      { en: "Please leave a message.", ja: "メッセージを残してください。", exp: "leave a message: 伝言を残す", pho: "leave a -> /liːvə/ (連結)" },
+      { en: "Turn off the light.", ja: "電気を消して。", exp: "turn off: （電気などを）消す", pho: "Turn off -> /tɜːrnɔːf/ (連結)" },
+      { en: "I missed the bus.", ja: "バスに乗り遅れました。", exp: "miss: 乗り遅れる", pho: "missed the -> /mɪstðə/ (破裂音の脱落)" },
+      { en: "Let's eat lunch together.", ja: "一緒にお昼ご飯を食べよう。", exp: "eat lunch: 昼食をとる", pho: "eat lunch -> /iːtlʌntʃ/" },
+      { en: "Please open the door.", ja: "ドアを開けてください。", exp: "open the door: ドアを開ける", pho: "open the -> /oʊpənðə/" },
       { en: "We need more time.", ja: "もっと時間が必要です。", exp: "need more: もっと必要", pho: "need more -> /niːdmɔːr/" },
-      { en: "Call me back later.", ja: "あとで掛け直してね。", exp: "call back: 折り返し電話する", pho: "call me -> /kɔːlmi/" },
-      { en: "The battery is low.", ja: "バッテリーが切れそうです。", exp: "battery is low: 残量低下", pho: "is low -> /ɪzloʊ/" },
-      { en: "Keep up the work.", ja: "その調子で頑張って。", exp: "keep up: 維持する", pho: "keep up -> /kiːpʌp/" },
+      { en: "Call me back later.", ja: "あとで電話をかけ直してね。", exp: "call back: 折り返し電話する", pho: "call me -> /kɔːlmi/" },
+      { en: "I like your room.", ja: "あなたの部屋がいいね。", exp: "like: 好きである・気に入る", pho: "like your -> /laɪkjʊr/" },
+      { en: "She went to sleep.", ja: "彼女は寝に行きました。", exp: "go to sleep: 眠りにつく", pho: "went to -> /wɛntə/ (弱形)" },
     ],
     6: [
-      { en: "Can you send me the file?", ja: "そのファイルを送ってくれる？", exp: "send A B: AにBを送る", pho: "send me -> /sɛndmi/" },
+      { en: "Can you send me a message?", ja: "メッセージを送ってくれる？", exp: "send A B: AにBを送る", pho: "send me -> /sɛndmi/" },
       { en: "I have to leave right now.", ja: "今すぐ出ないといけない。", exp: "have to: 〜しなければならない", pho: "have to -> /hæftə/ (無声化)" },
-      { en: "She decided to buy a car.", ja: "彼女は車を買うことに決めた。", exp: "decide to: 〜することに決める", pho: "buy a -> /baɪjə/ (渡り音)" },
-      { en: "We are waiting for the rain.", ja: "私たちは雨宿りしています。", exp: "wait for: 〜を待つ", pho: "waiting for -> /weɪtɪŋfər/ (弱形)" },
-      { en: "My train was delayed this morning.", ja: "今朝は電車が遅延していました。", exp: "be delayed: 遅延する", pho: "was delayed -> /wəzdɪleɪd/" },
-      { en: "Could you pass me the salt?", ja: "お塩を取っていただけますか？", exp: "pass A B: AにBを渡す", pho: "pass me -> /pæsmi/" },
-      { en: "He always drinks coffee after lunch.", ja: "彼はいつも昼食後にコーヒーを飲みます。", exp: "after lunch: 昼食後", pho: "drinks coffee -> /drɪŋkskɔːfi/" },
+      { en: "She decided to buy a book.", ja: "彼女は本を買うことに決めた。", exp: "decide to: 〜することに決める", pho: "buy a -> /baɪjə/ (渡り音)" },
+      { en: "We are waiting for the rain.", ja: "私たちは雨宿りをしています。", exp: "wait for: 〜を待つ", pho: "waiting for -> /weɪtɪŋfər/ (弱形)" },
+      { en: "My brother was busy this morning.", ja: "兄は今朝とても忙しそうでした。", exp: "this morning: 今朝", pho: "was busy -> /wəzbɪzi/" },
+      { en: "Could you pass me the cup?", ja: "コップを取っていただけますか？", exp: "pass A B: AにBを渡す", pho: "pass me -> /pæsmi/" },
+      { en: "He always drinks water after dinner.", ja: "彼はいつも夕食後に水を飲みます。", exp: "after dinner: 夕食後", pho: "drinks water -> /drɪŋkswɔːtər/" },
     ],
     8: [
       { en: "I should have called you before leaving home.", ja: "家を出る前にあなたに電話するべきだった。", exp: "should have + p.p.: 〜するべきだった", pho: "should have -> /ʃʊdəv/ (弱形・脱落)" },
-      { en: "Could you please help me move this desk?", ja: "この机を動かすのを手伝っていただけますか？", exp: "help + O + 原形: Oが〜するのを手伝う", pho: "help me -> /hɛlpmi/" },
-      { en: "He was surprised to hear the shocking news.", ja: "彼はその衝撃的な知らせを聞いて驚いた。", exp: "be surprised to: 〜して驚く", pho: "surprised to -> /sərpraɪzd tə/" },
-      { en: "We decided to hold the meeting online today.", ja: "私たちは今日、会議をオンラインで開催することに決めました。", exp: "hold a meeting: 会議を開催する", pho: "meeting online -> /miːtɪŋɔːnlaɪn/" },
-      { en: "She forgot to charge her phone last night.", ja: "彼女は昨夜スマホを充電し忘れました。", exp: "forget to do: 〜し忘れる", pho: "forgot to -> /fərɡɑːttə/" },
-      { en: "I cannot connect to the office Wi-Fi network.", ja: "オフィスのWi-Fiネットワークに接続できません。", exp: "connect to: 〜に接続する", pho: "connect to -> /kənɛkt tə/" },
+      { en: "Could you please help me clean this room?", ja: "この部屋を掃除するのを手伝っていただけますか？", exp: "help + O + 原形: Oが〜するのを手伝う", pho: "help me -> /hɛlpmi/" },
+      { en: "He was very glad to see his friend.", ja: "彼は友達に会えてとても嬉しそうでした。", exp: "be glad to: 〜して嬉しい", pho: "glad to -> /ɡlædtə/" },
+      { en: "We decided to have dinner together tonight.", ja: "私たちは今夜、一緒に夕食を食べることに決めました。", exp: "have dinner: 夕食をとる", pho: "dinner together -> /dɪnərtəɡɛðər/" },
+      { en: "She forgot to bring her bag this morning.", ja: "彼女は今朝カバンを持ってくるのを忘れました。", exp: "forget to do: 〜し忘れる", pho: "forgot to -> /fərɡɑːttə/" },
+      { en: "I want to take a walk after lunch.", ja: "昼食のあとに散歩に行きたいです。", exp: "take a walk: 散歩する", pho: "take a -> /teɪkə/ (連結)" },
     ],
     10: [
       { en: "I was looking forward to seeing my friends this weekend.", ja: "今週末に友達と会うのをとても楽しみにしていました。", exp: "look forward to -ing: 〜を楽しみに待つ", pho: "forward to -> /fɔːrwərd tə/" },
-      { en: "You should double check your passport before heading to the airport.", ja: "空港に向かう前にパスポートを再確認したほうがいいですよ。", exp: "head to: 〜に向かう", pho: "heading to -> /hɛdɪŋtə/" },
-      { en: "My coworker helped me prepare the slides for the presentation.", ja: "同僚がプレゼンのスライド準備を手伝ってくれました。", exp: "prepare for: 〜の準備をする", pho: "helped me -> /hɛlptmi/" },
-      { en: "The weather forecast said it would clear up by evening.", ja: "天気予報では夕方までに晴れると言っていました。", exp: "clear up: 晴れ上がる", pho: "clear up -> /klɪrʌp/ (連結)" },
+      { en: "You should wash your hands before eating dinner with us.", ja: "私たちと夕食を食べる前に手を洗ったほうがいいですよ。", exp: "before -ing: 〜する前に", pho: "wash your -> /wɑːʃjʊr/" },
+      { en: "My sister helped me cook dinner for the whole family.", ja: "妹が家族全員のための夕食作りを手伝ってくれました。", exp: "help O do: Oが〜するのを手伝う", pho: "helped me -> /hɛlptmi/" },
+      { en: "The rain stopped and the sky became clear this afternoon.", ja: "雨が止んで、今日の午後は空が澄み渡りました。", exp: "become clear: 澄み渡る・晴れる", pho: "stopped and -> /stɑːptænd/" },
     ],
     12: [
-      { en: "I was wondering if you could give me a hand with this project.", ja: "このプロジェクトを手伝っていただけないかと思いまして。", exp: "I was wondering if...: 丁寧な依頼表現", pho: "give me a hand -> /ɡɪvmiəhænd/ (連続リンキング)" },
-      { en: "You should take an umbrella because the weather forecast predicted heavy rain.", ja: "天気予報で大雨が予想されていたので、傘を持っていくべきです。", exp: "predict: 予測する", pho: "take an -> /teɪkən/, weather forecast -> /wɛðər fɔːrkæst/" },
-      { en: "She spent the whole afternoon cleaning her room and organizing old books.", ja: "彼女は午後ずっと部屋の掃除と古い本の整理をして過ごしました。", exp: "spend time -ing: 〜して時間を過ごす", pho: "spent the -> /spɛntðə/" },
+      { en: "I was wondering if you could help me carry these heavy boxes.", ja: "この重い箱を運ぶのを手伝っていただけないかと思いまして。", exp: "I was wondering if...: 丁寧な依頼表現", pho: "help me -> /hɛlpmi/" },
+      { en: "You should take an umbrella because it will rain later this afternoon.", ja: "今日の午後遅くに雨が降るそうなので、傘を持っていくべきです。", exp: "take an umbrella: 傘を持っていく", pho: "take an -> /teɪkən/ (連結)" },
+      { en: "She spent the whole morning cleaning her room and reading old books.", ja: "彼女は午前中ずっと部屋の掃除と昔の本を読んで過ごしました。", exp: "spend time -ing: 〜して時間を過ごす", pho: "spent the -> /spɛntðə/" },
     ],
     14: [
-      { en: "Even though the traffic was terrible this morning, I managed to arrive at work on time.", ja: "今朝は渋滞がひどかったにもかかわらず、なんとか時間通りに出社できました。", exp: "manage to: なんとか〜する", pho: "managed to -> /mænɪdʒd tə/" },
-      { en: "If you have any questions about the new software, please feel free to ask me.", ja: "新しいソフトウェアについて何か質問があれば、いつでも遠慮なく聞いてくださいね。", exp: "feel free to: ご自由に〜する", pho: "feel free -> /fiːlfriː/" },
+      { en: "Even though the bus was very late today, I managed to get to school on time.", ja: "今日はバスがとても遅れたにもかかわらず、なんとか時間通りに学校に着きました。", exp: "manage to: なんとか〜する", pho: "managed to -> /mænɪdʒd tə/" },
+      { en: "If you want to know more about this story, please feel free to ask me.", ja: "この物語についてもっと知りたいときは、遠慮なく何でも聞いてくださいね。", exp: "feel free to: ご自由に〜する", pho: "feel free -> /fiːlfriː/" },
     ],
     16: [
-      { en: "I was planning to go grocery shopping after work, but I was so exhausted that I went straight home.", ja: "仕事の後に買い出しに行く予定でしたが、あまりに疲れていたのでまっすぐ家に帰りました。", exp: "so ... that: あまりに〜なので", pho: "grocery shopping -> /ɡroʊsəri ʃɑːpɪŋ/" },
+      { en: "I was planning to go to the park with my friends, but it was so cold that we stayed home.", ja: "友達と公園に行く予定でしたが、あまりに寒かったので私たちは家にいました。", exp: "so ... that: あまりに〜なので", pho: "stayed home -> /steɪdhoʊm/" },
     ],
     20: [
-      { en: "Although we encountered several unexpected technical issues during the launch, the team worked together and successfully delivered the update without any major downtime.", ja: "ローンチ中に予期せぬ技術的トラブルがいくつか発生したものの、チームが一丸となって対応し、大きなサービス停止もなく無事にアップデートを完了できました。", exp: "encounter issues: 問題に直面する", pho: "worked together -> /wɜːrkt təɡɛðər/" },
+      { en: "When I arrived at the station this morning, my friends were already waiting for me with warm drinks in their hands.", ja: "今朝駅に着いたとき、友達は手に温かい飲み物を持ってすでに私のことを待ってくれていました。", exp: "arrive at: 〜に到着する", pho: "waiting for me -> /weɪtɪŋfərmi/" },
     ],
   };
 
