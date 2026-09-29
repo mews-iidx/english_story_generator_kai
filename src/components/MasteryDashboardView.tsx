@@ -6,6 +6,8 @@ import {
   deleteReadingSessionLog,
   loadSpeechPracticeLogs,
   deleteSpeechPracticeLog,
+  loadMyGoal,
+  getWeakestPatterns,
 } from '../services/storage';
 import { ReadingSessionLog, DailySnapshot, SpeechPracticeLog } from '../types/mastery';
 import { calculateLabAnalytics } from '../services/listeningLabService';
@@ -13,11 +15,9 @@ import { VocabItem } from '../types/vocab';
 import { ExpressionErrorItem } from '../types/expressionError';
 import { Story } from '../types/story';
 import {
-  Zap, Volume2, BarChart3, Globe, Mic, Trophy,
-  ChevronDown, ChevronUp, BookOpen, PenTool, Sparkles, Headphones,
-  Flame, AlertTriangle, Calendar, TrendingUp, Trash2
+  BarChart3, Mic, Trophy, BookOpen, PenTool, Headphones,
+  Flame, Calendar, Trash2, ArrowUpRight, ArrowDownRight, Minus, Target
 } from 'lucide-react';
-import { speakText } from '../utils/speech';
 import { getTodayDateString } from '../utils/srs';
 
 interface MasteryDashboardViewProps {
@@ -33,7 +33,6 @@ interface MasteryDashboardViewProps {
 }
 
 export type CefrProgressMode = 'comprehension' | 'assembly';
-export type CefrTimelineView = 'realtime' | 'daily' | 'monthly';
 
 function formatDateKey(d: Date): string {
   const y = d.getFullYear();
@@ -51,16 +50,17 @@ function computeDailyStreak(snapshots: DailySnapshot[]): number {
       .map(s => s.date)
   );
 
-  if (activeDates.size === 0) return 0;
+  const today = new Date();
+  const todayKey = formatDateKey(today);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = formatDateKey(yesterday);
 
-  const now = new Date();
-  const checkDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  let dateKey = formatDateKey(checkDate);
-  if (!activeDates.has(dateKey)) {
-    checkDate.setDate(checkDate.getDate() - 1);
-    dateKey = formatDateKey(checkDate);
-    if (!activeDates.has(dateKey)) {
+  let checkDate = new Date(today);
+  if (!activeDates.has(todayKey)) {
+    if (activeDates.has(yesterdayKey)) {
+      checkDate = yesterday;
+    } else {
       return 0;
     }
   }
@@ -74,134 +74,171 @@ function computeDailyStreak(snapshots: DailySnapshot[]): number {
   return streak;
 }
 
+/**
+ * 前日比（Delta）バッジコンポーネント
+ */
+const DeltaBadge: React.FC<{
+  value: number;
+  unit?: string;
+  isPercentage?: boolean;
+  prefix?: string;
+  inverseColors?: boolean;
+}> = ({ value, unit = '', isPercentage = false, prefix = '前日比', inverseColors = false }) => {
+  if (value === 0 || isNaN(value)) {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-slate-850 text-slate-400 border border-slate-750">
+        <Minus className="w-2.5 h-2.5 text-slate-500" />
+        <span>{prefix} ±0</span>
+      </span>
+    );
+  }
+
+  const isPositive = value > 0;
+  const formattedVal = Math.abs(value);
+  const sign = isPositive ? '+' : '-';
+  const displayVal = `${sign}${formattedVal}${isPercentage ? '%' : ''}${unit ? ' ' + unit : ''}`;
+
+  // 通常はプラスが良い (emerald), マイナスが悪い (rose)
+  const isGood = inverseColors ? !isPositive : isPositive;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-md border ${
+        isGood
+          ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/30'
+          : 'bg-rose-950/60 text-rose-300 border-rose-500/30'
+      }`}
+    >
+      {isPositive ? (
+        <ArrowUpRight className="w-2.5 h-2.5 shrink-0" />
+      ) : (
+        <ArrowDownRight className="w-2.5 h-2.5 shrink-0" />
+      )}
+      <span>{prefix} {displayVal}</span>
+    </span>
+  );
+};
+
 export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
   savedVocabs = [],
   stories = [],
 }) => {
-  const [progressMode, setProgressMode] = useState<CefrProgressMode>('comprehension');
-  const labAnalytics = useMemo(() => calculateLabAnalytics(), []);
-  const [timelineView, setTimelineView] = useState<CefrTimelineView>('realtime');
-  const [isReadingLogOpen, setIsReadingLogOpen] = useState<boolean>(false);
+  // Global States
+  const [cefrMode, setCefrMode] = useState<CefrProgressMode>('comprehension');
+  const [readingTab, setReadingTab] = useState<'chart' | 'logs'>('chart');
+  const [listeningTab, setListeningTab] = useState<'lp_trend' | 'capacity' | 'bottlenecks' | 'recent_lab'>('lp_trend');
+  const [speechTab, setSpeechTab] = useState<'chart' | 'logs'>('chart');
+  const [cefrTab, setCefrTab] = useState<'levels' | 'timeline' | 'weak_patterns'>('levels');
+
+  // Storage Data
   const [readingLogs, setReadingLogs] = useState<ReadingSessionLog[]>(() => loadReadingSessionLogs());
-  const [isSpeechLogOpen, setIsSpeechLogOpen] = useState<boolean>(false);
   const [speechLogs, setSpeechLogs] = useState<SpeechPracticeLog[]>(() => loadSpeechPracticeLogs());
-
-  const handleDeleteSpeechLog = (logId: string) => {
-    const { logs } = deleteSpeechPracticeLog(logId);
-    setSpeechLogs(logs);
-  };
-
-  // 日次スナップショット & CEFRリアル進捗
   const dailySnapshots = useMemo(() => loadDailySnapshots(), [readingLogs]);
   const allCefrProgress = useMemo(() => computeAllLevelProgress(), [savedVocabs]);
+  const labAnalytics = useMemo(() => calculateLabAnalytics(), []);
+  const myGoal = useMemo(() => loadMyGoal(), []);
+  const weakestPatterns = useMemo(() => getWeakestPatterns(6), []);
 
-  // 1. 厳格な総読了語数 ＆ 読破ストーリー数（読了フラグ isRead === true のもののみ計上）
-  const completedStories = useMemo(() => {
-    return (stories || []).filter(st => st.isRead === true || (st.readCount && st.readCount > 0));
-  }, [stories]);
+  const todayStr = getTodayDateString();
+  const yesterday = new Date(Date.now() - 86400000);
+  const yesterdayStr = formatDateKey(yesterday);
 
-  const totalWordsRead = useMemo(() => {
-    const fromSnapshots = dailySnapshots.reduce((acc, s) => acc + (s.wordsRead || 0), 0);
-    if (fromSnapshots > 0) return fromSnapshots;
-    return completedStories.reduce((acc, st) => {
-      const count = st.actualWordCount || st.targetWordCount || (st.storyContent ? st.storyContent.split(/\\s+/).filter(Boolean).length : 0);
-      return acc + count * (st.readCount || 1);
-    }, 0);
-  }, [dailySnapshots, completedStories]);
+  // ---------------------------------------------------------------------------
+  // 1. リーディング (Reading) 集計 & 前日比
+  // ---------------------------------------------------------------------------
+  const readingStats = useMemo(() => {
+    const todayLogs = readingLogs.filter(l => l.dateString === todayStr);
+    const yesterdayLogs = readingLogs.filter(l => l.dateString === yesterdayStr);
 
-  // 2. 平均読書スピード（WPM）の集計
-  const { averageWpm, wpmTier } = useMemo(() => {
-    const validWpms = dailySnapshots
-      .map(s => s.averageWpm)
-      .filter((w): w is number => typeof w === 'number' && w > 0);
+    const todayWords = todayLogs.reduce((acc, l) => acc + (l.wordsCount || 0), 0);
+    const yesterdayWords = yesterdayLogs.reduce((acc, l) => acc + (l.wordsCount || 0), 0);
+    const deltaWords = todayWords - yesterdayWords;
 
-    const avg = validWpms.length > 0
-      ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length)
-      : 0;
+    const todayValidWpms = todayLogs.map(l => l.wpm).filter(w => w > 0);
+    const todayAvgWpm = todayValidWpms.length > 0 ? Math.round(todayValidWpms.reduce((a, b) => a + b, 0) / todayValidWpms.length) : 0;
 
-    let tier = { label: '未測定', color: 'text-slate-400', desc: '物語を読了するとWPMが記録されます' };
-    if (avg > 0 && avg < 100) {
-      tier = { label: 'じっくり精読', color: 'text-amber-400', desc: '1文ずつ確実に理解しながら読解中' };
-    } else if (avg >= 100 && avg < 150) {
-      tier = { label: 'スムーズ読破', color: 'text-cyan-400', desc: '英語の語順のままスラスラ読める段階' };
-    } else if (avg >= 150 && avg < 200) {
-      tier = { label: 'ネイティブ並速読', color: 'text-emerald-400', desc: '日本語に訳さず直読直解できている速度' };
-    } else if (avg >= 200) {
-      tier = { label: '超高速英語脳', color: 'text-purple-400', desc: '圧倒的な処理速度で情報処理が可能' };
-    }
+    const yesterdayValidWpms = yesterdayLogs.map(l => l.wpm).filter(w => w > 0);
+    const yesterdayAvgWpm = yesterdayValidWpms.length > 0 ? Math.round(yesterdayValidWpms.reduce((a, b) => a + b, 0) / yesterdayValidWpms.length) : 0;
+    const deltaWpm = (todayAvgWpm > 0 && yesterdayAvgWpm > 0) ? todayAvgWpm - yesterdayAvgWpm : (todayAvgWpm > 0 ? todayAvgWpm : 0);
 
-    return { averageWpm: avg, wpmTier: tier };
-  }, [dailySnapshots]);
+    const last7DaysReading: { date: string; displayDate: string; words: number; wpm: number; isToday: boolean }[] = [];
+    let weekTotalWords = 0;
 
-
-  // 3.5. 発話特訓（シャドーイング・オーバーラッピング）集計
-  const speechStats = useMemo(() => {
-    const todayStr = getTodayDateString();
-    const todayLogs = speechLogs.filter(l => l.dateString === todayStr);
-    const todayUtterances = todayLogs.length;
-    const todayUniqueSentences = new Set(
-      todayLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
-    ).size;
-
-    const totalUtterances = speechLogs.length;
-    const totalUniqueSentences = new Set(
-      speechLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
-    ).size;
-
-    const completedSpeechStories = (stories || []).filter(s => s.speechPracticeStatus === 'completed').length;
-    const inProgressSpeechStories = (stories || []).filter(s => s.speechPracticeStatus === 'in_progress').length;
-
-    const last7DaysSpeech: { date: string; displayDate: string; utterances: number; uniqueCount: number; isToday: boolean }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dateStr = formatDateKey(d);
       const displayDate = `${d.getMonth() + 1}/${d.getDate()}`;
-      const dayLogs = speechLogs.filter(l => l.dateString === dateStr);
-      const utterances = dayLogs.length;
-      const uniqueCount = new Set(
-        dayLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
-      ).size;
       const snap = dailySnapshots.find(s => s.date === dateStr);
+      const dayLogs = readingLogs.filter(l => l.dateString === dateStr);
+      const dayWords = dayLogs.reduce((acc, l) => acc + (l.wordsCount || 0), 0) || snap?.wordsRead || 0;
+      const dayWpms = dayLogs.map(l => l.wpm).filter(w => w > 0);
+      const dayWpm = dayWpms.length > 0 ? Math.round(dayWpms.reduce((a, b) => a + b, 0) / dayWpms.length) : (snap?.averageWpm || 0);
 
-      last7DaysSpeech.push({
+      weekTotalWords += dayWords;
+      last7DaysReading.push({
         date: dateStr,
         displayDate,
-        utterances: utterances > 0 ? utterances : (snap?.speechUtterancesCount || 0),
-        uniqueCount: uniqueCount > 0 ? uniqueCount : (snap?.uniqueSentencesCount || 0),
+        words: dayWords,
+        wpm: dayWpm,
         isToday: dateStr === todayStr,
       });
     }
 
-    const maxUtterances = Math.max(...last7DaysSpeech.map(d => d.utterances), 20);
+    const completedStories = (stories || []).filter(st => st.isRead === true || (st.readCount && st.readCount > 0));
+    const totalStoriesCount = completedStories.length;
+    const todayCompletedStoriesCount = todayLogs.length;
+    const yesterdayCompletedStoriesCount = yesterdayLogs.length;
+    const deltaStories = todayCompletedStoriesCount - yesterdayCompletedStoriesCount;
+
+    const maxWords = Math.max(...last7DaysReading.map(d => d.words), 300);
+
+    // 累積総読了語数
+    const totalAllWords = readingLogs.reduce((acc, l) => acc + (l.wordsCount || 0), 0) || 
+      completedStories.reduce((acc, st) => acc + (st.actualWordCount || st.targetWordCount || 500) * (st.readCount || 1), 0);
 
     return {
-      todayUtterances,
-      todayUniqueSentences,
-      totalUtterances,
-      totalUniqueSentences,
-      completedSpeechStories,
-      inProgressSpeechStories,
-      last7DaysSpeech,
-      maxUtterances,
+      todayWords,
+      deltaWords,
+      todayAvgWpm,
+      deltaWpm,
+      weekTotalWords,
+      totalStoriesCount,
+      deltaStories,
+      totalAllWords,
+      last7DaysReading,
+      maxWords,
     };
-  }, [speechLogs, stories, dailySnapshots]);
+  }, [readingLogs, stories, dailySnapshots, todayStr, yesterdayStr]);
 
-  // 3. 連続学習ストリーク（日数）
-  const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
+  // ---------------------------------------------------------------------------
+  // 2. リスニング (Listening & LP & Story Listening) 集計 & 前日比
+  // ---------------------------------------------------------------------------
+  const listeningStats = useMemo(() => {
+    const todayLP = labAnalytics.todayAverageLP || 0;
+    const yesterdayLP = labAnalytics.yesterdayAverageLP || 0;
+    const deltaLP = labAnalytics.deltaVsYesterday || (todayLP > 0 && yesterdayLP > 0 ? Math.round((todayLP - yesterdayLP) * 10) / 10 : 0);
 
-  // 4. 初見リスニング & 実効バンド幅・ボトルネック集計
-  const storyListeningStats = useMemo(() => {
-    const storyList = stories || [];
-    const completedListeningStories = storyList.filter(s => s.listeningStatus === 'completed' && s.listeningMetrics);
-    const totalListened = completedListeningStories.length;
+    const wordCapacity = labAnalytics.movingAverageWordCapacity || 0;
+    const passRate = labAnalytics.perfectPassRate || 0;
+
+    // 今日の問題数 vs 昨日の問題数
+    const todayHistory = labAnalytics.dailyHistory.find(d => d.dateString === todayStr);
+    const yesterdayHistory = labAnalytics.dailyHistory.find(d => d.dateString === yesterdayStr);
+    const todayQuestionCount = todayHistory?.questionCount || 0;
+    const yesterdayQuestionCount = yesterdayHistory?.questionCount || 0;
+    const deltaQuestions = todayQuestionCount - yesterdayQuestionCount;
+
+    // ストーリー初見リスニング集計
+    const completedListeningStories = (stories || []).filter(s => s.listeningStatus === 'completed' && s.listeningMetrics);
+    const totalListenedStories = completedListeningStories.length;
     
     let totalChunks = 0;
     let totalLatencyMs = 0;
     let sumFirstPassRates = 0;
     let sumEffectiveWpms = 0;
     let validWpmCount = 0;
-    const allBottlenecks: {
+    const allBottlenecks: Array<{
       storyTitle: string;
       unitIdx: number;
       textEn: string;
@@ -209,7 +246,7 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
       retryCount: number;
       revealedEnglish: boolean;
       elapsedMs: number;
-    }[] = [];
+    }> = [];
 
     completedListeningStories.forEach(s => {
       const m = s.listeningMetrics!;
@@ -241,1034 +278,1127 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
     });
 
     const avgChunkLatencyMs = totalChunks > 0 ? Math.round(totalLatencyMs / totalChunks) : 0;
-    const avgFirstPassRate = totalListened > 0 ? Math.round(sumFirstPassRates / totalListened) : 100;
+    const avgFirstPassRate = totalListenedStories > 0 ? Math.round(sumFirstPassRates / totalListenedStories) : 100;
     const avgEffectiveListeningWpm = validWpmCount > 0 ? Math.round(sumEffectiveWpms / validWpmCount) : 0;
 
-    return {
-      totalListened,
-      totalChunks,
-      avgChunkLatencyMs,
-      avgFirstPassRate,
-      avgEffectiveListeningWpm,
-      allBottlenecks,
-      listenedStories: completedListeningStories,
-    };
-  }, [stories]);
-
-  // 5. 直近7日間の日次データ
-  const last7DaysData = useMemo(() => {
-    const result: { date: string; displayDate: string; words: number; wpm: number; isToday: boolean }[] = [];
-    const todayStr = getTodayDateString();
-    
+    // 7日間LP推移
+    const last7DaysLP: { date: string; displayDate: string; avgLP: number; count: number; isToday: boolean }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dateStr = formatDateKey(d);
       const displayDate = `${d.getMonth() + 1}/${d.getDate()}`;
-      const snap = dailySnapshots.find(s => s.date === dateStr);
-      result.push({
+      const hist = labAnalytics.dailyHistory.find(h => h.dateString === dateStr);
+      last7DaysLP.push({
         date: dateStr,
         displayDate,
-        words: snap?.wordsRead || 0,
-        wpm: snap?.averageWpm || 0,
+        avgLP: hist?.avgLP || 0,
+        count: hist?.questionCount || 0,
         isToday: dateStr === todayStr,
       });
     }
-    return result;
-  }, [dailySnapshots]);
 
-  const maxWordsIn7Days = useMemo(() => {
-    return Math.max(...last7DaysData.map(d => d.words), 200);
-  }, [last7DaysData]);
+    const maxDailyLP = Math.max(...last7DaysLP.map(d => d.avgLP), 60);
 
-  // 6. CEFR日次・月次積み上げ推移データ
-  const cefrDailyBreakdowns = useMemo(() => {
-    const sorted = [...dailySnapshots].sort((a, b) => a.date.localeCompare(b.date));
-    const recent = sorted.slice(-10);
-    return recent.map(snap => {
-      const a1 = snap.a1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 100, patternMastered: 0, patternLapsed: 0, patternUnseen: 20 };
-      const a2 = snap.a2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 150, patternMastered: 0, patternLapsed: 0, patternUnseen: 30 };
-      const b1 = snap.b1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 200, patternMastered: 0, patternLapsed: 0, patternUnseen: 40 };
-      const b2 = snap.b2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 250, patternMastered: 0, patternLapsed: 0, patternUnseen: 50 };
+    return {
+      todayLP,
+      yesterdayLP,
+      deltaLP,
+      wordCapacity,
+      passRate,
+      todayQuestionCount,
+      deltaQuestions,
+      totalListenedStories,
+      avgChunkLatencyMs,
+      avgFirstPassRate,
+      avgEffectiveListeningWpm,
+      allBottlenecks,
+      last7DaysLP,
+      maxDailyLP,
+      wordCountStats: labAnalytics.wordCountStats,
+      recentRecords: labAnalytics.recentRecords,
+    };
+  }, [labAnalytics, stories, todayStr, yesterdayStr]);
 
-      const totalMastered = (a1.vocabMastered || 0) + (a1.patternMastered || 0) +
-                            (a2.vocabMastered || 0) + (a2.patternMastered || 0) +
-                            (b1.vocabMastered || 0) + (b1.patternMastered || 0) +
-                            (b2.vocabMastered || 0) + (b2.patternMastered || 0);
+  // ---------------------------------------------------------------------------
+  // 3. 発話・シャドーイング (Speech) 集計 & 前日比
+  // ---------------------------------------------------------------------------
+  const speechStats = useMemo(() => {
+    const todayLogs = speechLogs.filter(l => l.dateString === todayStr);
+    const yesterdayLogs = speechLogs.filter(l => l.dateString === yesterdayStr);
 
-      const totalLearning = (a1.vocabLapsed || 0) + (a1.patternLapsed || 0) + (a1.vocabExposed || 0) + (a1.patternExposed || 0) +
-                            (a2.vocabLapsed || 0) + (a2.patternLapsed || 0) + (a2.vocabExposed || 0) + (a2.patternExposed || 0) +
-                            (b1.vocabLapsed || 0) + (b1.patternLapsed || 0) + (b1.vocabExposed || 0) + (b1.patternExposed || 0) +
-                            (b2.vocabLapsed || 0) + (b2.patternLapsed || 0) + (b2.vocabExposed || 0) + (b2.patternExposed || 0);
+    const todayUtterances = todayLogs.length;
+    const yesterdayUtterances = yesterdayLogs.length;
+    const deltaUtterances = todayUtterances - yesterdayUtterances;
 
-      const totalItems = ((a1.vocabTotal || 0) + (a1.patternTotal || 0) +
-                          (a2.vocabTotal || 0) + (a2.patternTotal || 0) +
-                          (b1.vocabTotal || 0) + (b1.patternTotal || 0) +
-                          (b2.vocabTotal || 0) + (b2.patternTotal || 0)) || 1000;
+    const todayShadowing = todayLogs.filter(l => l.subStep === 'shadowing').length;
+    const yesterdayShadowing = yesterdayLogs.filter(l => l.subStep === 'shadowing').length;
+    const deltaShadowing = todayShadowing - yesterdayShadowing;
 
+    const todayOverlapping = todayLogs.filter(l => l.subStep === 'overlapping').length;
+    const yesterdayOverlapping = yesterdayLogs.filter(l => l.subStep === 'overlapping').length;
+    const deltaOverlapping = todayOverlapping - yesterdayOverlapping;
+
+    const totalUtterances = speechLogs.length;
+    const totalUniqueSentences = new Set(
+      speechLogs.map(l => (l.sentenceText && l.sentenceText.trim().length > 0 ? l.sentenceText.trim().toLowerCase() : `${l.storyId}_${l.sentenceIdx}`))
+    ).size;
+
+    const last7DaysSpeech: { 
+      date: string; 
+      displayDate: string; 
+      total: number; 
+      shadowing: number; 
+      overlapping: number; 
+      isToday: boolean 
+    }[] = [];
+
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = formatDateKey(d);
+      const displayDate = `${d.getMonth() + 1}/${d.getDate()}`;
+      const dayLogs = speechLogs.filter(l => l.dateString === dateStr);
+      const sCount = dayLogs.filter(l => l.subStep === 'shadowing').length;
+      const oCount = dayLogs.filter(l => l.subStep === 'overlapping').length;
+      const tCount = dayLogs.length;
+
+      last7DaysSpeech.push({
+        date: dateStr,
+        displayDate,
+        total: tCount,
+        shadowing: sCount,
+        overlapping: oCount,
+        isToday: dateStr === todayStr,
+      });
+    }
+
+    const maxUtterances = Math.max(...last7DaysSpeech.map(d => d.total), 20);
+
+    return {
+      todayUtterances,
+      deltaUtterances,
+      todayShadowing,
+      deltaShadowing,
+      todayOverlapping,
+      deltaOverlapping,
+      totalUtterances,
+      totalUniqueSentences,
+      last7DaysSpeech,
+      maxUtterances,
+    };
+  }, [speechLogs, todayStr, yesterdayStr]);
+
+  // ---------------------------------------------------------------------------
+  // 4. CEFR 習得度 (CEFR Mastery) 集計 (理解 / 組立の完全連動 & 前日比)
+  // ---------------------------------------------------------------------------
+  const cefrStats = useMemo(() => {
+    const isComprehension = cefrMode === 'comprehension';
+
+    // 1. 今日のレベル別実績値
+    const levels = (['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
+      const data = allCefrProgress[lvl];
+      const patternMastered = isComprehension ? (data.patternMastered || 0) : (data.patternAssemblyMastered || 0);
+      const vocabMastered = isComprehension ? (data.vocabMastered || 0) : (data.vocabAssemblyMastered || 0);
+      const totalMastered = patternMastered + vocabMastered;
+
+      const patternTotal = data.patternTotal || 1;
+      const vocabTotal = data.vocabTotal || 1;
+      const totalItems = patternTotal + vocabTotal;
+
+      const patternLapsed = data.patternLapsed || 0;
+      const vocabLapsed = data.vocabLapsed || 0;
+      const patternExposed = data.patternExposed || 0;
+      const vocabExposed = data.vocabExposed || 0;
+      const totalLearning = patternLapsed + vocabLapsed + patternExposed + vocabExposed;
       const totalUnseen = Math.max(0, totalItems - totalMastered - totalLearning);
+
+      const masteredPct = Math.round((totalMastered / totalItems) * 100);
+      const learningPct = Math.round((totalLearning / totalItems) * 100);
+      const unseenPct = Math.max(0, 100 - masteredPct - learningPct);
+
+      return {
+        level: lvl,
+        patternMastered,
+        patternTotal,
+        vocabMastered,
+        vocabTotal,
+        totalMastered,
+        totalLearning,
+        totalUnseen,
+        totalItems,
+        masteredPct,
+        learningPct,
+        unseenPct,
+        overallPct: isComprehension ? data.overallPct : data.overallAssemblyPct,
+      };
+    });
+
+    const totalMasteredItems = levels.reduce((acc, l) => acc + l.totalMastered, 0);
+    const totalPatternMastered = levels.reduce((acc, l) => acc + l.patternMastered, 0);
+    const totalVocabMastered = levels.reduce((acc, l) => acc + l.vocabMastered, 0);
+
+    // 2. 昨日のスナップショットとの比較による前日比
+    const yesterdaySnap = dailySnapshots.find(s => s.date === yesterdayStr);
+    let yesterdayTotalMastered = 0;
+    let yesterdayPatternMastered = 0;
+    let yesterdayVocabMastered = 0;
+
+    if (yesterdaySnap) {
+      const yA1 = yesterdaySnap.a1Progress;
+      const yA2 = yesterdaySnap.a2Progress;
+      const yB1 = yesterdaySnap.b1Progress;
+      const yB2 = yesterdaySnap.b2Progress;
+
+      if (isComprehension) {
+        yesterdayPatternMastered = (yA1?.patternMastered || 0) + (yA2?.patternMastered || 0) + (yB1?.patternMastered || 0) + (yB2?.patternMastered || 0);
+        yesterdayVocabMastered = (yA1?.vocabMastered || 0) + (yA2?.vocabMastered || 0) + (yB1?.vocabMastered || 0) + (yB2?.vocabMastered || 0);
+      } else {
+        yesterdayPatternMastered = (yA1?.patternAssemblyMastered || 0) + (yA2?.patternAssemblyMastered || 0) + (yB1?.patternAssemblyMastered || 0) + (yB2?.patternAssemblyMastered || 0);
+        yesterdayVocabMastered = (yA1?.vocabAssemblyMastered || 0) + (yA2?.vocabAssemblyMastered || 0) + (yB1?.vocabAssemblyMastered || 0) + (yB2?.vocabAssemblyMastered || 0);
+      }
+      yesterdayTotalMastered = yesterdayPatternMastered + yesterdayVocabMastered;
+    }
+
+    const deltaTotalMastered = yesterdayTotalMastered > 0 ? totalMasteredItems - yesterdayTotalMastered : 0;
+    const deltaPatternMastered = yesterdayPatternMastered > 0 ? totalPatternMastered - yesterdayPatternMastered : 0;
+    const deltaVocabMastered = yesterdayVocabMastered > 0 ? totalVocabMastered - yesterdayVocabMastered : 0;
+
+    // 現在のターゲットCEFRレベル
+    const targetLvl = (myGoal?.targetCefr || 'A2') as 'A1' | 'A2' | 'B1' | 'B2';
+    const targetData = levels.find(l => l.level === targetLvl) || levels[1];
+    const targetPct = targetData.masteredPct;
+
+    let deltaTargetPct = 0;
+    if (yesterdaySnap) {
+      const yTarget = targetLvl === 'A1' ? yesterdaySnap.a1Progress : targetLvl === 'A2' ? yesterdaySnap.a2Progress : targetLvl === 'B1' ? yesterdaySnap.b1Progress : yesterdaySnap.b2Progress;
+      const yTargetMastered = isComprehension
+        ? (yTarget?.patternMastered || 0) + (yTarget?.vocabMastered || 0)
+        : (yTarget?.patternAssemblyMastered || 0) + (yTarget?.vocabAssemblyMastered || 0);
+      const yTargetTotal = (yTarget?.patternTotal || 1) + (yTarget?.vocabTotal || 1);
+      const yPct = Math.round((yTargetMastered / yTargetTotal) * 100);
+      deltaTargetPct = targetPct - yPct;
+    }
+
+    // 日次積み上げ推移
+    const dailyBreakdowns = dailySnapshots.slice(-10).map(snap => {
+      const p1 = snap.a1Progress;
+      const p2 = snap.a2Progress;
+      const p3 = snap.b1Progress;
+      const p4 = snap.b2Progress;
+
+      const mCount = isComprehension
+        ? (p1?.patternMastered || 0) + (p1?.vocabMastered || 0) +
+          (p2?.patternMastered || 0) + (p2?.vocabMastered || 0) +
+          (p3?.patternMastered || 0) + (p3?.vocabMastered || 0) +
+          (p4?.patternMastered || 0) + (p4?.vocabMastered || 0)
+        : (p1?.patternAssemblyMastered || 0) + (p1?.vocabAssemblyMastered || 0) +
+          (p2?.patternAssemblyMastered || 0) + (p2?.vocabAssemblyMastered || 0) +
+          (p3?.patternAssemblyMastered || 0) + (p3?.vocabAssemblyMastered || 0) +
+          (p4?.patternAssemblyMastered || 0) + (p4?.vocabAssemblyMastered || 0);
+
+      const lCount = (p1?.patternLapsed || 0) + (p1?.vocabLapsed || 0) +
+                     (p2?.patternLapsed || 0) + (p2?.vocabLapsed || 0) +
+                     (p3?.patternLapsed || 0) + (p3?.vocabLapsed || 0) +
+                     (p4?.patternLapsed || 0) + (p4?.vocabLapsed || 0);
+
+      const tItems = ((p1?.patternTotal || 0) + (p1?.vocabTotal || 0) +
+                      (p2?.patternTotal || 0) + (p2?.vocabTotal || 0) +
+                      (p3?.patternTotal || 0) + (p3?.vocabTotal || 0) +
+                      (p4?.patternTotal || 0) + (p4?.vocabTotal || 0)) || 1000;
 
       return {
         date: snap.date,
         displayDate: snap.date.slice(5),
-        totalMastered,
-        totalLearning,
-        totalUnseen,
-        totalItems,
-        masteredPct: Math.round((totalMastered / totalItems) * 100),
-        learningPct: Math.round((totalLearning / totalItems) * 100),
-        unseenPct: Math.max(0, 100 - Math.round((totalMastered / totalItems) * 100) - Math.round((totalLearning / totalItems) * 100)),
+        mastered: mCount,
+        learning: lCount,
+        unseen: Math.max(0, tItems - mCount - lCount),
+        total: tItems,
+        pct: Math.round((mCount / tItems) * 100),
       };
     });
-  }, [dailySnapshots]);
 
-  // 月次集計
-  const cefrMonthlyBreakdowns = useMemo(() => {
-    const monthGroups: Record<string, DailySnapshot[]> = {};
-    dailySnapshots.forEach(s => {
-      const monthKey = s.date.slice(0, 7);
-      if (!monthGroups[monthKey]) monthGroups[monthKey] = [];
-      monthGroups[monthKey].push(s);
-    });
+    return {
+      levels,
+      totalMasteredItems,
+      deltaTotalMastered,
+      targetLvl,
+      targetPct,
+      deltaTargetPct,
+      totalPatternMastered,
+      deltaPatternMastered,
+      totalVocabMastered,
+      deltaVocabMastered,
+      dailyBreakdowns,
+    };
+  }, [cefrMode, allCefrProgress, dailySnapshots, myGoal, yesterdayStr]);
 
-    return Object.keys(monthGroups).sort().map(mKey => {
-      const list = monthGroups[mKey];
-      const latestSnap = list[list.length - 1];
-      const a1 = latestSnap.a1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 100, patternMastered: 0, patternLapsed: 0, patternUnseen: 20 };
-      const a2 = latestSnap.a2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 150, patternMastered: 0, patternLapsed: 0, patternUnseen: 30 };
-      const b1 = latestSnap.b1Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 200, patternMastered: 0, patternLapsed: 0, patternUnseen: 40 };
-      const b2 = latestSnap.b2Progress || { vocabMastered: 0, vocabLapsed: 0, vocabUnseen: 250, patternMastered: 0, patternLapsed: 0, patternUnseen: 50 };
+  // 連続学習ストリーク
+  const streakDays = useMemo(() => computeDailyStreak(dailySnapshots), [dailySnapshots]);
 
-      const totalMastered = (a1.vocabMastered || 0) + (a1.patternMastered || 0) +
-                            (a2.vocabMastered || 0) + (a2.patternMastered || 0) +
-                            (b1.vocabMastered || 0) + (b1.patternMastered || 0) +
-                            (b2.vocabMastered || 0) + (b2.patternMastered || 0);
-
-      const totalLearning = (a1.vocabLapsed || 0) + (a1.patternLapsed || 0) + (a1.vocabExposed || 0) + (a1.patternExposed || 0) +
-                            (a2.vocabLapsed || 0) + (a2.patternLapsed || 0) + (a2.vocabExposed || 0) + (a2.patternExposed || 0) +
-                            (b1.vocabLapsed || 0) + (b1.patternLapsed || 0) + (b1.vocabExposed || 0) + (b1.patternExposed || 0) +
-                            (b2.vocabLapsed || 0) + (b2.patternLapsed || 0) + (b2.vocabExposed || 0) + (b2.patternExposed || 0);
-
-      const totalItems = ((a1.vocabTotal || 0) + (a1.patternTotal || 0) +
-                          (a2.vocabTotal || 0) + (a2.patternTotal || 0) +
-                          (b1.vocabTotal || 0) + (b1.patternTotal || 0) +
-                          (b2.vocabTotal || 0) + (b2.patternTotal || 0)) || 1000;
-
-      const totalUnseen = Math.max(0, totalItems - totalMastered - totalLearning);
-
-      return {
-        month: mKey,
-        totalMastered,
-        totalLearning,
-        totalUnseen,
-        totalItems,
-        masteredPct: Math.round((totalMastered / totalItems) * 100),
-        learningPct: Math.round((totalLearning / totalItems) * 100),
-        unseenPct: Math.max(0, 100 - Math.round((totalMastered / totalItems) * 100) - Math.round((totalLearning / totalItems) * 100)),
-      };
-    });
-  }, [dailySnapshots]);
-
-  // 読了ログの削除ハンドラー
+  // 読了ログ削除
   const handleDeleteReadingLog = (logId: string) => {
-    if (confirm('この読了セッションログを削除しますか？')) {
+    if (window.confirm('この読了セッションログを削除しますか？')) {
       const updated = deleteReadingSessionLog(logId);
       setReadingLogs(updated.logs);
     }
   };
 
+  // 発話ログ削除
+  const handleDeleteSpeechLog = (logId: string) => {
+    if (window.confirm('この発話ログを削除しますか？')) {
+      const { logs } = deleteSpeechPracticeLog(logId);
+      setSpeechLogs(logs);
+    }
+  };
+
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 pb-20 animate-fadeIn">
-      {/* 1. TOP SUMMARY CARDS (4-GRID) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Card 1: 厳格な総読了語数 */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">総読了語数</span>
-            <BookOpen className="w-4 h-4 text-cyan-400" />
+    <div className="max-w-5xl mx-auto px-3 sm:px-6 py-6 space-y-7 pb-24 animate-fadeIn text-slate-100 font-sans">
+      
+      {/* =========================================================================
+          TOP GLOBAL HERO HUD: ストリーク & 総合情報処理パワー
+         ========================================================================= */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/60 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl flex items-center justify-between flex-wrap gap-4 relative overflow-hidden">
+        <div className="flex items-center space-x-3 sm:space-x-4 min-w-0">
+          <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-lg shadow-amber-500/25 shrink-0 animate-pulse">
+            <Flame className="w-7 h-7" />
           </div>
-          <div className="flex items-baseline space-x-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {totalWordsRead.toLocaleString()}
-            </span>
-            <span className="text-xs font-bold text-cyan-400">語</span>
-          </div>
-          <p className="text-[11px] text-slate-400 truncate">
-            読了: {completedStories.length} 冊 / 全 {stories.length} 冊
-          </p>
-        </div>
-
-        {/* Card 2: 実効情報処理バンド幅 (WPM) */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">実効バンド幅 (WPM)</span>
-            <Zap className="w-4 h-4 text-amber-400" />
-          </div>
-          <div className="flex items-baseline space-x-3">
-            <div>
-              <span className="text-[10px] text-slate-400 block">📖 読書</span>
-              <span className="text-xl sm:text-2xl font-black text-amber-300 font-mono">
-                {averageWpm > 0 ? averageWpm : '-'}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg sm:text-xl font-black text-white tracking-tight truncate">
+                学習アナリティクス & 認知負荷ダッシュボード
+              </h2>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                リアルタイム同期
               </span>
             </div>
-            <div className="text-slate-600 font-light">|</div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              リーディング・リスニング・発話・CEFR習得度の4大認知指標と前日比を追跡
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+          {/* Streak Indicator */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl px-4 py-2.5 flex items-center gap-2.5">
+            <Flame className="w-5 h-5 text-amber-400" />
             <div>
-              <span className="text-[10px] text-slate-400 block">🎧 聴覚</span>
-              <span className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
-                {storyListeningStats.avgEffectiveListeningWpm > 0 ? storyListeningStats.avgEffectiveListeningWpm : '-'}
-              </span>
+              <span className="text-[10px] text-slate-400 block font-semibold">連続学習</span>
+              <div className="flex items-baseline gap-1">
+                <span className="text-xl font-black text-amber-300 font-mono">{streakDays}</span>
+                <span className="text-[11px] text-slate-400 font-bold">日</span>
+              </div>
             </div>
           </div>
-          <p className="text-[11px] text-slate-400 truncate">
-            {wpmTier.label}
-          </p>
-        </div>
 
-        {/* Card 3: 聴覚一発パス率 */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">聴覚一発パス率</span>
-            <Flame className="w-4 h-4 text-emerald-400" />
+          {/* Goal Indicator */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl px-4 py-2.5 flex items-center gap-2.5">
+            <Target className="w-5 h-5 text-cyan-400" />
+            <div>
+              <span className="text-[10px] text-slate-400 block font-semibold">目標レベル</span>
+              <div className="flex items-baseline gap-1">
+                <span className="text-xl font-black text-cyan-300 font-mono">{cefrStats.targetLvl}</span>
+                <span className="text-[11px] text-emerald-400 font-bold font-mono">({cefrStats.targetPct}%)</span>
+              </div>
+            </div>
           </div>
-          <div className="flex items-baseline space-x-1.5">
-            <span className={`text-2xl sm:text-3xl font-black font-mono ${
-              storyListeningStats.totalListened > 0
-                ? storyListeningStats.avgFirstPassRate >= 80
-                  ? 'text-emerald-400'
-                  : storyListeningStats.avgFirstPassRate >= 50
-                  ? 'text-cyan-400'
-                  : 'text-amber-400'
-                : 'text-slate-400'
-            }`}>
-              {storyListeningStats.totalListened > 0 ? `${storyListeningStats.avgFirstPassRate}%` : '未測定'}
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 truncate">
-            0リトライ・即時圧縮
-          </p>
-        </div>
-
-        {/* Card 4: 連続学習ストリーク */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-1.5 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold">学習ストリーク</span>
-            <Sparkles className="w-4 h-4 text-purple-400" />
-          </div>
-          <div className="flex items-baseline space-x-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-purple-300 tracking-tight font-mono">
-              {streakDays}
-            </span>
-            <span className="text-xs font-bold text-purple-400">日連続</span>
-          </div>
-          <p className="text-[11px] text-slate-400 truncate">
-            英語脳コンパイル習慣
-          </p>
         </div>
       </div>
 
-      {/* 2. 7-DAY ACTIVITY & WPM TREND CHART */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
-              <BarChart3 className="w-5 h-5" />
+      {/* =========================================================================
+          CARD 1: 📖 リーディング分析 (Reading Analysis)
+         ========================================================================= */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 relative">
+        {/* Card Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3.5 flex-wrap gap-2">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+              <BookOpen className="w-5 h-5" />
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>直近7日間の学習実績 ＆ WPM推移</span>
+                <span>📖 リーディング分析</span>
               </h3>
-              <span className="text-[11px] text-slate-400">日次読了語数 ＆ WPM（読了完了時のみ厳格集計）</span>
+              <span className="text-[11px] text-slate-400">頭から英語の語順で理解する直読直解スピード ＆ 読書量</span>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          {/* Sub-Tab Switcher */}
+          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs">
             <button
-              onClick={() => setIsReadingLogOpen(!isReadingLogOpen)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+              onClick={() => setReadingTab('chart')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                readingTab === 'chart'
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
             >
-              <span>読了ログ詳細 ({readingLogs.length}件)</span>
-              {isReadingLogOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>7日間推移 & WPM</span>
+            </button>
+            <button
+              onClick={() => setReadingTab('logs')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                readingTab === 'logs'
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>読了履歴 ({readingLogs.length})</span>
             </button>
           </div>
         </div>
 
-        {/* 7-Day Bar & Indicator Chart */}
-        <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-2">
-          {last7DaysData.map((d, i) => {
-            const heightPct = Math.min(100, Math.round((d.words / maxWordsIn7Days) * 100));
-            return (
-              <div key={i} className="flex flex-col items-center space-y-2 group">
-                <div className="text-[10px] font-mono text-slate-400 group-hover:text-cyan-300 transition-colors">
-                  {d.wpm > 0 ? `${d.wpm}w` : '-'}
-                </div>
-
-                <div className="w-full bg-slate-950 h-28 sm:h-32 rounded-2xl p-1 flex flex-col justify-end border border-slate-800/80 relative overflow-hidden">
-                  <div
-                    className={`w-full rounded-xl transition-all duration-500 ${
-                      d.words > 0
-                        ? d.isToday
-                          ? 'bg-gradient-to-t from-cyan-600 to-indigo-500 shadow-lg shadow-cyan-500/20'
-                          : 'bg-gradient-to-t from-slate-700 to-slate-500 group-hover:from-cyan-700 group-hover:to-indigo-600'
-                        : 'bg-transparent'
-                    }`}
-                    style={{ height: `${d.words > 0 ? Math.max(12, heightPct) : 0}%` }}
-                  />
-                  {d.words > 0 && (
-                    <div className="absolute inset-x-0 bottom-1 text-center text-[9px] font-bold font-mono text-white/90">
-                      {d.words}
-                    </div>
-                  )}
-                </div>
-
-                <div className={`text-[11px] font-medium font-mono ${d.isToday ? 'text-cyan-400 font-bold' : 'text-slate-400'}`}>
-                  {d.displayDate}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Collapsible Reading Session Logs Table */}
-        {isReadingLogOpen && (
-          <div className="mt-4 pt-4 border-t border-slate-800 space-y-3 animate-fadeIn">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>読了ログ（誤タップ等のノイズはここから個別削除できます）</span>
-              <span className="font-mono">最新 {readingLogs.length} 件</span>
+        {/* 4 Quick Metrics Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Quick Metric 1 */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">今日の読書語数</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{readingStats.todayWords.toLocaleString()}</span>
+              <span className="text-xs font-bold text-cyan-400">語</span>
             </div>
-
-            {readingLogs.length === 0 ? (
-              <div className="text-center py-6 text-xs text-slate-500">
-                まだ読了ログがありません。ストーリーを読了するとここに記録されます。
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                {readingLogs.map(log => (
-                  <div
-                    key={log.id}
-                    className="flex items-center justify-between p-3 bg-slate-950/80 border border-slate-800/80 rounded-2xl text-xs hover:border-slate-700 transition-colors"
-                  >
-                    <div className="space-y-1 min-w-0">
-                      <div className="font-bold text-white truncate">
-                        {log.storyTitle || '無題の物語'}
-                      </div>
-                      <div className="flex items-center space-x-3 text-[11px] text-slate-400">
-                        <span>📅 {log.dateString}</span>
-                        <span>📄 {log.wordsCount} 語</span>
-                        <span className="text-cyan-400 font-bold">⚡ {log.wpm} wpm</span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => handleDeleteReadingLog(log.id)}
-                      className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-xl transition-colors shrink-0 cursor-pointer"
-                      title="この読了記録を削除"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 3. 🎙️ 発話特訓（シャドーイング・オーバーラッピング）実績 ＆ 日別推移 */}
-      <div className="bg-slate-900/90 border border-purple-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
-              <Mic className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>発話特訓（シャドーイング・オーバーラップ）実績</span>
-                <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-mono">
-                  Speech Mileage
-                </span>
-              </h3>
-              <p className="text-xs text-slate-400">
-                声に出した回数（発話リピート数）と日々のユニーク発話文数の積み上げ
-              </p>
-            </div>
+            <DeltaBadge value={readingStats.deltaWords} unit="語" />
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setIsSpeechLogOpen(!isSpeechLogOpen)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
-            >
-              <span>発話ログ詳細 ({speechLogs.length}件)</span>
-              {isSpeechLogOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        </div>
-
-        {/* Speech Practice Summary KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Card 1: Today's Speech Repetitions */}
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-bold">今日の発話量</span>
-              <Mic className="w-4 h-4 text-purple-400" />
-            </div>
-            <div className="text-2xl sm:text-3xl font-black text-purple-300 font-mono">
-              {speechStats.todayUtterances} <span className="text-xs font-normal text-slate-400">回</span>
-            </div>
-            <p className="text-[11px] text-purple-400 font-medium">
-              ユニーク {speechStats.todayUniqueSentences} 文 練習
-            </p>
-          </div>
-
-          {/* Card 2: Total Speech Utterances */}
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-bold">累計発話回数</span>
-              <Flame className="w-4 h-4 text-pink-400" />
-            </div>
-            <div className="text-2xl sm:text-3xl font-black text-pink-300 font-mono">
-              {speechStats.totalUtterances} <span className="text-xs font-normal text-slate-400">回</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              総リピート・マイレージ
-            </p>
-          </div>
-
-          {/* Card 3: Total Unique Sentences */}
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-bold">累計ユニーク文数</span>
-              <Sparkles className="w-4 h-4 text-cyan-400" />
-            </div>
-            <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
-              {speechStats.totalUniqueSentences} <span className="text-xs font-normal text-slate-400">文</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              口に馴染ませた英語構文
-            </p>
-          </div>
-
-          {/* Card 4: Completed Stories */}
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1 relative overflow-hidden">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-bold">特訓完走ストーリー</span>
-              <Trophy className="w-4 h-4 text-amber-400" />
-            </div>
-            <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono">
-              {speechStats.completedSpeechStories} <span className="text-xs font-normal text-slate-400">編</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              特訓中: {speechStats.inProgressSpeechStories} 編
-            </p>
-          </div>
-        </div>
-
-        {/* 7-Day Speech Trend Chart */}
-        <div className="space-y-2 pt-2">
-          <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>直近7日間の日別発話回数（バー）＆ ユニーク文数（ラベル）</span>
-            <span className="font-mono text-purple-300">最高: {speechStats.maxUtterances}回 / 日</span>
-          </div>
-
-          <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-1">
-            {speechStats.last7DaysSpeech.map((d, i) => {
-              const heightPct = Math.min(100, Math.round((d.utterances / speechStats.maxUtterances) * 100));
-              return (
-                <div key={i} className="flex flex-col items-center space-y-2 group">
-                  <div className="text-[10px] font-mono text-slate-400 group-hover:text-purple-300 transition-colors">
-                    {d.uniqueCount > 0 ? `${d.uniqueCount}文` : '-'}
-                  </div>
-
-                  <div className="w-full bg-slate-950 h-28 sm:h-32 rounded-2xl p-1 flex flex-col justify-end border border-slate-800/80 relative overflow-hidden">
-                    <div
-                      className={`w-full rounded-xl transition-all duration-500 ${
-                        d.utterances > 0
-                          ? d.isToday
-                            ? 'bg-gradient-to-t from-purple-600 via-indigo-500 to-pink-500 shadow-lg shadow-purple-500/25'
-                            : 'bg-gradient-to-t from-purple-900/80 to-purple-600/80 group-hover:from-purple-600 group-hover:to-pink-500'
-                          : 'bg-transparent'
-                      }`}
-                      style={{ height: `${d.utterances > 0 ? Math.max(12, heightPct) : 0}%` }}
-                    />
-                    {d.utterances > 0 && (
-                      <div className="absolute inset-x-0 bottom-1 text-center text-[9px] font-bold font-mono text-white/90">
-                        {d.utterances}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={`text-[11px] font-medium font-mono ${d.isToday ? 'text-purple-400 font-bold' : 'text-slate-400'}`}>
-                    {d.displayDate}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Collapsible Speech Practice Logs Table */}
-        {isSpeechLogOpen && (
-          <div className="mt-4 pt-4 border-t border-slate-800 space-y-3 animate-fadeIn">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>発話特訓ログ（誤操作等のログは個別削除できます）</span>
-              <span className="font-mono">最新 {speechLogs.length} 件</span>
-            </div>
-
-            {speechLogs.length === 0 ? (
-              <div className="text-center py-6 text-xs text-slate-500">
-                まだ発話ログがありません。発話特訓（シャドーイング・オーバーラップ）を行うとここに記録されます。
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {speechLogs.slice(0, 50).map(log => (
-                  <div
-                    key={log.id}
-                    className="flex items-center justify-between p-3 bg-slate-950/80 border border-slate-800/80 rounded-2xl text-xs hover:border-slate-700 transition-colors gap-3"
-                  >
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold font-mono ${
-                          log.subStep === 'overlapping'
-                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
-                            : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                        }`}>
-                          {log.subStep === 'overlapping' ? '🗣️ オーバーラップ' : '🎧 シャドーイング'}
-                        </span>
-                        <span className="font-bold text-white truncate text-xs">
-                          {log.storyTitle || '英語ストーリー'} (文 {log.sentenceIdx + 1})
-                        </span>
-                      </div>
-                      {log.sentenceText && (
-                        <p className="text-[11px] text-slate-300 font-serif line-clamp-1 italic">
-                          "{log.sentenceText}"
-                        </p>
-                      )}
-                      <div className="text-[10px] text-slate-500 font-mono">
-                        📅 {log.dateString} ({new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => handleDeleteSpeechLog(log.id)}
-                      className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-xl transition-colors shrink-0 cursor-pointer"
-                      title="この発話記録を削除"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* =================================================================
-          🎧 新生リスニング集中ラボ（帯域パワー & ベンチマーク分析）
-          ================================================================= */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
-              <Headphones className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
-                <span>🎧 リスニング処理パワー (Listening Power: LP)</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
-                  純粋聴覚帯域
-                </span>
-              </h3>
-              <p className="text-xs text-slate-400">
-                未知語（語彙不足）を除外し、純粋な音声変化知覚・ワーキングメモリのリアルタイム処理能力を計測
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Listening Lab Power KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">今日の平均パワー</span>
-            <div className="flex items-baseline space-x-1.5">
-              <span className="text-2xl font-black text-amber-300 font-mono">
-                {labAnalytics.todayAverageLP > 0 ? `${labAnalytics.todayAverageLP}` : '-'}
+          {/* Quick Metric 2 */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">読書スピード (WPM)</span>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl sm:text-3xl font-black text-amber-300 font-mono">
+                {readingStats.todayAvgWpm > 0 ? readingStats.todayAvgWpm : '-'}
               </span>
-              {labAnalytics.todayAverageLP > 0 && <span className="text-xs text-slate-400 font-normal">LP</span>}
-              {labAnalytics.deltaVsYesterday !== 0 && (
-                <span className={`text-[10px] font-bold ${labAnalytics.deltaVsYesterday > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {labAnalytics.deltaVsYesterday > 0 ? `+${labAnalytics.deltaVsYesterday}` : labAnalytics.deltaVsYesterday}
-                </span>
-              )}
+              <span className="text-xs font-bold text-amber-400">WPM</span>
             </div>
+            <DeltaBadge value={readingStats.deltaWpm} />
           </div>
 
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">7日間移動平均</span>
-            <div className="flex items-baseline space-x-1.5">
-              <span className="text-2xl font-black text-cyan-300 font-mono">
-                {labAnalytics.movingAverageLP7Days > 0 ? `${labAnalytics.movingAverageLP7Days}` : '-'}
-              </span>
-              {labAnalytics.movingAverageLP7Days > 0 && <span className="text-xs text-slate-400 font-normal">LP</span>}
-              <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
+          {/* Quick Metric 3 */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">直近7日間の総読書量</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{readingStats.weekTotalWords.toLocaleString()}</span>
+              <span className="text-xs font-bold text-cyan-400">語</span>
             </div>
+            <span className="text-[10px] text-slate-500 font-mono block">累積: {readingStats.totalAllWords.toLocaleString()} 語</span>
           </div>
 
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">処理可能単語数 (移動平均)</span>
-            <div className="text-2xl font-black text-indigo-300 font-mono">
-              {labAnalytics.movingAverageWordCapacity > 0 ? `${labAnalytics.movingAverageWordCapacity}` : '-'}
-              <span className="text-xs font-normal text-slate-400 ml-1">語</span>
+          {/* Quick Metric 4 */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">読破ストーリー数</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{readingStats.totalStoriesCount}</span>
+              <span className="text-xs font-bold text-cyan-400">冊</span>
             </div>
-          </div>
-
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">完全突破率 (マーク0)</span>
-            <div className="text-2xl font-black text-emerald-400 font-mono">
-              {labAnalytics.totalQuestions > 0 ? `${labAnalytics.perfectPassRate}%` : '-'}
-            </div>
+            <DeltaBadge value={readingStats.deltaStories} unit="冊" prefix="今日" />
           </div>
         </div>
 
-        {/* Word Length Breakdown & Daily Trend Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* A. 文長別の突破率 & 平均LP */}
-          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
-            <span className="text-xs font-bold text-slate-300 block">文長別の完全突破率 ＆ 平均パワー:</span>
-            {Object.keys(labAnalytics.wordCountStats).length > 0 ? (
-              <div className="space-y-2">
-                {Object.entries(labAnalytics.wordCountStats).map(([wc, stat]) => (
-                  <div key={wc} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
-                    <span className="font-mono font-bold text-cyan-300 w-16">{wc} 語文</span>
-                    <div className="flex-1 mx-3 h-2 bg-slate-800 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full"
-                        style={{ width: `${stat.passRate}%` }}
-                      />
-                    </div>
-                    <div className="text-right font-mono space-x-2">
-                      <span className="text-slate-400 text-[11px]">{stat.passRate}%</span>
-                      <strong className="text-amber-300">{stat.avgLP > 0 ? `${stat.avgLP} LP` : '-'}</strong>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500 py-4 text-center">特訓を実施すると文長ごとのデータが表示されます</p>
-            )}
-          </div>
-
-          {/* B. 日次パワー推移 */}
-          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
-            <span className="text-xs font-bold text-slate-300 block">日次パワー推移（直近）:</span>
-            {labAnalytics.dailyHistory.length > 0 ? (
-              <div className="space-y-2">
-                {labAnalytics.dailyHistory.slice(0, 5).map(d => (
-                  <div key={d.dateString} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
-                    <span className="font-mono text-slate-300 font-bold">{d.dateString}</span>
-                    <span className="text-slate-400 font-mono">{d.questionCount} 問</span>
-                    <strong className="font-mono text-amber-300">{d.avgLP} LP</strong>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500 py-4 text-center">日別のパワーデータが蓄積されると推移が表示されます</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* 4. 🎧 初見リスニング・実効バンド幅 ＆ 要復習ボトルネック */}
-      <div className="bg-slate-900/90 border border-indigo-500/30 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-              <Headphones className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>初見リスニング ＆ 聴覚実効バンド幅</span>
-                <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono">
-                  Auditory Bandwidth
-                </span>
-              </h3>
-              <p className="text-xs text-slate-400">
-                ブラインド反復リスニングにおける0リトライ圧縮率と実効処理速度
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Listening Summary KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">初見完走ストーリー</span>
-            <div className="text-2xl font-black text-indigo-300 font-mono">
-              {storyListeningStats.totalListened} <span className="text-xs font-normal text-slate-400">本</span>
-            </div>
-          </div>
-
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">実効リスニング速度</span>
-            <div className="text-2xl font-black text-cyan-300 font-mono">
-              {storyListeningStats.avgEffectiveListeningWpm > 0
-                ? `${storyListeningStats.avgEffectiveListeningWpm}`
-                : storyListeningStats.avgChunkLatencyMs > 0
-                ? `${(storyListeningStats.avgChunkLatencyMs / 1000).toFixed(1)}s`
-                : '-'}
-              <span className="text-xs font-normal text-slate-400 ml-1">
-                {storyListeningStats.avgEffectiveListeningWpm > 0 ? 'wpm' : '/ 塊'}
-              </span>
-            </div>
-          </div>
-
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">平均一発パス率</span>
-            <div className="text-2xl font-black text-emerald-400 font-mono">
-              {storyListeningStats.totalListened > 0 ? `${storyListeningStats.avgFirstPassRate}%` : '-'}
-            </div>
-          </div>
-
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 font-bold">要復習ボトルネック</span>
-            <div className="text-2xl font-black text-amber-400 font-mono">
-              {storyListeningStats.allBottlenecks.length} <span className="text-xs font-normal text-slate-400">件</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Bottleneck Review Stream */}
-        {storyListeningStats.allBottlenecks.length > 0 ? (
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 sm:p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-amber-400 font-bold text-xs sm:text-sm">
-                <AlertTriangle className="w-4 h-4" />
-                <span>🚨 リスニングで詰まった要復習文（直近ストーリー横断）</span>
-              </div>
-              <span className="text-xs text-slate-400 font-mono">
-                {storyListeningStats.allBottlenecks.length} 件蓄積中
-              </span>
-            </div>
-
-            <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-              {storyListeningStats.allBottlenecks.slice(0, 15).map((item, idx) => (
-                <div
-                  key={idx}
-                  className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5 hover:border-slate-700 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="text-[10px] text-indigo-400 font-bold block mb-0.5">
-                        📖 {item.storyTitle} (文 {item.unitIdx + 1})
-                      </span>
-                      <p className="text-xs sm:text-sm font-bold text-white leading-relaxed font-serif">
-                        {item.textEn}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => speakText(item.textEn, 1.0, 'en-US')}
-                      className="p-1.5 bg-slate-800 hover:bg-slate-750 text-indigo-300 hover:text-white rounded-lg border border-slate-700 transition-all shrink-0 cursor-pointer"
-                      title="音声を再生"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <p className="text-[11px] text-slate-400 leading-snug">
-                    {item.translationJa}
-                  </p>
-
-                  <div className="flex items-center gap-2 pt-1 text-[10px]">
-                    {item.retryCount > 0 && (
-                      <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
-                        🔄 リトライ {item.retryCount} 回
-                      </span>
-                    )}
-                    {item.revealedEnglish && (
-                      <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
-                        👁️ 英文確認
-                      </span>
-                    )}
-                    <span className="text-slate-500 font-mono ml-auto">
-                      所要: {(item.elapsedMs / 1000).toFixed(1)}s
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : storyListeningStats.totalListened > 0 ? (
-          <div className="p-4 bg-emerald-950/40 border border-emerald-500/30 rounded-2xl text-emerald-300 text-xs font-bold flex items-center justify-center gap-2">
-            <Sparkles className="w-4 h-4 text-emerald-400" />
-            <span>完璧です！直近のストーリーはすべて一発で聞き取れています！</span>
-          </div>
-        ) : null}
-      </div>
-
-      {/* 5. 🌐 リアルCEFRシラバス進捗マップ (A1〜B2) ＆ 積み上げ分布推移 */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 transition-all">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-blue-950 border border-blue-500/30 flex items-center justify-center text-sky-400">
-              <Globe className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="text-base sm:text-lg font-black text-white">
-                  🌐 リアルCEFRシラバス進捗 ＆ 積み上げ推移
-                </h3>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                【🟢 習得済 / 🟡 学習中 / ⚪ 未知】の3状態リアルタイム分布 ＆ 日次・月次の積み上げ
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Timeline Selector: リアルタイム vs 日次 vs 月次 */}
-            <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800">
-              <button
-                onClick={() => setTimelineView('realtime')}
-                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  timelineView === 'realtime'
-                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                現在値
-              </button>
-              <button
-                onClick={() => setTimelineView('daily')}
-                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  timelineView === 'daily'
-                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                日次積み上げ
-              </button>
-              <button
-                onClick={() => setTimelineView('monthly')}
-                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  timelineView === 'monthly'
-                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                月次積み上げ
-              </button>
-            </div>
-
-            {/* Mode Switcher: 理解 vs 組立 */}
-            <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800">
-              <button
-                onClick={() => setProgressMode('comprehension')}
-                className={`flex items-center space-x-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  progressMode === 'comprehension'
-                    ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <BookOpen className="w-3 h-3" />
-                <span>理解</span>
-              </button>
-              <button
-                onClick={() => setProgressMode('assembly')}
-                className={`flex items-center space-x-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  progressMode === 'assembly'
-                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <PenTool className="w-3 h-3" />
-                <span>組立</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {timelineView === 'realtime' ? (
-          /* Realtime CEFR Stacked Level Grid (A1〜B2) */
-          <div className="space-y-4">
+        {/* Visual / Detail Content */}
+        {readingTab === 'chart' ? (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-3">
             <div className="flex items-center justify-between text-xs text-slate-400">
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
-                  <span className="text-emerald-300 font-bold">習得済 (Mastered)</span>
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
-                  <span className="text-amber-300 font-bold">学習中 (In Progress)</span>
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-600 inline-block" />
-                  <span className="text-slate-400 font-bold">未知 (Unseen)</span>
-                </span>
-              </div>
+              <span className="font-semibold">直近7日間の日次読書語数 ＆ WPM</span>
+              <span className="text-[11px] text-slate-500 font-mono">最高 {readingStats.maxWords} 語/日</span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-              {(['A1', 'A2', 'B1', 'B2'] as const).map(lvl => {
-                const data = allCefrProgress[lvl];
-                const totalItems = (data.patternTotal || 0) + (data.vocabTotal || 0);
-
-                const masteredCount = progressMode === 'comprehension'
-                  ? (data.patternMastered || 0) + (data.vocabMastered || 0)
-                  : (data.patternAssemblyMastered || 0) + (data.vocabAssemblyMastered || 0);
-
-                const learningCount = (data.patternLapsed || 0) + (data.patternExposed || 0) +
-                                      (data.vocabLapsed || 0) + (data.vocabExposed || 0);
-
-                const unseenCount = Math.max(0, totalItems - masteredCount - learningCount);
-
-                const masteredPct = Math.round((masteredCount / totalItems) * 100);
-                const learningPct = Math.round((learningCount / totalItems) * 100);
-                const unseenPct = Math.max(0, 100 - masteredPct - learningPct);
-
+            <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-2">
+              {readingStats.last7DaysReading.map((d, i) => {
+                const heightPct = Math.min(100, Math.round((d.words / readingStats.maxWords) * 100));
                 return (
-                  <div
-                    key={lvl}
-                    className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-3 relative overflow-hidden group hover:border-slate-700 transition-colors"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono font-black text-base text-white px-2.5 py-0.5 rounded-lg bg-slate-900 border border-slate-700">
-                        {lvl}
-                      </span>
-                      <span className="text-xs font-bold text-cyan-400 font-mono">
-                        {masteredPct}% 習得
-                      </span>
-                    </div>
-
-                    {/* Stacked Progress Bar */}
-                    <div className="w-full bg-slate-900 h-3 rounded-full overflow-hidden flex shadow-inner">
-                      {/* Mastered */}
+                  <div key={i} className="flex flex-col items-center space-y-2 group">
+                    <span className="text-[10px] font-mono text-cyan-300 font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                      {d.words}
+                    </span>
+                    <div className="w-full bg-slate-900 rounded-xl h-28 flex flex-col justify-end p-1 relative overflow-hidden border border-slate-800 group-hover:border-cyan-500/40 transition-colors">
                       <div
-                        className="bg-gradient-to-r from-emerald-500 to-emerald-400 h-full transition-all duration-500"
-                        style={{ width: `${masteredPct}%` }}
-                        title={`習得済: ${masteredCount} (${masteredPct}%)`}
-                      />
-                      {/* Learning */}
-                      <div
-                        className="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-500"
-                        style={{ width: `${learningPct}%` }}
-                        title={`学習中: ${learningCount} (${learningPct}%)`}
-                      />
-                      {/* Unseen */}
-                      <div
-                        className="bg-slate-800 h-full transition-all duration-500"
-                        style={{ width: `${unseenPct}%` }}
-                        title={`未知: ${unseenCount} (${unseenPct}%)`}
+                        className={`w-full rounded-lg transition-all duration-500 ${
+                          d.isToday
+                            ? 'bg-gradient-to-t from-cyan-600 to-blue-500 shadow-md shadow-cyan-500/30'
+                            : d.words > 0
+                            ? 'bg-slate-700 group-hover:bg-cyan-600/80'
+                            : 'bg-transparent'
+                        }`}
+                        style={{ height: `${Math.max(4, heightPct)}%` }}
                       />
                     </div>
-
-                    <div className="grid grid-cols-3 gap-1 text-[10px] text-center pt-1 font-mono">
-                      <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
-                        <span className="text-emerald-400 block font-bold">{masteredCount}</span>
-                        <span className="text-slate-500">習得</span>
-                      </div>
-                      <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
-                        <span className="text-amber-400 block font-bold">{learningCount}</span>
-                        <span className="text-slate-500">学習中</span>
-                      </div>
-                      <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
-                        <span className="text-slate-400 block font-bold">{unseenCount}</span>
-                        <span className="text-slate-500">未知</span>
-                      </div>
+                    <div className="text-center">
+                      <span className={`text-[11px] font-mono block ${d.isToday ? 'text-cyan-400 font-black' : 'text-slate-400'}`}>
+                        {d.displayDate}
+                      </span>
+                      <span className="text-[10px] font-mono text-amber-400/80 block">
+                        {d.wpm > 0 ? `${d.wpm}w` : '-'}
+                      </span>
                     </div>
                   </div>
                 );
               })}
             </div>
           </div>
-        ) : timelineView === 'daily' ? (
-          /* Daily Stacked Progression (日次積み上げ推移) */
-          <div className="space-y-4">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>直近の日次学習ログに基づくCEFRアイテム推移</span>
-              <span className="font-mono">{cefrDailyBreakdowns.length} 日分</span>
-            </div>
-
-            {cefrDailyBreakdowns.length === 0 ? (
-              <div className="text-center py-8 text-xs text-slate-500">
-                日次スナップショットがまだ蓄積されていません。学習を進めると自動記録されます。
-              </div>
+        ) : (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
+            {readingLogs.length === 0 ? (
+              <p className="text-center py-6 text-xs text-slate-500">読了セッション履歴はまだありません。</p>
             ) : (
-              <div className="space-y-2.5">
-                {cefrDailyBreakdowns.map((d, idx) => (
-                  <div key={idx} className="p-3 bg-slate-950/80 rounded-2xl border border-slate-800/80 space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-mono font-bold text-white flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5 text-cyan-400" />
-                        {d.date}
-                      </span>
-                      <div className="flex items-center gap-2 font-mono text-[11px]">
-                        <span className="text-emerald-400 font-bold">🟢 {d.totalMastered} ({d.masteredPct}%)</span>
-                        <span className="text-amber-400 font-bold">🟡 {d.totalLearning}</span>
-                        <span className="text-slate-500">⚪ {d.totalUnseen}</span>
-                      </div>
-                    </div>
-
-                    <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden flex shadow-inner">
-                      <div
-                        className="bg-emerald-500 h-full transition-all duration-300"
-                        style={{ width: `${d.masteredPct}%` }}
-                      />
-                      <div
-                        className="bg-amber-400 h-full transition-all duration-300"
-                        style={{ width: `${d.learningPct}%` }}
-                      />
-                      <div
-                        className="bg-slate-800 h-full transition-all duration-300"
-                        style={{ width: `${d.unseenPct}%` }}
-                      />
+              readingLogs.map((log) => (
+                <div key={log.id} className="flex items-center justify-between p-2.5 bg-slate-900/80 border border-slate-800 rounded-xl text-xs hover:border-slate-700 transition-colors">
+                  <div className="min-w-0 flex-1 pr-2">
+                    <span className="font-bold text-white block truncate">{log.storyTitle}</span>
+                    <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                      <span>{log.dateString || log.completedAt.slice(0, 10)}</span>
+                      <span>•</span>
+                      <span className="text-cyan-400 font-bold">{log.wordsCount} 語</span>
+                      <span>•</span>
+                      <span className="text-amber-300 font-bold">{log.wpm} WPM</span>
                     </div>
                   </div>
-                ))}
-              </div>
+                  <button
+                    onClick={() => handleDeleteReadingLog(log.id)}
+                    className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer"
+                    title="ログを削除"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))
             )}
           </div>
-        ) : (
-          /* Monthly Stacked Progression (月次積み上げ推移) */
-          <div className="space-y-4">
+        )}
+      </div>
+
+      {/* =========================================================================
+          CARD 2: 🎧 リスニング分析 (Listening & LP & Story Listening)
+         ========================================================================= */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 relative">
+        {/* Card Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3.5 flex-wrap gap-2">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-2xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+              <Headphones className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>🎧 リスニング分析 (特訓ラボ & 初見聴解)</span>
+              </h3>
+              <span className="text-[11px] text-slate-400">聴覚ワーキングメモリ（文長バッファ）＆ 音声変化・実効情報処理能力</span>
+            </div>
+          </div>
+
+          {/* Sub-Tab Switcher */}
+          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs flex-wrap gap-1">
+            <button
+              onClick={() => setListeningTab('lp_trend')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                listeningTab === 'lp_trend'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              7日間LP推移
+            </button>
+            <button
+              onClick={() => setListeningTab('capacity')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                listeningTab === 'capacity'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              文長別突破率
+            </button>
+            <button
+              onClick={() => setListeningTab('bottlenecks')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                listeningTab === 'bottlenecks'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              初見聴解 & ボトルネック
+            </button>
+            <button
+              onClick={() => setListeningTab('recent_lab')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                listeningTab === 'recent_lab'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              出題履歴
+            </button>
+          </div>
+        </div>
+
+        {/* 4 Quick Metrics Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Quick Metric 1: Listening Power (LP) */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">今日平均 LP (聴覚パワー)</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-purple-300 font-mono">
+                {listeningStats.todayLP > 0 ? listeningStats.todayLP : '-'}
+              </span>
+              <span className="text-xs font-bold text-purple-400">LP</span>
+            </div>
+            <DeltaBadge value={listeningStats.deltaLP} unit="LP" />
+          </div>
+
+          {/* Quick Metric 2: Word Capacity Buffer */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">単語処理バッファ能力</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
+                {listeningStats.wordCapacity > 0 ? listeningStats.wordCapacity : '-'}
+              </span>
+              <span className="text-xs font-bold text-cyan-400">語/文</span>
+            </div>
+            <span className="text-[10px] text-slate-500 block">リアルタイム脳内保持限界</span>
+          </div>
+
+          {/* Quick Metric 3: Perfect Pass Rate */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">完全突破率 (1発聞き取り)</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">
+                {listeningStats.passRate}%
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500 block">脱落・未知語なしパス</span>
+          </div>
+
+          {/* Quick Metric 4: Question Count */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">今日のリスニング問題数</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{listeningStats.todayQuestionCount}</span>
+              <span className="text-xs font-bold text-purple-400">問</span>
+            </div>
+            <DeltaBadge value={listeningStats.deltaQuestions} unit="問" />
+          </div>
+        </div>
+
+        {/* Visual / Detail Content */}
+        {listeningTab === 'lp_trend' && (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-3">
             <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>月間ごとのCEFR総習得・学習中アイテム積み上げ推移</span>
-              <span className="font-mono">{cefrMonthlyBreakdowns.length} ヶ月分</span>
+              <span className="font-semibold">直近7日間の平均LPスコア ＆ 出題数推移</span>
+              <span className="text-[11px] text-slate-500 font-mono">最高 {listeningStats.maxDailyLP} LP</span>
             </div>
 
-            {cefrMonthlyBreakdowns.length === 0 ? (
-              <div className="text-center py-8 text-xs text-slate-500">
-                月次スナップショットがまだありません。
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {cefrMonthlyBreakdowns.map((m, idx) => (
-                  <div key={idx} className="p-4 bg-slate-950/90 rounded-2xl border border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between text-xs sm:text-sm">
-                      <span className="font-mono font-black text-white flex items-center gap-2">
-                        <TrendingUp className="w-4 h-4 text-purple-400" />
-                        {m.month}
+            <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-2">
+              {listeningStats.last7DaysLP.map((d, i) => {
+                const heightPct = Math.min(100, Math.round((d.avgLP / listeningStats.maxDailyLP) * 100));
+                return (
+                  <div key={i} className="flex flex-col items-center space-y-2 group">
+                    <span className="text-[10px] font-mono text-purple-300 font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                      {d.avgLP} LP
+                    </span>
+                    <div className="w-full bg-slate-900 rounded-xl h-28 flex flex-col justify-end p-1 relative overflow-hidden border border-slate-800 group-hover:border-purple-500/40 transition-colors">
+                      <div
+                        className={`w-full rounded-lg transition-all duration-500 ${
+                          d.isToday
+                            ? 'bg-gradient-to-t from-purple-600 to-indigo-500 shadow-md shadow-purple-500/30'
+                            : d.avgLP > 0
+                            ? 'bg-slate-700 group-hover:bg-purple-600/80'
+                            : 'bg-transparent'
+                        }`}
+                        style={{ height: `${Math.max(4, heightPct)}%` }}
+                      />
+                    </div>
+                    <div className="text-center">
+                      <span className={`text-[11px] font-mono block ${d.isToday ? 'text-purple-400 font-black' : 'text-slate-400'}`}>
+                        {d.displayDate}
                       </span>
-                      <div className="flex items-center gap-3 font-mono text-xs">
-                        <span className="text-emerald-400 font-bold">🟢 習得: {m.totalMastered} ({m.masteredPct}%)</span>
-                        <span className="text-amber-400 font-bold">🟡 学習中: {m.totalLearning}</span>
-                        <span className="text-slate-400">⚪ 未知: {m.totalUnseen}</span>
+                      <span className="text-[10px] font-mono text-slate-500 block">
+                        {d.count > 0 ? `${d.count}問` : '-'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {listeningTab === 'capacity' && (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-3">
+            <span className="text-xs font-semibold text-slate-300 block">目標単語数（文長）ごとの完全突破率 ＆ 平均LP</span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {[4, 6, 8, 10, 12, 14, 16, 20].map(wc => {
+                const stat = listeningStats.wordCountStats[wc] || { attempts: 0, perfectCount: 0, passRate: 0, avgLP: 0 };
+                return (
+                  <div key={wc} className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-mono font-bold text-white">{wc} 語文</span>
+                      <span className={`font-bold font-mono ${stat.passRate >= 75 ? 'text-emerald-400' : stat.passRate >= 50 ? 'text-amber-400' : 'text-slate-400'}`}>
+                        {stat.passRate}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                      <div className="bg-purple-500 h-full rounded-full transition-all" style={{ width: `${stat.passRate}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-0.5">
+                      <span>挑戦: {stat.attempts}回</span>
+                      <span>平均 {stat.avgLP} LP</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {listeningTab === 'bottlenecks' && (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-3">
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                <span className="text-slate-400 text-[10px] block">初見読破ストーリー</span>
+                <span className="text-base font-bold text-white font-mono">{listeningStats.totalListenedStories} 冊</span>
+              </div>
+              <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                <span className="text-slate-400 text-[10px] block">平均応答遅延</span>
+                <span className="text-base font-bold text-cyan-300 font-mono">{listeningStats.avgChunkLatencyMs} ms</span>
+              </div>
+              <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                <span className="text-slate-400 text-[10px] block">実効聴覚WPM</span>
+                <span className="text-base font-bold text-purple-300 font-mono">{listeningStats.avgEffectiveListeningWpm || '-'} WPM</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar">
+              <span className="text-[11px] font-bold text-slate-400 block pt-1">聞き逃し・リトライ発生箇所 ({listeningStats.allBottlenecks.length}件):</span>
+              {listeningStats.allBottlenecks.length === 0 ? (
+                <p className="text-center py-4 text-xs text-slate-500">聞き逃しやリトライの記録はありません。スムーズに聴解できています！</p>
+              ) : (
+                listeningStats.allBottlenecks.map((b, idx) => (
+                  <div key={idx} className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-xl text-xs flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <span className="font-serif font-bold text-slate-200 block truncate">{b.textEn}</span>
+                      <span className="text-[10px] text-slate-400 truncate block">{b.translationJa}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0 text-[10px] font-mono">
+                      <span className="px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800">
+                        {b.retryCount}回リトライ
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {listeningTab === 'recent_lab' && (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
+            {listeningStats.recentRecords.length === 0 ? (
+              <p className="text-center py-6 text-xs text-slate-500">リスニング特訓ラボの履歴はまだありません。</p>
+            ) : (
+              listeningStats.recentRecords.map((rec) => (
+                <div key={rec.id} className="p-2.5 bg-slate-900/80 border border-slate-800 rounded-xl text-xs space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold font-mono ${rec.isPerfect ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-rose-950 text-rose-300 border border-rose-800'}`}>
+                        {rec.isPerfect ? '🟢 1発突破' : '🔴 音脱落'}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-500">{rec.wordCount}語 / {rec.speedRate}x</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-purple-300 font-bold">
+                      {rec.listeningPowerScore ? `${rec.listeningPowerScore} LP` : '-'}
+                    </span>
+                  </div>
+                  <p className="font-serif font-bold text-white">{rec.sentenceEn}</p>
+                  <p className="text-[10px] text-slate-400">{rec.translationJa}</p>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+          CARD 3: 🗣️ 発話・シャドーイング分析 (Speech & Shadowing)
+         ========================================================================= */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 relative">
+        {/* Card Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3.5 flex-wrap gap-2">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              <Mic className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>🗣️ 発話・シャドーイング分析</span>
+              </h3>
+              <span className="text-[11px] text-slate-400">ストーリー音読・シャドーイング ＆ Anki発話特訓の積算量</span>
+            </div>
+          </div>
+
+          {/* Sub-Tab Switcher */}
+          <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs">
+            <button
+              onClick={() => setSpeechTab('chart')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                speechTab === 'chart'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>7日間発話推移</span>
+            </button>
+            <button
+              onClick={() => setSpeechTab('logs')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                speechTab === 'logs'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>発話詳細ログ ({speechLogs.length})</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 4 Quick Metrics Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Quick Metric 1: Today's Utterances */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">今日の発話量</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-indigo-300 font-mono">{speechStats.todayUtterances}</span>
+              <span className="text-xs font-bold text-indigo-400">回</span>
+            </div>
+            <DeltaBadge value={speechStats.deltaUtterances} unit="回" />
+          </div>
+
+          {/* Quick Metric 2: Shadowing Count */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">シャドーイング回数</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-purple-300 font-mono">{speechStats.todayShadowing}</span>
+              <span className="text-xs font-bold text-purple-400">回</span>
+            </div>
+            <DeltaBadge value={speechStats.deltaShadowing} unit="回" />
+          </div>
+
+          {/* Quick Metric 3: Overlapping Count */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">オーバーラッピング回数</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">{speechStats.todayOverlapping}</span>
+              <span className="text-xs font-bold text-cyan-400">回</span>
+            </div>
+            <DeltaBadge value={speechStats.deltaOverlapping} unit="回" />
+          </div>
+
+          {/* Quick Metric 4: Total Utterances */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">累計総発話回数</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{speechStats.totalUtterances}</span>
+              <span className="text-xs font-bold text-indigo-400">回</span>
+            </div>
+            <span className="text-[10px] text-slate-500 font-mono block">文数: {speechStats.totalUniqueSentences} 文</span>
+          </div>
+        </div>
+
+        {/* Visual / Detail Content */}
+        {speechTab === 'chart' ? (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold">直近7日間の日次発話量積み上げ推移</span>
+              <div className="flex items-center gap-3 text-[10px]">
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-purple-500" />
+                  <span>シャドーイング</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-cyan-500" />
+                  <span>オーバーラッピング</span>
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-7 gap-2 sm:gap-3 pt-2">
+              {speechStats.last7DaysSpeech.map((d, i) => {
+                const heightPct = Math.min(100, Math.round((d.total / speechStats.maxUtterances) * 100));
+                const shadPct = d.total > 0 ? Math.round((d.shadowing / d.total) * 100) : 0;
+                const overPct = d.total > 0 ? Math.round((d.overlapping / d.total) * 100) : 0;
+
+                return (
+                  <div key={i} className="flex flex-col items-center space-y-2 group">
+                    <span className="text-[10px] font-mono text-indigo-300 font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                      {d.total} 回
+                    </span>
+                    <div className="w-full bg-slate-900 rounded-xl h-28 flex flex-col justify-end p-1 relative overflow-hidden border border-slate-800 group-hover:border-indigo-500/40 transition-colors">
+                      <div
+                        className="w-full rounded-lg overflow-hidden flex flex-col justify-end transition-all duration-500"
+                        style={{ height: `${Math.max(4, heightPct)}%` }}
+                      >
+                        {/* Shadowing part */}
+                        <div className="bg-purple-500 w-full" style={{ height: `${shadPct}%` }} />
+                        {/* Overlapping part */}
+                        <div className="bg-cyan-500 w-full" style={{ height: `${overPct}%` }} />
                       </div>
                     </div>
+                    <div className="text-center">
+                      <span className={`text-[11px] font-mono block ${d.isToday ? 'text-indigo-400 font-black' : 'text-slate-400'}`}>
+                        {d.displayDate}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
+            {speechLogs.length === 0 ? (
+              <p className="text-center py-6 text-xs text-slate-500">発話練習ログはまだありません。</p>
+            ) : (
+              speechLogs.map((log) => (
+                <div key={log.id} className="flex items-center justify-between p-2.5 bg-slate-900/80 border border-slate-800 rounded-xl text-xs hover:border-slate-700 transition-colors">
+                  <div className="min-w-0 flex-1 pr-2 space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${log.subStep === 'shadowing' ? 'bg-purple-950 text-purple-300 border border-purple-800' : 'bg-cyan-950 text-cyan-300 border border-cyan-800'}`}>
+                        {log.subStep === 'shadowing' ? 'シャドーイング' : 'オーバーラッピング'}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">{log.dateString || log.timestamp.slice(0, 10)}</span>
+                    </div>
+                    <p className="font-serif font-bold text-white truncate">{log.sentenceText || `Sentence #${log.sentenceIdx + 1}`}</p>
+                    <span className="text-[10px] text-slate-500 truncate block">{log.storyTitle}</span>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteSpeechLog(log.id)}
+                    className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer"
+                    title="ログを削除"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
 
-                    <div className="w-full bg-slate-900 h-3 rounded-full overflow-hidden flex shadow-inner">
-                      <div
-                        className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-500"
-                        style={{ width: `${m.masteredPct}%` }}
-                      />
-                      <div
-                        className="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-500"
-                        style={{ width: `${m.learningPct}%` }}
-                      />
-                      <div
-                        className="bg-slate-800 h-full transition-all duration-500"
-                        style={{ width: `${m.unseenPct}%` }}
-                      />
+      {/* =========================================================================
+          CARD 4: 📊 CEFR 習得度分析 (CEFR Mastery Analysis)
+         ========================================================================= */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 relative">
+        {/* Card Header & Mode Switcher */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3.5 flex-wrap gap-2">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Trophy className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>📊 CEFR 構文・語彙習得度</span>
+              </h3>
+              <span className="text-[11px] text-slate-400">
+                {cefrMode === 'comprehension' ? '【理解モード】読解・リスニングでの直感処理マスター' : '【組立モード】瞬間英作文・発話での能動出力マスター'}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Primary Toggle: 理解 vs 組立 */}
+            <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs">
+              <button
+                onClick={() => setCefrMode('comprehension')}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                  cefrMode === 'comprehension'
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>📖 理解</span>
+              </button>
+              <button
+                onClick={() => setCefrMode('assembly')}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                  cefrMode === 'assembly'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>✍️ 組立</span>
+              </button>
+            </div>
+
+            {/* Sub-Tab Switcher */}
+            <div className="flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs">
+              <button
+                onClick={() => setCefrTab('levels')}
+                className={`px-2.5 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                  cefrTab === 'levels'
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                レベル別
+              </button>
+              <button
+                onClick={() => setCefrTab('timeline')}
+                className={`px-2.5 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                  cefrTab === 'timeline'
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                推移
+              </button>
+              <button
+                onClick={() => setCefrTab('weak_patterns')}
+                className={`px-2.5 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                  cefrTab === 'weak_patterns'
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                弱点構文 ({weakestPatterns.length})
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 4 Quick Metrics Grid (Fully connected to Comprehension / Assembly) */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Quick Metric 1: Total Mastered Items */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">総マスター項目数 ({cefrMode === 'comprehension' ? '理解' : '組立'})</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-emerald-300 font-mono">{cefrStats.totalMasteredItems}</span>
+              <span className="text-xs font-bold text-emerald-400">項目</span>
+            </div>
+            <DeltaBadge value={cefrStats.deltaTotalMastered} unit="項目" />
+          </div>
+
+          {/* Quick Metric 2: Target Level Progress */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">目標【{cefrStats.targetLvl}】習得率</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">{cefrStats.targetPct}%</span>
+            </div>
+            <DeltaBadge value={cefrStats.deltaTargetPct} isPercentage={true} />
+          </div>
+
+          {/* Quick Metric 3: Pattern Mastered */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">構文パターンマスター</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{cefrStats.totalPatternMastered}</span>
+              <span className="text-xs font-bold text-slate-400">型</span>
+            </div>
+            <DeltaBadge value={cefrStats.deltaPatternMastered} unit="型" />
+          </div>
+
+          {/* Quick Metric 4: Vocab Mastered */}
+          <div className="bg-slate-950/80 p-3.5 sm:p-4 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[11px] font-semibold text-slate-400 block">重要語彙マスター</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-white font-mono">{cefrStats.totalVocabMastered}</span>
+              <span className="text-xs font-bold text-slate-400">語</span>
+            </div>
+            <DeltaBadge value={cefrStats.deltaVocabMastered} unit="語" />
+          </div>
+        </div>
+
+        {/* Visual / Detail Content */}
+        {cefrTab === 'levels' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <div className="flex items-center gap-3 text-[11px]">
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                  <span className="text-emerald-300 font-bold">習得済 (Mastered)</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span className="text-amber-300 font-bold">学習中 (In Progress)</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-600" />
+                  <span className="text-slate-400 font-bold">未知 (Unseen)</span>
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {cefrStats.levels.map(lvlData => (
+                <div
+                  key={lvlData.level}
+                  className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-3 relative overflow-hidden group hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono font-black text-base text-white px-2.5 py-0.5 rounded-lg bg-slate-900 border border-slate-700">
+                      {lvlData.level}
+                    </span>
+                    <span className="text-xs font-bold text-cyan-400 font-mono">
+                      {lvlData.masteredPct}% {cefrMode === 'comprehension' ? '理解' : '組立'}
+                    </span>
+                  </div>
+
+                  {/* Stacked Progress Bar */}
+                  <div className="w-full bg-slate-900 h-3 rounded-full overflow-hidden flex shadow-inner">
+                    <div
+                      className="bg-gradient-to-r from-emerald-500 to-emerald-400 h-full transition-all duration-500"
+                      style={{ width: `${lvlData.masteredPct}%` }}
+                      title={`習得済: ${lvlData.totalMastered} (${lvlData.masteredPct}%)`}
+                    />
+                    <div
+                      className="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-500"
+                      style={{ width: `${lvlData.learningPct}%` }}
+                      title={`学習中: ${lvlData.totalLearning} (${lvlData.learningPct}%)`}
+                    />
+                    <div
+                      className="bg-slate-800 h-full transition-all duration-500"
+                      style={{ width: `${lvlData.unseenPct}%` }}
+                      title={`未知: ${lvlData.totalUnseen} (${lvlData.unseenPct}%)`}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-1 text-[10px] text-center pt-1 font-mono">
+                    <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
+                      <span className="text-emerald-400 block font-bold">{lvlData.totalMastered}</span>
+                      <span className="text-slate-500">習得</span>
+                    </div>
+                    <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
+                      <span className="text-amber-400 block font-bold">{lvlData.totalLearning}</span>
+                      <span className="text-slate-500">学習中</span>
+                    </div>
+                    <div className="bg-slate-900/80 p-1 rounded-lg border border-slate-850">
+                      <span className="text-slate-400 block font-bold">{lvlData.totalUnseen}</span>
+                      <span className="text-slate-500">未知</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {cefrTab === 'timeline' && (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-3">
+            <span className="text-xs font-semibold text-slate-300 block">日次CEFRマスター項目蓄積推移</span>
+            {cefrStats.dailyBreakdowns.length === 0 ? (
+              <p className="text-center py-6 text-xs text-slate-500">推移データはまだありません。</p>
+            ) : (
+              <div className="space-y-2">
+                {cefrStats.dailyBreakdowns.map((d, idx) => (
+                  <div key={idx} className="p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 flex items-center justify-between text-xs gap-3">
+                    <span className="font-mono font-bold text-slate-300 w-16">{d.displayDate}</span>
+                    <div className="flex-1 bg-slate-950 h-2.5 rounded-full overflow-hidden flex">
+                      <div className="bg-emerald-500 h-full" style={{ width: `${d.pct}%` }} />
+                    </div>
+                    <div className="font-mono text-right shrink-0">
+                      <span className="text-emerald-400 font-bold">{d.mastered}</span>
+                      <span className="text-slate-500"> / {d.total} ({d.pct}%)</span>
                     </div>
                   </div>
                 ))}
@@ -1276,7 +1406,35 @@ export const MasteryDashboardView: React.FC<MasteryDashboardViewProps> = ({
             )}
           </div>
         )}
+
+        {cefrTab === 'weak_patterns' && (
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850 space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
+            <span className="text-xs font-semibold text-slate-300 block">ドリル & Ankiでミスが多い弱点構文一覧:</span>
+            {weakestPatterns.length === 0 ? (
+              <p className="text-center py-6 text-xs text-slate-500">現在、目立った弱点構文はありません！素晴らしい精度です。</p>
+            ) : (
+              weakestPatterns.map((w) => (
+                <div key={w.pattern.id} className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl text-xs space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono font-bold text-[10px]">
+                        {w.pattern.cefr}
+                      </span>
+                      <span className="font-bold text-white">{w.pattern.name}</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-rose-400 font-bold">
+                      ミス: {w.mistakeCount}回
+                    </span>
+                  </div>
+                  <p className="text-cyan-300 font-mono text-[11px]">{w.pattern.focus}</p>
+                  <p className="text-slate-400 text-[10px]">{w.pattern.meaning}</p>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
+
     </div>
   );
 };
