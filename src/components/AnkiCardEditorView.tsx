@@ -154,15 +154,25 @@ export const AnkiCardEditorView: React.FC<AnkiCardEditorViewProps> = ({
     e.preventDefault();
     if (!editingCard || !editPhrase.trim() || !editMeaning.trim()) return;
 
+    const trimmedPhrase = editPhrase.trim();
+    const trimmedMeaning = editMeaning.trim();
+    const trimmedSentence = editSentence.trim();
+    const trimmedNote = editNote.trim();
+
+    const isWord = editingCard.focusType === 'word';
+
     const updated: VocabItem = {
       ...editingCard,
-      phrase: editPhrase.trim(),
-      meaning: editMeaning.trim(),
-      exampleSentence: editSentence.trim(),
-      sentence: editSentence.trim() || editingCard.sentence,
-      contextNote: editNote.trim(),
+      phrase: trimmedPhrase,
+      meaning: trimmedMeaning,
+      contextNote: trimmedNote,
       level: editLevel,
       cardDirection: editDirection,
+      // 文カード（sentence / pattern / free）の場合、phrase と sentence、meaning と translation を完全同期
+      exampleSentence: trimmedSentence || (isWord ? editingCard.exampleSentence : trimmedPhrase),
+      sentence: isWord ? (trimmedSentence || editingCard.sentence) : (trimmedSentence || trimmedPhrase),
+      translation: isWord ? (editingCard.translation || trimmedMeaning) : trimmedMeaning,
+      focusMeaning: isWord ? trimmedMeaning : undefined,
     };
 
     onUpdateCard(updated);

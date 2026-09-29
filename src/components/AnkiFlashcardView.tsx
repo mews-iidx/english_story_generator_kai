@@ -356,6 +356,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     initSession(filteredVocabs, false);
   }, [cardFilter, appSettings]);
 
+  // vocabs propが外部（カードエディタの保存など）で更新された際に、activeCardやキュー内のカードオブジェクトを最新状態に同期
+  useEffect(() => {
+    if (vocabs.length === 0) return;
+    const vocabMap = new Map(vocabs.map(v => [v.id, v]));
+
+    setActiveCard(prev => (prev && vocabMap.has(prev.id) ? vocabMap.get(prev.id)! : prev));
+    setReviewQueue(prev => prev.map(c => vocabMap.get(c.id) || c));
+    setLearningPool(prev => prev.map(c => vocabMap.get(c.id) || c));
+  }, [vocabs]);
+
   const handleFilterChange = (newFilter: AnkiCardFilter) => {
     if (newFilter === cardFilter) return;
     setCardFilter(newFilter);
@@ -727,9 +737,16 @@ export const AnkiFlashcardView: React.FC<AnkiFlashcardViewProps> = ({
     (Boolean(activeCard.phrase) && activeCard.phrase.trim().split(/\s+/).length <= 2 && activeCard.focusType !== 'pattern' && (!activeCard.corePatterns || activeCard.corePatterns.length === 0));
 
   const displayWord = (activeCard.focusWord || activeCard.phrase || '').trim();
-  const displaySentence = (activeCard.sentence || activeCard.exampleSentence || activeCard.phrase || '').trim();
+  const displaySentence = (isWordCard
+    ? (activeCard.sentence || activeCard.exampleSentence || activeCard.phrase || '')
+    : (activeCard.phrase || activeCard.sentence || activeCard.exampleSentence || '')
+  ).trim();
   const displayWordMeaning = cleanTranslationText(activeCard.focusMeaning || activeCard.meaning || activeCard.translation || '');
-  const displaySentenceTranslation = cleanTranslationText(activeCard.translation || (isWordCard ? '' : activeCard.meaning) || '');
+  const displaySentenceTranslation = cleanTranslationText(
+    isWordCard
+      ? (activeCard.translation || activeCard.meaning || '')
+      : (activeCard.meaning || activeCard.translation || '')
+  );
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">

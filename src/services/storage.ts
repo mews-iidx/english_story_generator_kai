@@ -528,6 +528,23 @@ export function saveSingleVocab(item: VocabItem): void {
   const index = vocabs.findIndex(v => v.id === item.id);
   if (index >= 0) {
     vocabs[index] = item;
+
+    // 兄弟カード（双方向カード）が存在する場合、テキスト内容（phrase, meaning, sentence, translation, contextNote）を同期
+    if (item.siblingId) {
+      const sibIndex = vocabs.findIndex(v => v.id === item.siblingId);
+      if (sibIndex >= 0) {
+        vocabs[sibIndex] = {
+          ...vocabs[sibIndex],
+          phrase: item.phrase,
+          meaning: item.meaning,
+          sentence: item.sentence,
+          translation: item.translation,
+          exampleSentence: item.exampleSentence,
+          contextNote: item.contextNote,
+          level: item.level,
+        };
+      }
+    }
   } else {
     vocabs.unshift(item);
   }
