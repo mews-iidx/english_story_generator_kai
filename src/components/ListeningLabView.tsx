@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { CefrLevel } from '../types/settings';
+import { enqueueMasteryScanTask } from '../services/cefrScanner';
 import { LabQuestion, LabAnalyticsSummary } from '../types/listeningLab';
 import { VocabItem } from '../types/vocab';
 import {
@@ -270,6 +271,19 @@ export const ListeningLabView: React.FC<ListeningLabViewProps> = ({
       isPerfect,
       savedToAnki: actionType !== 'perfect',
     });
+
+    // CEFR 理解度スキャンタスクを投入 (リスニングで聞き取れた/スルーした単語・構文を「理解」へ自動反映)
+    try {
+      enqueueMasteryScanTask({
+        sourceType: 'listening_lab',
+        sourceId: currentQuestion.id || `lab_${Date.now()}`,
+        title: `リスニング特訓 (${targetCefrLevel})`,
+        text: currentQuestion.sentenceEn,
+        lookedUpTokens: unknownVocabList,
+      });
+    } catch (e) {
+      console.error('Failed to enqueue listening mastery scan task', e);
+    }
 
     if (actionType === 'perfect') {
       setSessionPerfectCount(prev => prev + 1);

@@ -87,7 +87,7 @@ export interface ItemProgress {
 
 export interface MasteryScanTask {
   id: string;
-  sourceType: 'story' | 'call' | 'mentor';
+  sourceType: 'story' | 'call' | 'mentor' | 'listening_lab';
   sourceId?: string;
   title?: string;
   text: string;

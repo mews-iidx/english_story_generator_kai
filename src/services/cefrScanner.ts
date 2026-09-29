@@ -153,7 +153,7 @@ export function extractSentencePatternCandidates(text: string): SentencePatternC
  * 読書・会話後のスキャン結果をマスターDBへ一括コミット
  */
 export interface CommitScanParams {
-  sourceType: 'story' | 'call' | 'mentor';
+  sourceType: 'story' | 'call' | 'mentor' | 'listening_lab';
   text: string;
   userUtterances?: string[];
   lookedUpTokens?: string[];
