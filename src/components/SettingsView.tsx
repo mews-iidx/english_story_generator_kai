@@ -104,12 +104,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         const res = importAllData(text);
         const details = [
           `ストーリー: ${res.storyCount}件`,
-          `登録語彙: ${res.vocabCount}件`,
+          `登録語彙 (Anki): ${res.vocabCount}件`,
           `難解文: ${res.sentenceCount}件`,
-          res.hasMastery ? 'CEFR進捗状態: 復元完了' : null,
-          res.hasSnapshots ? '学習履歴・WPM推移: 復元完了' : null,
+          res.chatSessionCount > 0 ? `AIメンター会話: ${res.chatSessionCount}スレッド` : null,
+          res.listeningLabCount > 0 ? `リスニング特訓履歴: ${res.listeningLabCount}問` : null,
+          res.readingLogCount > 0 ? `読書セッション記録: ${res.readingLogCount}件` : null,
+          res.speechLogCount > 0 ? `発話・シャドーイング記録: ${res.speechLogCount}件` : null,
+          res.drillLogCount > 0 ? `文法ドリル記録: ${res.drillLogCount}件` : null,
+          res.hasMastery ? 'CEFR習得度 (構文・語彙マスタ): 復元完了' : null,
+          res.hasSnapshots ? '学習履歴・7/14日間推移: 復元完了' : null,
+          res.hasGoal ? '学習目標設定: 復元完了' : null,
+          res.hasSettings ? 'APIキー・アプリ設定: 復元完了' : null,
         ].filter(Boolean).join('\n・');
-        alert(`🎉 バックアップからの復元が完了しました！\n\n・${details}`);
+        alert(`🎉 バックアップからの完全復元が完了しました！\n\n・${details}`);
         onDataImported();
       } catch (err: any) {
         alert(`インポート失敗: ${err.message}`);
@@ -533,9 +540,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
             </div>
 
+            <div className="text-xs text-slate-400 bg-slate-950/40 p-3 rounded-xl border border-slate-800/80">
+              <span>💡 <strong>機種変更・端末間移行の完全対応:</strong> ストーリー、Anki語彙、CEFR習得度、リスニング特訓履歴、発話記録、AIメンター会話など全データを1つのJSONファイルとしてエクスポート／インポートします。</span>
+            </div>
+
             <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
               <div className="text-xs text-slate-400">
-                <span>ストーリー履歴と登録語彙を初期状態に戻します。</span>
+                <span>ストーリー、語彙、CEFR進捗、学習履歴をすべて初期化します。</span>
               </div>
               <button
                 type="button"

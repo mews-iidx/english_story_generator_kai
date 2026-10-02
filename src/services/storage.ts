@@ -860,6 +860,14 @@ export function resetAllData(): void {
     localStorage.removeItem(STORAGE_KEYS.MASTERY_STATE);
     localStorage.removeItem(STORAGE_KEYS.DAILY_SNAPSHOTS);
     localStorage.removeItem(STORAGE_KEYS.MY_GOAL);
+    localStorage.removeItem(STORAGE_KEYS.READING_LOGS);
+    localStorage.removeItem(STORAGE_KEYS.DRILL_LOGS);
+    localStorage.removeItem(STORAGE_KEYS.STORY_QUEUE);
+    localStorage.removeItem(STORAGE_KEYS.RALLY_TOPICS);
+    localStorage.removeItem(STORAGE_KEYS.SPEECH_LOGS);
+    localStorage.removeItem(STORAGE_KEYS.BG_CARD_QUEUE);
+    localStorage.removeItem('listening_lab_records_v1');
+    localStorage.removeItem('cefr_mastery_scan_queue_v1');
     localStorage.removeItem('reader_show_targets');
     localStorage.removeItem('anki_importance_filter');
 
@@ -890,36 +898,60 @@ export function resetAllData(): void {
 export interface ExportData {
   version: string;
   exportedAt: string;
+  settings?: Partial<AppSettings>;
   stories: Story[];
   vocabs: VocabItem[];
   difficultSentences?: DifficultSentenceItem[];
   chatMessages?: ChatMessage[];
   chatSessions?: ChatSession[];
+  activeChatSessionId?: string;
   personas?: Persona[];
   callSessions?: CallSession[];
   expressionErrors?: ExpressionErrorItem[];
   masteryState?: UserMasteryState;
   dailySnapshots?: DailySnapshot[];
   myGoal?: MyGoal | null;
-  settings?: Partial<AppSettings>;
+  readingLogs?: ReadingSessionLog[];
+  drillLogs?: DrillAttemptLog[];
+  speechLogs?: SpeechPracticeLog[];
+  listeningLabRecords?: any[];
+  storyQueue?: StoryQueueTask[];
+  rallyTopics?: string[];
+  bgCardQueue?: any[];
 }
 
 export function exportAllData(): string {
+  let listeningRecords: any[] = [];
+  try {
+    const rawLab = localStorage.getItem('listening_lab_records_v1');
+    if (rawLab) listeningRecords = JSON.parse(rawLab);
+  } catch (e) {
+    console.error('Failed to export listening lab records', e);
+  }
+
   const data: ExportData = {
-    version: '2.0.0',
+    version: '2.5.0',
     exportedAt: new Date().toISOString(),
+    settings: loadSettings(),
     stories: loadStories(),
     vocabs: loadVocabs(),
     difficultSentences: loadDifficultSentences(),
     chatMessages: loadChatMessages(),
     chatSessions: loadChatSessions(),
+    activeChatSessionId: loadActiveChatSessionId(),
     personas: loadPersonas(),
     callSessions: loadCallSessions(),
     expressionErrors: loadExpressionErrors(),
     masteryState: loadMasteryState(),
     dailySnapshots: loadDailySnapshots(),
     myGoal: loadMyGoal(),
-    settings: loadSettings(),
+    readingLogs: loadReadingSessionLogs(),
+    drillLogs: loadDrillAttemptLogs(),
+    speechLogs: loadSpeechPracticeLogs(),
+    listeningLabRecords: listeningRecords,
+    storyQueue: loadStoryQueue(),
+    rallyTopics: loadRallyTopics(),
+    bgCardQueue: loadBgVocabQueue(),
   };
   return JSON.stringify(data, null, 2);
 }
@@ -929,11 +961,19 @@ export function importAllData(jsonStr: string): {
   storyCount: number; 
   vocabCount: number; 
   sentenceCount: number;
+  chatSessionCount: number;
+  readingLogCount: number;
+  speechLogCount: number;
+  listeningLabCount: number;
+  drillLogCount: number;
   hasMastery: boolean;
   hasSnapshots: boolean;
+  hasSettings: boolean;
+  hasGoal: boolean;
 } {
   try {
     const data: ExportData = JSON.parse(jsonStr);
+
     if (data.stories && Array.isArray(data.stories)) {
       localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(data.stories));
     }
@@ -945,7 +985,11 @@ export function importAllData(jsonStr: string): {
     }
     if (data.chatSessions && Array.isArray(data.chatSessions)) {
       localStorage.setItem(STORAGE_KEYS.CHAT_SESSIONS, JSON.stringify(data.chatSessions));
-    } else if (data.chatMessages && Array.isArray(data.chatMessages)) {
+    }
+    if (data.activeChatSessionId) {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_CHAT_SESSION_ID, data.activeChatSessionId);
+    }
+    if (data.chatMessages && Array.isArray(data.chatMessages)) {
       localStorage.setItem(STORAGE_KEYS.CHAT_MESSAGES, JSON.stringify(data.chatMessages));
     }
     if (data.personas && Array.isArray(data.personas)) {
@@ -966,6 +1010,27 @@ export function importAllData(jsonStr: string): {
     if (data.myGoal) {
       localStorage.setItem(STORAGE_KEYS.MY_GOAL, JSON.stringify(data.myGoal));
     }
+    if (data.readingLogs && Array.isArray(data.readingLogs)) {
+      localStorage.setItem(STORAGE_KEYS.READING_LOGS, JSON.stringify(data.readingLogs));
+    }
+    if (data.drillLogs && Array.isArray(data.drillLogs)) {
+      localStorage.setItem(STORAGE_KEYS.DRILL_LOGS, JSON.stringify(data.drillLogs));
+    }
+    if (data.speechLogs && Array.isArray(data.speechLogs)) {
+      localStorage.setItem(STORAGE_KEYS.SPEECH_LOGS, JSON.stringify(data.speechLogs));
+    }
+    if (data.listeningLabRecords && Array.isArray(data.listeningLabRecords)) {
+      localStorage.setItem('listening_lab_records_v1', JSON.stringify(data.listeningLabRecords));
+    }
+    if (data.storyQueue && Array.isArray(data.storyQueue)) {
+      localStorage.setItem(STORAGE_KEYS.STORY_QUEUE, JSON.stringify(data.storyQueue));
+    }
+    if (data.rallyTopics && Array.isArray(data.rallyTopics)) {
+      localStorage.setItem(STORAGE_KEYS.RALLY_TOPICS, JSON.stringify(data.rallyTopics));
+    }
+    if (data.bgCardQueue && Array.isArray(data.bgCardQueue)) {
+      localStorage.setItem(STORAGE_KEYS.BG_CARD_QUEUE, JSON.stringify(data.bgCardQueue));
+    }
     if (data.settings && typeof data.settings === 'object') {
       const current = loadSettings();
       saveSettings({ ...current, ...data.settings });
@@ -976,12 +1041,19 @@ export function importAllData(jsonStr: string): {
       storyCount: data.stories?.length || 0,
       vocabCount: data.vocabs?.length || 0,
       sentenceCount: data.difficultSentences?.length || 0,
+      chatSessionCount: data.chatSessions?.length || (data.chatMessages?.length ? 1 : 0),
+      readingLogCount: data.readingLogs?.length || 0,
+      speechLogCount: data.speechLogs?.length || 0,
+      listeningLabCount: data.listeningLabRecords?.length || 0,
+      drillLogCount: data.drillLogs?.length || 0,
       hasMastery: !!data.masteryState,
       hasSnapshots: !!(data.dailySnapshots && data.dailySnapshots.length > 0),
+      hasSettings: !!data.settings,
+      hasGoal: !!data.myGoal,
     };
-  } catch (e) {
-    console.error('Import failed', e);
-    throw new Error('Invalid JSON format for data import');
+  } catch (e: any) {
+    console.error('Failed to import data', e);
+    throw new Error('JSONファイルの読み込みに失敗しました。形式が正しいか確認してください。');
   }
 }
 
